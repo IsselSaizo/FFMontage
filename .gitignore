@@ -1,0 +1,20 @@
+# Зависимости и скачиваемые бинарники (ставятся setup-скриптом или npm install)
+node_modules/
+vendor/
+ffmpeg/
+dist/
+
+# Личные настройки и данные — у каждого свои
+config.json
+.firstrun/
+.npmrc
+Cache/
+Output/
+Projects/
+
+# Мусор
+*.log
+*.part
+.DS_Store
+Thumbs.db
+desktop.ini

@@ -1,0 +1,168 @@
+// Импорт файлов, подготовка миниатюр/волны/прокси и панель «Ваши медиа».
+import { store } from './store.js';
+import { h, $, fmtTime, toast, iconEl, confirmDialog, fmtBytes } from './util.js';
+
+const api = window.api;
+
+export function playUrl(mediaId) {
+  const m = store.media(mediaId);
+  const rt = store.runtime[mediaId] || {};
+  if (!m || rt.missing) return null;
+  if (rt.proxyUrl) return rt.proxyUrl;
+  return m.needsProxy ? null : m.url;
+}
+
+// Фоновая подготовка: миниатюры, волна, прокси
+async function prepare(mediaId) {
+  const m = store.media(mediaId);
+  if (!m) return;
+  const jobs = [];
+  if (m.hasVideo) {
+    jobs.push(api.thumbs(m).then((t) => store.setRuntime(mediaId, { thumbs: t }))
+      .catch((e) => console.warn('thumbs', e)));
+  }
+  if (m.hasAudio) {
+    jobs.push(api.peaks(m).then((p) => store.setRuntime(mediaId, { peaks: p }))
+      .catch((e) => console.warn('peaks', e)));
+  }
+  if (m.needsProxy) {
+    store.setRuntime(mediaId, { status: 'proxy', progress: 0 });
+    jobs.push(api.proxy(m).then((url) => store.setRuntime(mediaId, { proxyUrl: url, status: 'ready' }))
+      .catch((e) => { store.setRuntime(mediaId, { status: 'error', error: e.message }); toast(`Не удалось подготовить ${m.name}`, 'error'); }));
+  } else {
+    store.setRuntime(mediaId, { status: 'ready' });
+  }
+  await Promise.all(jobs);
+}
+
+api.onProxyProgress(({ key, fraction }) => {
+  const m = Object.values(store.project.media).find((x) => x.key === key);
+  if (m) store.setRuntime(m.id, { progress: fraction });
+});
+
+// Импорт файлов по путям. Возвращает id добавленных медиа.
+export async function importPaths(paths) {
+  const ids = [];
+  for (const p of paths) {
+    try {
+      const info = await api.probe(p);
+      if (!info.hasVideo && !info.hasAudio) { toast(`${info.name}: нет видео и звука`, 'error'); continue; }
+      if (!(info.duration > 0)) { toast(`${info.name}: не удалось определить длительность`, 'error'); continue; }
+      const id = store.addMedia(info);
+      ids.push(id);
+      prepare(id);
+    } catch (e) {
+      toast(`Не удалось открыть файл: ${p.split(/[\\/]/).pop()}`, 'error', 5000);
+      console.error(e);
+    }
+  }
+  return ids;
+}
+
+export async function pickAndImport() {
+  const paths = await api.pickMedia();
+  if (paths.length) return importPaths(paths);
+  return [];
+}
+
+// При открытии проекта: перепроверить файлы и подготовить кэш
+export async function restoreMedia() {
+  store.runtime = {};
+  const list = Object.values(store.project.media);
+  await Promise.all(list.map(async (m) => {
+    try {
+      const info = await api.probe(m.path);
+      // Файл мог измениться — обновляем сведения, но сохраняем id
+      Object.assign(m, info, { id: m.id });
+      prepare(m.id);
+    } catch {
+      store.setRuntime(m.id, { missing: true, status: 'missing' });
+    }
+  }));
+  store.emit('project');
+}
+
+// ---------------------------------------------------------------------------
+// Панель медиа
+// ---------------------------------------------------------------------------
+let onAddToTimeline = null;
+export function initMediaPanel({ addToTimeline }) {
+  onAddToTimeline = addToTimeline;
+  const panel = $('#media-panel');
+  panel.append(
+    h('div', { class: 'panel-head' }, h('h2', {}, 'Ваши медиа')),
+    h('button', { class: 'btn primary wide', id: 'btn-import', onclick: () => pickAndImport() },
+      iconEl('upload', 18), 'Импорт медиа'),
+    h('div', { class: 'media-grid', id: 'media-grid' }),
+  );
+  store.on('project', renderGrid);
+  store.on('media', renderGrid);
+  renderGrid();
+}
+
+function renderGrid() {
+  const grid = $('#media-grid');
+  if (!grid) return;
+  const items = Object.values(store.project.media);
+  grid.innerHTML = '';
+  if (!items.length) {
+    grid.append(h('div', { class: 'media-empty' },
+      iconEl('media', 40),
+      h('p', {}, 'Перетащите сюда видео и музыку'),
+      h('p', { class: 'muted small' }, 'или нажмите «Импорт медиа». Записи NVIDIA (H.264, HEVC, AV1) открываются как есть.')));
+    return;
+  }
+  for (const m of items) grid.append(card(m));
+}
+
+function card(m) {
+  const rt = store.runtime[m.id] || {};
+  const used = store.usageCount(m.id);
+  const thumb = h('div', { class: 'media-thumb' });
+  if (m.hasVideo && rt.thumbs && rt.thumbs.urls.length) {
+    const idx = Math.min(rt.thumbs.urls.length - 1, Math.floor(rt.thumbs.urls.length * 0.15));
+    thumb.append(h('img', { src: rt.thumbs.urls[idx], draggable: 'false' }));
+  } else if (!m.hasVideo) {
+    thumb.classList.add('audio');
+    thumb.append(iconEl('music', 34));
+  } else {
+    thumb.append(h('div', { class: 'spinner' }));
+  }
+  thumb.append(h('span', { class: 'badge dur' }, fmtTime(m.duration, { ms: false })));
+  if (used) thumb.append(h('span', { class: 'badge used', title: 'Используется на таймлайне' }, `${used}×`));
+  if (rt.status === 'proxy') {
+    thumb.append(h('div', { class: 'media-progress' },
+      h('div', { class: 'bar', style: { width: `${Math.round((rt.progress || 0) * 100)}%` } }),
+      h('span', {}, `Подготовка ${Math.round((rt.progress || 0) * 100)}%`)));
+  }
+  if (rt.missing) thumb.append(h('div', { class: 'media-missing' }, iconEl('warning', 18), 'Файл не найден'));
+
+  const add = h('button', { class: 'icon-btn add', title: 'Добавить на таймлайн', onclick: (e) => { e.stopPropagation(); onAddToTimeline(m.id); } });
+  add.innerHTML = iconEl('plus', 18).innerHTML;
+  const del = h('button', {
+    class: 'icon-btn del', title: 'Убрать из проекта',
+    onclick: async (e) => {
+      e.stopPropagation();
+      if (used && !(await confirmDialog('Убрать файл из проекта?', `Файл используется на таймлайне (${used}×). Клипы с ним тоже будут удалены. Сам файл на диске не трогается.`, 'Убрать', 'Отмена', true))) return;
+      store.removeMedia(m.id);
+    },
+  });
+  del.innerHTML = iconEl('close', 16).innerHTML;
+  thumb.append(add, del);
+
+  const details = [m.hasVideo ? `${m.width}×${m.height}` : null, m.hasVideo && m.fps ? `${Math.round(m.fps)} fps` : null,
+    (m.vcodec || m.acodec || '').toUpperCase(), fmtBytes(m.size)].filter(Boolean).join(' · ');
+  const el = h('div', {
+    class: `media-card${rt.missing ? ' missing' : ''}`, draggable: rt.missing ? 'false' : 'true',
+    title: `${m.path}\n${details}`,
+    ondblclick: () => onAddToTimeline(m.id),
+  }, thumb, h('div', { class: 'media-name' }, m.name), h('div', { class: 'media-meta' }, details));
+  el.addEventListener('dragstart', (e) => {
+    e.dataTransfer.setData('application/x-ffm-media', m.id);
+    e.dataTransfer.effectAllowed = 'copy';
+    document.body.classList.add('dragging-media');
+    window.__ffmDragMedia = m.id;
+  });
+  el.addEventListener('dragend', () => { document.body.classList.remove('dragging-media'); window.__ffmDragMedia = null; });
+  return el;
+}
