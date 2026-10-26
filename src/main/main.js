@@ -3,11 +3,14 @@ const { app, BrowserWindow, ipcMain, dialog, protocol, shell, Menu } = require('
 const path = require('path');
 const fs = require('fs');
 const { Readable } = require('stream');
-const { PATHS, ensureDirs } = require('./paths');
+const { PATHS, applyConfig, applyFirstRun, loadConfig, saveConfig, suggestDefaults, ensureDirs } = require('./paths');
 
 // ---------------------------------------------------------------------------
-// 1. Всё хранилище Electron — на F: (до готовности приложения!)
+// 1. Настройки и пути. Всё хранилище Electron — в выбранной папке кэша (до готовности приложения!)
 // ---------------------------------------------------------------------------
+const config = loadConfig();
+const FIRST_RUN = !config;
+if (FIRST_RUN) applyFirstRun(); else applyConfig(config);
 ensureDirs();
 app.setPath('userData', PATHS.USER_DATA);
 app.setPath('sessionData', PATHS.SESSION_DATA);
@@ -16,9 +19,13 @@ app.setPath('crashDumps', PATHS.CRASH);
 app.setPath('temp', PATHS.TEMP);
 process.env.TEMP = PATHS.TEMP;
 process.env.TMP = PATHS.TEMP;
+process.env.TMPDIR = PATHS.TEMP;
 app.commandLine.appendSwitch('disk-cache-dir', path.join(PATHS.SESSION_DATA, 'Cache'));
 app.setName('FF Montage');
 if (process.platform === 'win32') app.setAppUserModelId('FFMontage.Editor');
+
+// Временная папка окна первой настройки больше не нужна
+if (!FIRST_RUN) fs.rm(PATHS.FIRSTRUN_DIR, { recursive: true, force: true }, () => {});
 
 const ff = require('./ffmpeg');
 const exporter = require('./exporter');
@@ -30,11 +37,15 @@ protocol.registerSchemesAsPrivileged([{
 
 if (!app.requestSingleInstanceLock()) { app.quit(); }
 
-let win = null;
+let win = null;       // главное окно
+let setupWin = null;  // окно настроек / первого запуска
 const RENDERER_DIR = path.join(PATHS.APP_DIR, 'src', 'renderer');
+const ICON = path.join(RENDERER_DIR, 'assets', 'icon.png');
+const PRELOAD = path.join(PATHS.APP_DIR, 'src', 'preload', 'preload.js');
 const allowed = new Set(); // файлы, которые разрешено отдавать окну
 
-const norm = (p) => path.resolve(p).toLowerCase();
+const isWin = process.platform === 'win32';
+const norm = (p) => (isWin ? path.resolve(p).toLowerCase() : path.resolve(p));
 const allow = (p) => { if (p) allowed.add(norm(p)); };
 const isAllowed = (p) => {
   const n = norm(p);
@@ -99,63 +110,79 @@ function registerProtocol() {
 }
 
 // ---------------------------------------------------------------------------
-// Окно
+// Окна
 // ---------------------------------------------------------------------------
+function attachLogging(w, name) {
+  const logFile = path.join(PATHS.LOGS, `${name}.log`);
+  fs.writeFileSync(logFile, `--- ${new Date().toISOString()} ---\n`);
+  w.webContents.on('console-message', (e) => {
+    fs.appendFile(logFile, `[${e.level || ''}] ${e.message} (${e.sourceId || ''}:${e.lineNumber || ''})\n`, () => {});
+  });
+  w.webContents.on('render-process-gone', (_e, d) => fs.appendFile(logFile, `RENDER GONE ${JSON.stringify(d)}\n`, () => {}));
+  w.webContents.setWindowOpenHandler(({ url }) => { shell.openExternal(url); return { action: 'deny' }; });
+  w.webContents.on('will-navigate', (e, url) => { if (!url.startsWith('app://')) e.preventDefault(); });
+}
+
 function createWindow() {
   win = new BrowserWindow({
     width: 1500, height: 900, minWidth: 1100, minHeight: 680,
     backgroundColor: '#121216',
     title: 'FF Montage',
-    icon: path.join(RENDERER_DIR, 'assets', 'icon.png'),
+    icon: ICON,
     titleBarStyle: 'hidden',
     titleBarOverlay: { color: '#16161b', symbolColor: '#e8e8ee', height: 44 },
     show: false,
-    webPreferences: {
-      preload: path.join(PATHS.APP_DIR, 'src', 'preload', 'preload.js'),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
-      backgroundThrottling: false,
-    },
+    webPreferences: { preload: PRELOAD, contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: false },
   });
   Menu.setApplicationMenu(null);
   win.once('ready-to-show', () => { win.maximize(); win.show(); });
   win.loadURL('app://local/ui/index.html');
+  attachLogging(win, 'renderer');
+  win.on('closed', () => { win = null; });
+  if (process.env.FFM_SELFTEST) runSelfTest(win);
+}
 
-  const logFile = path.join(PATHS.LOGS, 'renderer.log');
-  fs.writeFileSync(logFile, `--- ${new Date().toISOString()} ---\n`);
-  win.webContents.on('console-message', (e) => {
-    const lvl = e.level || '';
-    fs.appendFile(logFile, `[${lvl}] ${e.message} (${e.sourceId || ''}:${e.lineNumber || ''})\n`, () => {});
+// Окно выбора папок: при первом запуске — единственное окно, потом — из меню «Настройки папок»
+function createSetupWindow() {
+  if (setupWin) { setupWin.focus(); return; }
+  setupWin = new BrowserWindow({
+    width: 680, height: 700, resizable: false, minimizable: false, maximizable: false,
+    parent: win || undefined, modal: !!win,
+    backgroundColor: '#1d1d23',
+    title: FIRST_RUN ? 'FF Montage — первый запуск' : 'FF Montage — настройки папок',
+    icon: ICON,
+    autoHideMenuBar: true,
+    show: false,
+    webPreferences: { preload: PRELOAD, contextIsolation: true, nodeIntegration: false, sandbox: true },
   });
-  win.webContents.on('render-process-gone', (_e, d) => fs.appendFile(logFile, `RENDER GONE ${JSON.stringify(d)}\n`, () => {}));
-  // Внешние ссылки — в браузер
-  win.webContents.setWindowOpenHandler(({ url }) => { shell.openExternal(url); return { action: 'deny' }; });
-  win.webContents.on('will-navigate', (e, url) => { if (!url.startsWith('app://')) e.preventDefault(); });
-
-  if (process.env.FFM_SELFTEST) runSelfTest();
+  setupWin.setMenu(null);
+  setupWin.once('ready-to-show', () => setupWin.show());
+  setupWin.loadURL('app://local/ui/setup.html');
+  attachLogging(setupWin, 'setup');
+  setupWin.on('closed', () => { setupWin = null; if (FIRST_RUN) app.quit(); });
+  if (FIRST_RUN && process.env.FFM_SELFTEST) runSelfTest(setupWin);
 }
 
 // Автотест: выполняет скрипт в окне, делает снимок экрана и закрывается
-function runSelfTest() {
+function runSelfTest(w) {
   const script = fs.readFileSync(process.env.FFM_SELFTEST, 'utf8');
   const shot = process.env.FFM_SHOT || path.join(PATHS.TEMP, 'selftest.png');
   const resultFile = shot.replace(/\.png$/i, '.json');
-  win.webContents.once('did-finish-load', async () => {
+  w.webContents.once('did-finish-load', async () => {
     let result;
     try {
       await new Promise((r) => setTimeout(r, 1200));
-      result = await win.webContents.executeJavaScript(script, true);
+      result = await w.webContents.executeJavaScript(script, true);
     } catch (e) {
       result = { error: String(e && e.stack || e) };
     }
     try {
       await new Promise((r) => setTimeout(r, 600));
-      const img = await win.webContents.capturePage();
+      const img = await w.webContents.capturePage();
       fs.writeFileSync(shot, img.toPNG());
     } catch (e) { result = { ...(result || {}), shotError: String(e) }; }
     fs.writeFileSync(resultFile, JSON.stringify(result, null, 2));
-    if (!process.env.FFM_KEEP_OPEN) app.quit();
+    if (!process.env.FFM_KEEP_OPEN) app.exit(0);
   });
 }
 
@@ -169,18 +196,68 @@ function send(channel, payload) {
   if (win && !win.isDestroyed()) win.webContents.send(channel, payload);
 }
 
+const senderWindow = (e) => BrowserWindow.fromWebContents(e.sender) || win;
+
 function registerIpc() {
   ipcMain.handle('app:info', async () => ({
     version: app.getVersion(),
     electron: process.versions.electron,
+    platform: process.platform,
     ffmpeg: ff.findBinaries().ffmpeg,
+    ffmpegMissing: !!ff.findBinaries().missing,
     ffmpegVersion: await ff.version(),
     outputDir: PATHS.OUTPUT_DIR,
+    projectsDir: PATHS.PROJECTS_DIR,
     cacheDir: PATHS.CACHE_DIR,
+    logsDir: PATHS.LOGS,
+    configFile: PATHS.CONFIG_FILE,
+    sep: path.sep,
     videoExt: VIDEO_EXT,
     audioExt: AUDIO_EXT,
   }));
 
+  // --- окно настроек ---
+  ipcMain.handle('setup:info', async () => ({
+    firstRun: FIRST_RUN,
+    platform: process.platform,
+    appDir: PATHS.APP_DIR,
+    configFile: PATHS.CONFIG_FILE,
+    config: config || suggestDefaults({ videosDir: app.getPath('videos'), documentsDir: app.getPath('documents') }),
+  }));
+  ipcMain.handle('setup:pick-folder', async (e, current) => {
+    const r = await dialog.showOpenDialog(senderWindow(e), {
+      title: 'Выберите папку', defaultPath: current || PATHS.APP_DIR, properties: ['openDirectory', 'createDirectory'],
+    });
+    return r.canceled ? null : r.filePaths[0];
+  });
+  ipcMain.handle('setup:check-ffmpeg', async (_e, dir) => ff.checkDir(dir));
+  ipcMain.handle('setup:encoders', async (_e, dir) => {
+    const bin = dir ? ff.searchBinaries(dir) : ff.searchBinaries('');
+    return bin ? ff.detectEncoders(bin) : null;
+  });
+  ipcMain.handle('setup:save', async (_e, cfg) => {
+    const clean = {};
+    for (const k of ['cacheDir', 'outputDir', 'projectsDir']) {
+      const v = String(cfg[k] || '').trim();
+      if (!v) return { ok: false, error: 'Укажите все папки.' };
+      const abs = path.resolve(PATHS.APP_DIR, v);
+      try { fs.mkdirSync(abs, { recursive: true }); fs.accessSync(abs, fs.constants.W_OK); } catch (err) {
+        return { ok: false, error: `Не удалось создать папку или нет прав на запись:\n${abs}\n${err.message}` };
+      }
+      clean[k] = abs;
+    }
+    clean.ffmpegDir = String(cfg.ffmpegDir || '').trim();
+    try { saveConfig(clean); } catch (err) {
+      return { ok: false, error: `Не удалось записать ${PATHS.CONFIG_FILE}:\n${err.message}` };
+    }
+    // Новые пути применяются после перезапуска
+    if (!process.env.FFM_SELFTEST) setTimeout(() => { app.relaunch(); app.exit(0); }, 150);
+    return { ok: true };
+  });
+  ipcMain.handle('setup:open', async () => { createSetupWindow(); return true; });
+  ipcMain.handle('setup:cancel', async () => { if (setupWin) setupWin.close(); return true; });
+
+  // --- медиа ---
   ipcMain.handle('media:pick', async () => {
     const r = await dialog.showOpenDialog(win, {
       title: 'Импорт медиа',
@@ -218,6 +295,7 @@ function registerIpc() {
 
   ipcMain.handle('enc:detect', async () => ff.detectEncoders());
 
+  // --- экспорт ---
   ipcMain.handle('export:pick', async (_e, suggested) => {
     const r = await dialog.showSaveDialog(win, {
       title: 'Куда сохранить видео',
@@ -237,7 +315,9 @@ function registerIpc() {
   ipcMain.handle('export:start', async (_e, project, settings) => {
     win && win.setProgressBar(0);
     try {
+      const v = await ff.versionInfo();
       const r = await exporter.startExport(project, settings, {
+        ffMajor: v ? v.major : 99,
         onProgress: (p) => { send('export:progress', p); win && win.setProgressBar(p.fraction); },
       });
       win && win.setProgressBar(-1);
@@ -251,12 +331,13 @@ function registerIpc() {
 
   ipcMain.handle('export:cancel', async () => exporter.cancelExport());
 
+  // --- проект ---
   ipcMain.handle('project:save', async (_e, { filePath, text, suggested }) => {
     let p = filePath;
     if (!p) {
       const r = await dialog.showSaveDialog(win, {
         title: 'Сохранить проект',
-        defaultPath: path.join(PATHS.ROOT_DIR, 'Projects', `${suggested || 'Проект'}.ffproj`),
+        defaultPath: path.join(PATHS.PROJECTS_DIR, `${suggested || 'Проект'}.ffproj`),
         filters: [{ name: 'Проект FF Montage', extensions: ['ffproj'] }],
       });
       if (r.canceled) return null;
@@ -268,9 +349,10 @@ function registerIpc() {
   });
 
   ipcMain.handle('project:open', async () => {
+    fs.mkdirSync(PATHS.PROJECTS_DIR, { recursive: true });
     const r = await dialog.showOpenDialog(win, {
       title: 'Открыть проект',
-      defaultPath: path.join(PATHS.ROOT_DIR, 'Projects'),
+      defaultPath: PATHS.PROJECTS_DIR,
       properties: ['openFile'],
       filters: [{ name: 'Проект FF Montage', extensions: ['ffproj'] }],
     });
@@ -286,8 +368,11 @@ function registerIpc() {
   ipcMain.handle('autosave:read', async () => (fs.existsSync(PATHS.AUTOSAVE) ? fs.readFileSync(PATHS.AUTOSAVE, 'utf8') : null));
 
   ipcMain.handle('shell:show', async (_e, p) => { shell.showItemInFolder(p); return true; });
-  ipcMain.handle('shell:open', async (_e, p) => shell.openPath(p));
-  ipcMain.handle('win:devtools', async () => { win && win.webContents.toggleDevTools(); return true; });
+  ipcMain.handle('shell:open', async (_e, p) => {
+    if (fs.existsSync(p) && fs.statSync(p).isDirectory()) fs.mkdirSync(p, { recursive: true });
+    return shell.openPath(p);
+  });
+  ipcMain.handle('win:devtools', async (e) => { senderWindow(e).webContents.toggleDevTools(); return true; });
   ipcMain.handle('win:title', async (_e, t) => { win && win.setTitle(t); return true; });
   ipcMain.handle('fs:exists', async (_e, p) => fs.existsSync(p));
 }
@@ -295,9 +380,17 @@ function registerIpc() {
 app.whenReady().then(() => {
   registerProtocol();
   registerIpc();
-  createWindow();
-  ff.detectEncoders().catch(() => {});
+  if (FIRST_RUN) {
+    createSetupWindow();
+  } else {
+    fs.mkdirSync(PATHS.OUTPUT_DIR, { recursive: true });
+    createWindow();
+    ff.detectEncoders().catch(() => {});
+  }
 });
 
-app.on('second-instance', () => { if (win) { if (win.isMinimized()) win.restore(); win.focus(); } });
+app.on('second-instance', () => {
+  const w = setupWin || win;
+  if (w) { if (w.isMinimized()) w.restore(); w.focus(); }
+});
 app.on('window-all-closed', () => { exporter.cancelExport(); app.quit(); });

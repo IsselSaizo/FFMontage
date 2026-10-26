@@ -7,6 +7,7 @@ dist/
 # Личные настройки и данные — у каждого свои
 config.json
 .firstrun/
+.test-cache/
 .npmrc
 Cache/
 Output/

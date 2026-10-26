@@ -30,6 +30,7 @@ export async function openExport() {
   open = true;
   if (store.playing) store.emit('request-pause');
   if (!encoders) encoders = await api.encoders();
+  const appInfo = await api.info();
 
   const src = store.sourceFormat();
   const prefs = loadPrefs();
@@ -72,7 +73,7 @@ export async function openExport() {
     const nameInput = h('input', { type: 'text', class: 'input', value: st.name, spellcheck: 'false' });
     nameInput.addEventListener('input', () => { st.name = nameInput.value; st.output = null; outLabel.textContent = outText(); });
     const outLabel = h('span', { class: 'out-path' });
-    const outText = () => st.output || `F:\\FFmpeg\\Output\\${(st.name || 'Видео').replace(/[\\/:*?"<>|]+/g, '_')}.mp4`;
+    const outText = () => st.output || `${appInfo.outputDir}${appInfo.sep}${(st.name || 'Видео').replace(/[\\/:*?"<>|]+/g, '_')}.mp4`;
     outLabel.textContent = outText();
     const pickBtn = h('button', { class: 'btn ghost small', onclick: async () => {
       const p = await api.pickExportPath(`${st.name || 'Видео'}.mp4`);
@@ -182,7 +183,7 @@ export async function openExport() {
         h('div', { class: 'modal-head' }, h('h2', {}, 'Ошибка экспорта')),
         h('div', { class: 'modal-body' },
           h('pre', { class: 'error-box' }, r.error || 'Неизвестная ошибка'),
-          h('p', { class: 'muted small' }, 'Полный журнал: F:\\FFmpeg\\Cache\\app\\logs\\last-export.log')),
+          h('p', { class: 'muted small' }, `Полный журнал: ${appInfo.logsDir}${appInfo.sep}last-export.log`)),
         h('div', { class: 'modal-foot' },
           h('button', { class: 'btn ghost', onclick: close }, 'Закрыть'),
           h('button', { class: 'btn primary', onclick: renderForm }, 'Назад к настройкам')));

@@ -5,7 +5,10 @@ const path = require('path');
 const fs = require('fs');
 const ff = require('../src/main/ffmpeg');
 const { startExport } = require('../src/main/exporter');
-const { PATHS, ensureDirs } = require('../src/main/paths');
+const { PATHS, ensureDirs, applyConfig, loadConfig } = require('../src/main/paths');
+
+// Берём папки из config.json; если программа ещё не настроена — временная папка внутри проекта
+applyConfig(loadConfig() || { cacheDir: '.test-cache', outputDir: '.test-cache/out', projectsDir: '.test-cache/projects' });
 
 const DIR = path.join(PATHS.TEMP, 'engine-test');
 

@@ -6,7 +6,8 @@
   window.addEventListener('error', (e) => errors.push(String(e.message)));
   for (let i = 0; i < 50 && !window.__ffm; i++) await sleep(100);
   const { store, preview, timeline, importPaths } = window.__ffm;
-  const dir = 'F:\\FFmpeg\\Cache\\tmp\\engine-test\\';
+  const info = await window.api.info();
+  const dir = [info.cacheDir, 'tmp', 'engine-test', ''].join(info.sep); // файлы создаёт tests/engine-test.js
   const ids = await importPaths([dir + 'a_av1_1440p60.mp4', dir + 'b_h264_1080p30.mp4', dir + 'c_music.mp3', dir + 'd_old.avi']);
   log.push(`imported ${ids.length}`);
   const [a, b, c, d] = ids;

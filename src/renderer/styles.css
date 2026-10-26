@@ -352,5 +352,23 @@ select.input option { background: var(--panel-2); }
 .drop-shade { position: fixed; inset: 0; z-index: 150; display: none; align-items: center; justify-content: center; background: rgba(18,18,22,.75); border: 3px dashed var(--accent); pointer-events: none; text-align: center; font-size: 16px; }
 .drop-shade .ic { margin: 0 auto 8px; color: var(--accent-2); }
 .drop-shade.on { display: flex; }
+/* ---------- Окно настроек / первого запуска ---------- */
+body.setup-page { background: var(--panel); user-select: text; }
+#setup { display: flex; flex-direction: column; height: 100vh; }
+.setup-head { display: flex; gap: 14px; align-items: flex-start; padding: 22px 24px 8px; }
+.setup-head h1 { margin: 2px 0 4px; font-size: 19px; font-weight: 600; }
+.setup-head p { margin: 0; line-height: 1.4; }
+.setup-body { flex: 1; overflow: auto; padding: 8px 24px; display: flex; flex-direction: column; gap: 16px; }
+.setup-row { display: flex; flex-direction: column; gap: 6px; }
+.setup-label { display: flex; flex-direction: column; gap: 2px; }
+.setup-row .input { flex: 1; min-width: 0; }
+.ff-status.good { color: #7debb8; }
+.ff-status.bad { color: #ff9aa4; }
+.ff-status { word-break: break-all; }
+.setup-error { color: #ff9aa4; white-space: pre-wrap; font-size: 12px; }
+.setup-error:empty { display: none; }
+.setup-foot { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 14px 24px 18px; border-top: 1px solid var(--line); }
+.cfg-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+
 body:not(.ready) #app { opacity: 0; }
 #app { transition: opacity .2s; }

@@ -32,6 +32,7 @@ function initTopbar() {
     h('div', { class: 'dd-sep' }),
     item('Импорт медиа…', 'Ctrl+I', () => pickAndImport()),
     item('Открыть папку экспорта', '', async () => api.openPath((await api.info()).outputDir)),
+    item('Настройки папок…', '', () => api.openSettings()),
     h('div', { class: 'dd-sep' }),
     item('О программе', '', about));
   function item(label, key, fn) {
@@ -121,7 +122,9 @@ function about() {
           h('p', { class: 'muted small' }, i.ffmpegVersion || 'FFmpeg не найден!'),
           h('p', { class: 'muted small' }, `FFmpeg: ${i.ffmpeg}`),
           h('p', { class: 'muted small' }, `Кэш: ${i.cacheDir}`),
-          h('p', { class: 'muted small' }, `Экспорт: ${i.outputDir}`))));
+          h('p', { class: 'muted small' }, `Экспорт: ${i.outputDir}`),
+          h('p', { class: 'muted small' }, `Проекты: ${i.projectsDir}`),
+          h('p', { class: 'muted small' }, `Настройки: ${i.configFile}`))));
     overlay.addEventListener('mousedown', (e) => { if (e.target === overlay) overlay.remove(); });
     document.body.append(overlay);
   });
@@ -216,6 +219,10 @@ async function main() {
   updateTitle();
   window.__ffm = { store, preview, timeline, importPaths, openExport };
   document.body.classList.add('ready');
+  const info = await api.info();
+  if (info.ffmpegMissing || !info.ffmpegVersion) {
+    toast('FFmpeg не найден — без него не будет миниатюр и экспорта. Укажите папку: меню ☰ → «Настройки папок».', 'error', 15000);
+  }
 }
 
 // Перетаскиваемая граница между плеером и таймлайном

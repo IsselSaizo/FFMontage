@@ -10,28 +10,45 @@ const { PATHS } = require('./paths');
 // Поиск ffmpeg / ffprobe
 // ---------------------------------------------------------------------------
 let BIN = null;
+const EXE = process.platform === 'win32' ? '.exe' : '';
+
+function binIn(dir) {
+  if (!dir) return null;
+  for (const d of [dir, path.join(dir, 'bin')]) {
+    const ff = path.join(d, 'ffmpeg' + EXE);
+    const fp = path.join(d, 'ffprobe' + EXE);
+    if (fs.existsSync(ff) && fs.existsSync(fp)) return { ffmpeg: ff, ffprobe: fp, dir: d };
+  }
+  return null;
+}
+
+// Порядок поиска: папка из настроек → vendor/ffmpeg (скачан setup-скриптом) →
+// папка ffmpeg рядом/внутри программы → ffmpeg-* рядом с программой → PATH
+function searchBinaries(configured = PATHS.FFMPEG_DIR) {
+  const candidates = [];
+  if (configured) return binIn(configured);
+  if (process.env.FFMONTAGE_FFMPEG_DIR) candidates.push(process.env.FFMONTAGE_FFMPEG_DIR);
+  candidates.push(path.join(PATHS.VENDOR_DIR, 'ffmpeg'), path.join(PATHS.APP_DIR, 'ffmpeg'));
+  const parent = path.dirname(PATHS.APP_DIR);
+  try {
+    for (const name of fs.readdirSync(parent)) {
+      if (/^ffmpeg/i.test(name)) candidates.push(path.join(parent, name));
+    }
+  } catch { /* ignore */ }
+  for (const dir of candidates) {
+    const b = binIn(dir);
+    if (b) return b;
+  }
+  for (const dir of (process.env.PATH || '').split(path.delimiter)) {
+    const b = dir && binIn(dir.replace(/^"|"$/g, ''));
+    if (b) return b;
+  }
+  return null;
+}
 
 function findBinaries() {
   if (BIN) return BIN;
-  const candidates = [];
-  if (process.env.FFMONTAGE_FFMPEG_DIR) candidates.push(process.env.FFMONTAGE_FFMPEG_DIR);
-  // Папки вида F:\FFmpeg\ffmpeg-*\bin рядом с программой
-  try {
-    for (const name of fs.readdirSync(PATHS.ROOT_DIR)) {
-      if (/^ffmpeg/i.test(name)) candidates.push(path.join(PATHS.ROOT_DIR, name, 'bin'));
-    }
-  } catch { /* ignore */ }
-  candidates.push(path.join(PATHS.APP_DIR, 'ffmpeg', 'bin'));
-  for (const dir of candidates) {
-    const ff = path.join(dir, 'ffmpeg.exe');
-    const fp = path.join(dir, 'ffprobe.exe');
-    if (fs.existsSync(ff) && fs.existsSync(fp)) {
-      BIN = { ffmpeg: ff, ffprobe: fp, dir };
-      return BIN;
-    }
-  }
-  // Последний шанс — PATH
-  BIN = { ffmpeg: 'ffmpeg', ffprobe: 'ffprobe', dir: null };
+  BIN = searchBinaries() || { ffmpeg: 'ffmpeg' + EXE, ffprobe: 'ffprobe' + EXE, dir: null, missing: true };
   return BIN;
 }
 
@@ -101,6 +118,8 @@ async function probe(file) {
   let needsProxy = !BROWSER_CONTAINERS.has(ext);
   if (v && !BROWSER_VIDEO_CODECS.has(vcodec)) needsProxy = true;
   if (a && !BROWSER_AUDIO_CODECS.has(acodec)) needsProxy = true;
+  // На Linux окно (Chromium) аппаратно декодирует HEVC только через VA-API (Intel), на NVIDIA — нет
+  if (vcodec === 'hevc' && process.platform !== 'win32' && process.platform !== 'darwin') needsProxy = true;
   // 10-битный H.264 и 4:2:2/4:4:4 браузер не играет
   if (vcodec === 'h264' && pixFmt && !/^(yuv420p|yuvj420p|nv12)$/.test(pixFmt)) needsProxy = true;
 
@@ -252,33 +271,58 @@ function proxy(info, onProgress, encoders) {
 // ---------------------------------------------------------------------------
 // Какие кодировщики реально работают (NVENC может быть в сборке, но без драйвера)
 // ---------------------------------------------------------------------------
-let encodersCache = null;
-async function detectEncoders() {
-  if (encodersCache) return encodersCache;
-  const { ffmpeg } = findBinaries();
+const encodersCache = new Map();
+async function detectEncoders(bin = findBinaries()) {
+  if (encodersCache.has(bin.ffmpeg)) return encodersCache.get(bin.ffmpeg);
   const list = ['av1_nvenc', 'hevc_nvenc', 'h264_nvenc', 'libx264', 'libx265', 'libsvtav1'];
   const res = {};
   await Promise.all(list.map(async (enc) => {
     try {
-      await run(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i',
+      await run(bin.ffmpeg, ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i',
         'color=c=black:s=320x240:r=30:d=0.2', '-c:v', enc, '-f', 'null', '-'], { timeoutMs: 15000 });
       res[enc] = true;
     } catch {
       res[enc] = false;
     }
   }));
-  encodersCache = res;
+  encodersCache.set(bin.ffmpeg, res);
   return res;
 }
 
-async function version() {
-  const { ffmpeg } = findBinaries();
+// Версия FFmpeg: { line, major }. major нужен для совместимости со старыми сборками (Linux-дистрибутивы).
+const versionCache = new Map();
+async function versionInfo(bin = findBinaries()) {
+  if (versionCache.has(bin.ffmpeg)) return versionCache.get(bin.ffmpeg);
+  let info = null;
   try {
-    const { stdout } = await run(ffmpeg, ['-hide_banner', '-version']);
-    return stdout.split('\n')[0].trim();
-  } catch (e) {
-    return null;
-  }
+    const { stdout } = await run(bin.ffmpeg, ['-hide_banner', '-version'], { timeoutMs: 15000 });
+    const line = stdout.split('\n')[0].trim();
+    let major = 99; // сборки из master («N-12345-g…») считаем самыми новыми
+    const m = /version\s+n?(\d+)\./i.exec(line);
+    if (m) major = Number(m[1]);
+    info = { line, major };
+  } catch { /* не запускается */ }
+  versionCache.set(bin.ffmpeg, info);
+  return info;
 }
 
-module.exports = { findBinaries, run, probe, thumbs, peaks, proxy, detectEncoders, version, mediaCacheDir };
+async function version() {
+  const v = await versionInfo();
+  return v ? v.line : null;
+}
+
+// Для окна настроек: проверить конкретную папку (или автопоиск, если пусто)
+async function checkDir(dir) {
+  const bin = dir ? binIn(dir) : searchBinaries('');
+  if (!bin) return { ok: false, error: dir ? 'В этой папке нет ffmpeg и ffprobe' : 'FFmpeg не найден' };
+  const v = await versionInfo(bin);
+  if (!v) return { ok: false, error: 'ffmpeg найден, но не запускается', path: bin.ffmpeg };
+  return { ok: true, path: bin.ffmpeg, dir: bin.dir, version: v.line, major: v.major };
+}
+
+function resetBinaries() { BIN = null; }
+
+module.exports = {
+  findBinaries, searchBinaries, resetBinaries, checkDir, run, probe, thumbs, peaks, proxy,
+  detectEncoders, version, versionInfo, mediaCacheDir,
+};

@@ -144,7 +144,7 @@ function buildExport(project, settings) {
 // ---------------------------------------------------------------------------
 let current = null;
 
-function startExport(project, settings, { onProgress, onLog } = {}) {
+function startExport(project, settings, { onProgress, onLog, ffMajor = 99 } = {}) {
   if (current) throw new Error('Экспорт уже идёт.');
   const { ffmpeg } = findBinaries();
   const plan = buildExport(project, settings);
@@ -154,11 +154,14 @@ function startExport(project, settings, { onProgress, onLog } = {}) {
   fs.writeFileSync(filterFile, plan.filter);
   const partFile = settings.output + '.part';
 
+  // FFmpeg 7+: «-/filter_complex файл»; старые версии (Linux-дистрибутивы): -filter_complex_script
+  const filterArgs = ffMajor >= 7 ? ['-/filter_complex', filterFile] : ['-filter_complex_script', filterFile];
+  const cfrArgs = ffMajor >= 6 ? ['-fps_mode', 'cfr'] : ['-vsync', 'cfr'];
   const args = ['-hide_banner', '-y', '-nostdin', ...plan.inputs,
-    '-/filter_complex', filterFile,
+    ...filterArgs,
     '-map', '[vout]', '-map', '[aout]',
     ...encoderArgs(settings.codec, settings.quality, plan.F),
-    '-fps_mode', 'cfr',
+    ...cfrArgs,
     '-c:a', 'aac', '-b:a', '192k', '-ar', '48000',
     '-t', n6(plan.duration),
     '-movflags', '+faststart', '-f', 'mp4',

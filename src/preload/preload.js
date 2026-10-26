@@ -32,4 +32,12 @@ contextBridge.exposeInMainWorld('api', {
   devtools: () => invoke('win:devtools'),
   setTitle: (t) => invoke('win:title', t),
   exists: (p) => invoke('fs:exists', p),
+  // окно настроек папок / первого запуска
+  setupInfo: () => invoke('setup:info'),
+  pickFolder: (current) => invoke('setup:pick-folder', current),
+  checkFfmpeg: (dir) => invoke('setup:check-ffmpeg', dir),
+  setupEncoders: (dir) => invoke('setup:encoders', dir),
+  saveSetup: (cfg) => invoke('setup:save', cfg),
+  openSettings: () => invoke('setup:open'),
+  cancelSetup: () => invoke('setup:cancel'),
 });
