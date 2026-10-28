@@ -66,6 +66,13 @@ export function initInspector({ onSplit, onDelete }) {
     const sec = h('div', { class: 'insp-section', dataset: { section: 'audio' } }, h('h3', {}, 'Звук'));
     if (!m.hasAudio) {
       sec.append(h('p', { class: 'muted small' }, isFreeze(clip) ? 'У стоп-кадра нет звука.' : 'В этом файле нет звуковой дорожки.'));
+    } else if (kind === 'video' && clip.noAudio) {
+      const partners = store.linkedOf(clip.id).filter((x) => x.kind === 'audio');
+      sec.append(
+        h('p', { class: 'muted small' }, partners.length
+          ? `Звук этого клипа — на аудиодорожке (${partners.map((x) => store.trackName(x.track.id)).join(', ')}): громкость и затухание — у аудиоклипа.`
+          : 'Звук этого клипа удалён с аудиодорожки.'),
+        h('button', { class: 'btn', onclick: () => store.restoreOwnAudio(clip.id) }, h('span', { html: icon('speaker', 17) }), 'Вернуть звук в видеоклип'));
     } else {
       const pct = Math.round(clip.volume * 100);
       const { slider, val } = liveSlider({
@@ -82,6 +89,13 @@ export function initInspector({ onSplit, onDelete }) {
         h('div', { class: 'presets' },
           ...[0, 50, 100, 150, 200].map((p) => h('button', { class: `chip${pct === p ? ' on' : ''}`, onclick: () => store.setClip(clip.id, { volume: p / 100 }) }, `${p}%`))),
         muteBtn);
+      if (kind === 'video') {
+        sec.append(h('button', { class: 'btn', onclick: () => store.detachAudio(clip.id) }, h('span', { html: icon('music', 17) }), 'Вынести звук на аудиодорожку'));
+      } else {
+        const tr = sel.track;
+        sec.append(h('p', { class: 'muted small' }, `Дорожка «${store.trackName(tr.id)}»: громкость ${Math.round((tr.volume ?? 1) * 100)}% (умножается на громкость клипа; ползунок — в заголовке дорожки).`));
+        if (clip.link) sec.append(h('button', { class: 'btn', onclick: () => store.unlink(clip.id) }, h('span', { html: icon('link', 17) }), 'Отвязать от видео'));
+      }
     }
     root.append(sec);
 
@@ -213,10 +227,10 @@ export function initInspector({ onSplit, onDelete }) {
       h('p', { class: 'muted small' }, 'Правая кнопка мыши на клипе — меню действий. «+» на стыке клипов — переход. Корзина на пустом месте дорожки убирает пустоту.')));
     root.append(h('div', { class: 'insp-section' }, h('h3', {}, 'Горячие клавиши'),
       h('dl', { class: 'kv keys' }, ...[
-        ['Пробел', 'Пуск / пауза'], ['S', 'Разрезать'], ['Delete', 'Удалить клип'], ['Shift+Delete', 'Удалить и сдвинуть'],
+        ['Пробел', 'Пуск / пауза'], ['S', 'Разрезать клип'], ['Alt+S', 'Разрезать всё под курсором'], ['B / A', 'Лезвие / выделение'], ['Delete', 'Удалить клип'], ['Shift+Delete', 'Удалить и сдвинуть'],
         ['Ctrl+C / Ctrl+V', 'Копировать / вставить'], ['Ctrl+D', 'Дублировать клип'], ['F', 'Стоп-кадр'], ['R', 'Отзеркалить (реверс)'],
         ['Ctrl+Z / Ctrl+Y', 'Отменить / повторить'], ['← →', 'На кадр (с Shift — на 1 с)'], ['Home / End', 'В начало / конец'],
-        ['Ctrl + колесо', 'Масштаб таймлайна'], ['Alt при перетаскивании', 'Без магнита'], ['Shift+F', 'Плеер во весь экран'],
+        ['Ctrl + колесо', 'Масштаб таймлайна'], ['Alt при перетаскивании', 'Без магнита и без наложения (раздвинуть)'], ['Shift+F', 'Плеер во весь экран'],
         ['Ctrl+S', 'Сохранить проект'], ['Ctrl+E', 'Экспорт'], ['Ctrl+I', 'Импорт медиа'],
       ].flatMap(([k, v]) => [h('dt', {}, h('kbd', {}, k)), h('dd', {}, v)]))));
   }

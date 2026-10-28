@@ -92,7 +92,8 @@ class Client {
     this.proc = spawn(cmd, ['--mcp'], {
       cwd: BASE,
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: { ...process.env, FFM_CONFIG: CONFIG, FFM_ALLOW_QUIT: '1' },
+      // FFM_SELFTEST мог остаться от run-ui.ps1 в той же консоли — тогда программа выполнила бы автотест и закрылась
+      env: { ...process.env, FFM_CONFIG: CONFIG, FFM_ALLOW_QUIT: '1', FFM_SELFTEST: '', FFM_SHOT: '', FFM_KEEP_OPEN: '' },
       windowsHide: true,
     });
     this.seq = 0;

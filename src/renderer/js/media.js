@@ -13,6 +13,22 @@ export function playUrl(mediaId) {
   return m.needsProxy ? null : m.url;
 }
 
+// Сколько звуковых потоков в файле (записи NVIDIA/OBS: игра, микрофон…)
+export const streamCount = (m) => (m && m.hasAudio ? Math.max(1, (m.audioStreams || []).length) : 0);
+
+// Адрес для проигрывания звукового потока N: первый поток играет из самого файла, остальные — из извлечённого
+export function audioUrl(mediaId, stream = 0) {
+  if (!stream) return playUrl(mediaId);
+  const rt = store.runtime[mediaId] || {};
+  return rt.missing ? null : (rt.streamUrl || {})[stream] || null;
+}
+
+// Волна потока N: { rate, data, channels? }
+export function peaksOf(mediaId, stream = 0) {
+  const rt = store.runtime[mediaId] || {};
+  return stream ? (rt.streamPeaks || {})[stream] || null : rt.peaks || null;
+}
+
 // Фоновая подготовка: миниатюры, волна, прокси
 export function prepareMedia(mediaId) { return prepare(mediaId); }
 async function prepare(mediaId) {
@@ -26,6 +42,16 @@ async function prepare(mediaId) {
   if (m.hasAudio) {
     jobs.push(api.peaks(m).then((p) => store.setRuntime(mediaId, { peaks: p }))
       .catch((e) => console.warn('peaks', e)));
+    for (let s = 1; s < streamCount(m); s++) {
+      jobs.push(api.peaks(m, s).then((p) => {
+        const rt = store.runtime[mediaId] || {};
+        store.setRuntime(mediaId, { streamPeaks: { ...(rt.streamPeaks || {}), [s]: p } });
+      }).catch((e) => console.warn('peaks', s, e)));
+      jobs.push(api.audioStream(m, s).then((url) => {
+        const rt = store.runtime[mediaId] || {};
+        store.setRuntime(mediaId, { streamUrl: { ...(rt.streamUrl || {}), [s]: url } });
+      }).catch((e) => console.warn('audio stream', s, e)));
+    }
   }
   if (m.needsProxy) {
     store.setRuntime(mediaId, { status: 'proxy', progress: 0 });
@@ -211,7 +237,7 @@ function startMediaDrag(e, m, rt) {
     document.body.classList.remove('dragging-media');
     window.__ffmDragMedia = null;
     if (tl()) {
-      if (ev.type === 'pointerup') tl().dropAt(ev.clientX, ev.clientY, { ids: [m.id] });
+      if (ev.type === 'pointerup') tl().dropAt(ev.clientX, ev.clientY, { ids: [m.id], alt: ev.altKey });
       else tl().dragLeave();
     }
   };

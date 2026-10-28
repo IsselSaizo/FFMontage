@@ -293,7 +293,16 @@ pub async fn probe(file: &Path) -> Res<Value> {
         needs_proxy = true; // анимация играет через короткое видео
     }
     let channels = a.and_then(|a| a["channels"].as_i64());
+    // Все звуковые потоки (записи NVIDIA/OBS: игра, микрофон… — отдельными дорожками)
+    let audio_streams: Vec<Value> = streams.iter().filter(|s| s["codec_type"] == "audio").map(|s| json!({
+        "channels": s["channels"].as_i64().unwrap_or(2),
+        "codec": s["codec_name"],
+        "title": s["tags"]["title"].as_str().or_else(|| s["tags"]["name"].as_str()).or_else(|| s["tags"]["handler_name"].as_str())
+            .filter(|t| !t.is_empty() && !t.contains("SoundHandler") && !t.contains("Sound Media Handler")),
+        "language": s["tags"]["language"].as_str().filter(|l| *l != "und"),
+    })).collect();
     Ok(json!({
+        "audioStreams": audio_streams,
         "path": file.to_string_lossy(),
         "name": file.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default(),
         "size": meta.len(),
@@ -409,12 +418,16 @@ fn finish_peaks(raw: &[f32]) -> Vec<f64> {
     raw.iter().map(|x| ((x / max).min(1.0).sqrt() as f64 * 100.0).round() / 100.0).collect()
 }
 
-pub async fn peaks(info: &Value) -> Res<Value> {
+fn stream_channels(i: &Info, stream: usize) -> f64 {
+    i.0["audioStreams"].as_array().and_then(|a| a.get(stream)).and_then(|s| s["channels"].as_f64()).unwrap_or_else(|| i.f("channels"))
+}
+
+pub async fn peaks(info: &Value, stream: usize) -> Res<Value> {
     let i = Info(info);
     let key = i.key()?;
-    let lock = key_lock(&format!("peaks:{key}"));
+    let lock = key_lock(&format!("peaks:{key}:{stream}"));
     let _g = lock.lock().await;
-    let file = media_cache_dir(&key).join("peaks2.json");
+    let file = media_cache_dir(&key).join(if stream == 0 { "peaks2.json".to_string() } else { format!("peaks2-a{stream}.json") });
     if let Ok(t) = std::fs::read_to_string(&file) {
         if let Ok(v) = serde_json::from_str::<Value>(&t) {
             return Ok(v);
@@ -423,7 +436,7 @@ pub async fn peaks(info: &Value) -> Res<Value> {
     if !i.b("hasAudio") {
         return Ok(Value::Null);
     }
-    let stereo = i.f("channels") >= 2.0;
+    let stereo = stream_channels(&i, stream) >= 2.0;
     let ch = if stereo { 2 } else { 1 };
     let bin = find();
     let per = PEAK_SR / PEAKS_PER_SEC;
@@ -434,7 +447,7 @@ pub async fn peaks(info: &Value) -> Res<Value> {
     let mut rest: Vec<u8> = vec![];
     let frame = 4 * ch;
     let args = [sv(&["-hide_banner", "-loglevel", "error", "-i"]), vec![s(&i.path())],
-        sv(&["-vn", "-sn", "-ac", &ch.to_string(), "-ar", &PEAK_SR.to_string(), "-f", "f32le", "pipe:1"])].concat();
+        sv(&["-map", &format!("0:a:{stream}"), "-vn", "-sn", "-ac", &ch.to_string(), "-ar", &PEAK_SR.to_string(), "-f", "f32le", "pipe:1"])].concat();
     run_with(&bin.ffmpeg, &args, Some(|chunk: &[u8]| {
         rest.extend_from_slice(chunk);
         let usable = rest.len() - rest.len() % frame;
@@ -523,6 +536,29 @@ pub async fn proxy(info: &Value, on_progress: &(dyn Fn(f64) + Send + Sync), enc:
     args.extend(sv(&["-movflags", "+faststart", "-f", "mp4", "-progress", "pipe:1", "-nostats"]));
     args.push(s(&tmp));
     run_with(&bin.ffmpeg, &args, Some(progress_parser(i.f("duration"), on_progress)), None).await?;
+    std::fs::rename(&tmp, &file).map_err(|e| e.to_string())?;
+    Ok(file)
+}
+
+/// Звуковой поток N (N ≥ 1) отдельным файлом для предпросмотра: окно играет только первый поток файла
+pub async fn audio_stream(info: &Value, stream: usize) -> Res<PathBuf> {
+    let i = Info(info);
+    let key = i.key()?;
+    let lock = key_lock(&format!("astream:{key}:{stream}"));
+    let _g = lock.lock().await;
+    let file = media_cache_dir(&key).join(format!("audio-a{stream}.m4a"));
+    if file.exists() {
+        return Ok(file);
+    }
+    let tmp = PathBuf::from(format!("{}.part.m4a", file.display()));
+    let bin = find();
+    let mut args = sv(&["-hide_banner", "-loglevel", "error", "-y", "-i"]);
+    args.push(s(&i.path()));
+    args.extend(sv(&["-map", &format!("0:a:{stream}"), "-vn", "-sn", "-c:a", "aac", "-b:a", "192k", "-ar", "48000"]));
+    if stream_channels(&i, stream) > 2.0 { args.extend(sv(&["-ac", "2"])); }
+    args.extend(sv(&["-movflags", "+faststart", "-f", "mp4"]));
+    args.push(s(&tmp));
+    run(&bin.ffmpeg, &args).await?;
     std::fs::rename(&tmp, &file).map_err(|e| e.to_string())?;
     Ok(file)
 }

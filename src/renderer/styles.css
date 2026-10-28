@@ -240,13 +240,34 @@ kbd {
 .tl-content { position: relative; min-height: 100%; padding-bottom: 20px; }
 .tl-row { display: flex; position: relative; }
 .tl-head {
-  position: sticky; left: 0; z-index: 5; width: 132px; flex: none; background: var(--bg-2);
+  position: sticky; left: 0; z-index: 5; width: 168px; flex: none; background: var(--bg-2);
   display: flex; align-items: center; gap: 7px; padding: 0 8px 0 12px; border-right: 1px solid var(--line);
   color: var(--text-2);
 }
 .th-ic { display: flex; color: var(--text-3); }
-.th-name { flex: 1; font-size: 12px; white-space: nowrap; }
-.th-actions { display: flex; }
+.th-name { flex: 1; min-width: 0; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: text; }
+.th-rename { flex: 1; min-width: 0; font: inherit; font-size: 12px; color: var(--text); background: var(--bg-3, #24242c); border: 1px solid var(--accent); border-radius: 4px; padding: 1px 4px; outline: none; }
+.th-actions { display: flex; align-items: center; gap: 1px; }
+.tl-head.audio-head { flex-direction: column; align-items: stretch; justify-content: center; gap: 2px; padding: 0 6px 0 10px; }
+.th-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.th-row .icon-btn.tiny { width: 22px; height: 22px; }
+.th-solo { width: 20px; height: 20px; border-radius: 5px; border: 1px solid var(--line-2); background: transparent; color: var(--text-3); font-size: 11px; font-weight: 700; cursor: pointer; padding: 0; }
+.th-solo:hover { color: var(--text); border-color: var(--text-3); }
+.th-solo.on { background: #e6b422; border-color: #e6b422; color: #1a1a1a; }
+.th-row.vol { gap: 4px; }
+.th-vol { flex: 1; min-width: 0; height: 14px; accent-color: var(--audio-2, #3fb79a); }
+.th-volval { width: 34px; text-align: right; font-size: 10.5px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+.wave-stereo { position: absolute; inset: 0; pointer-events: none; }
+.wave-stereo .wave { position: absolute; }
+.clip .ci.link { color: #ffd76a; }
+.clip .ci.stream { font-size: 10px; opacity: .8; }
+/* Лезвие (B) */
+.blade-mode .tl-lane:not(.ruler-lane), .blade-mode .clip, .blade-mode .clip .handle { cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cpath d='M4 20L15.5 8.5M14 4l6 6-3 3-6-6z' fill='white' stroke='black' stroke-width='1.3' stroke-linejoin='round'/%3E%3C/svg%3E") 3 21, crosshair; }
+.tl-bladeline { position: absolute; left: 0; top: 28px; bottom: 0; width: 2px; margin-left: -1px; background: rgba(255, 60, 60, .55); box-shadow: 0 0 0 1px rgba(255, 60, 60, .18); z-index: 8; pointer-events: none; display: none; }
+#tb-blade.on, #tb-pointer.on { color: var(--accent); background: rgba(124, 92, 255, .14); }
+.tb-sep.small { height: 16px; margin: 0 3px; }
+.monitor { display: flex; align-items: center; gap: 4px; margin-right: 8px; }
+.monitor-slider { width: 90px; accent-color: var(--accent); }
 .tl-lane { position: relative; flex: none; }
 .tl-row.ruler { position: sticky; top: 0; z-index: 6; height: 28px; background: var(--bg-2); border-bottom: 1px solid var(--line); }
 .tl-head.corner { z-index: 7; }

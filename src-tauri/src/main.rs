@@ -84,6 +84,7 @@ fn run() {
             commands::media_probe,
             commands::media_thumbs,
             commands::media_peaks,
+            commands::media_audio_stream,
             commands::media_proxy,
             commands::enc_detect,
             commands::fx_reverse,

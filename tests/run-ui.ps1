@@ -9,7 +9,7 @@ $src = if ($cfg) { Join-Path $cfg.cacheDir 'tmp\engine-test' } else { Join-Path 
 $T = Join-Path $App '.test-cache\tmp\uitest'
 if ($cfg) { $T = Join-Path $cfg.cacheDir 'tmp\uitest' }
 New-Item -ItemType Directory -Force "$T\cache\tmp\engine-test", "$T\out", "$T\proj" | Out-Null
-foreach ($f in 'a_av1_1440p60.mp4', 'b_h264_1080p30.mp4', 'c_music.mp3', 'd_old.avi') {
+foreach ($f in 'a_av1_1440p60.mp4', 'b_h264_1080p30.mp4', 'c_music.mp3', 'd_old.avi', 'e_2audio.mp4') {
   $p = Join-Path $src $f
   if (Test-Path $p) { Copy-Item $p "$T\cache\tmp\engine-test\" -Force }
 }

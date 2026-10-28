@@ -82,6 +82,10 @@
      "insert": {
       "type": "boolean",
       "description": "Video only: place exactly at start and push later clips right (default false)"
+     },
+     "separate_audio": {
+      "type": "boolean",
+      "description": "Video only: put the clip's sound (every audio stream of the file) as separate linked clips on audio tracks, like the app does on drag&drop (default false: sound stays inside the video clip)"
      }
     },
     "required": [

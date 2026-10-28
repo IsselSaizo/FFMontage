@@ -3,7 +3,7 @@
 // на переходе играют оба, а картинку смешивает CSS (см. transitions.js).
 // Музыка — отдельные <audio>, громкость (можно > 100%) и затухания — через Web Audio.
 import { store } from './store.js';
-import { playUrl } from './media.js';
+import { playUrl, audioUrl } from './media.js';
 import { h, $, icon, fmtTime } from './util.js';
 import { applyTransition, resetLayer } from './transitions.js';
 
@@ -70,25 +70,49 @@ export class Preview {
   ensureCtx() {
     if (!this.ctx) {
       this.ctx = new AudioContext({ latencyHint: 'playback' });
+      // Общая громкость предпросмотра: только для прослушивания, на экспорт не влияет
+      this.out = this.ctx.createGain();
+      this.out.gain.value = this.monitor();
+      this.out.connect(this.ctx.destination);
       for (const v of this.slots) this.attach(v);
     }
     if (this.ctx.state === 'suspended') this.ctx.resume();
+  }
+  monitor() {
+    const v = Number(localStorage.getItem('ffm.monitorVol'));
+    return localStorage.getItem('ffm.monitorMute') === '1' ? 0 : (isFinite(v) && localStorage.getItem('ffm.monitorVol') !== null ? v : 1);
+  }
+  setMonitor(v, mute = localStorage.getItem('ffm.monitorMute') === '1') {
+    localStorage.setItem('ffm.monitorVol', String(v));
+    localStorage.setItem('ffm.monitorMute', mute ? '1' : '0');
+    if (this.out) this.out.gain.value = this.monitor();
+    else this.syncAudio(store.time, false);
+    store.emit('monitor');
   }
   attach(el) {
     if (!this.ctx || this.gains.has(el)) return;
     const src = this.ctx.createMediaElementSource(el);
     const g = this.ctx.createGain();
-    src.connect(g).connect(this.ctx.destination);
+    src.connect(g).connect(this.out);
     this.gains.set(el, g);
   }
   setGain(el, v) {
     const g = this.gains.get(el);
-    if (g) { g.gain.value = v; el.volume = 1; } else el.volume = Math.min(1, Math.max(0, v));
+    if (g) { g.gain.value = v; el.volume = 1; } else el.volume = Math.min(1, Math.max(0, v * this.monitor()));
   }
 
+  // Громкость звука самого видеоклипа (если он не вынесен на аудиодорожку)
   clipGain(clip) {
     const m = store.media(clip.mediaId);
-    return clip.muted || !m || !m.hasAudio ? 0 : clip.volume;
+    if (clip.noAudio || clip.muted || !m || !m.hasAudio || store.anySolo()) return 0;
+    return clip.volume;
+  }
+
+  // Множитель дорожки: выключена, «соло» у других, громкость дорожки
+  trackGain(track) {
+    if (track.muted) return 0;
+    if (store.anySolo() && !track.solo) return 0;
+    return track.volume ?? 1;
   }
 
   // --- что показывать в момент t ---
@@ -333,9 +357,10 @@ export class Preview {
   // --- музыка и прочие аудиодорожки ---
   syncAudio(t, force) {
     for (const track of store.project.audioTracks) {
+      const tg = this.trackGain(track);
       for (const c of track.clips) {
-        const url = playUrl(c.mediaId);
-        const active = !track.muted && t >= c.start - EPS && t < clipEnd(c) - 0.02;
+        const url = audioUrl(c.mediaId, c.stream || 0);
+        const active = tg > 0 && t >= c.start - EPS && t < clipEnd(c) - 0.02;
         let rec = this.audio.get(c.id);
         if (!active) { if (rec && !rec.el.paused) rec.el.pause(); continue; }
         if (!url) continue;
@@ -350,7 +375,7 @@ export class Preview {
         if (this.ctx && !this.gains.has(rec.el)) this.attach(rec.el);
         if (rec.url !== url) { rec.url = url; rec.el.src = url; }
         const expected = c.in + (t - c.start);
-        this.setGain(rec.el, c.muted ? 0 : c.volume * fadeFactor(c, t));
+        this.setGain(rec.el, c.muted ? 0 : c.volume * tg * fadeFactor(c, t));
         if (this.playing) {
           if (rec.el.paused) { rec.el.currentTime = expected; rec.el.play().catch(() => {}); }
           else if (force || Math.abs(rec.el.currentTime - expected) > 0.25) rec.el.currentTime = expected;
@@ -383,6 +408,25 @@ export class Preview {
   }
 }
 
+// Громкость предпросмотра (только то, что вы слышите; громкость в готовом видео — у клипов и дорожек)
+function monitorControl(preview) {
+  const vol = () => { const v = Number(localStorage.getItem('ffm.monitorVol')); return localStorage.getItem('ffm.monitorVol') !== null && isFinite(v) ? v : 1; };
+  const muted = () => localStorage.getItem('ffm.monitorMute') === '1';
+  const b = h('button', { class: 'icon-btn', id: 'monitor-mute' });
+  const slider = h('input', { type: 'range', min: '0', max: '100', class: 'monitor-slider', id: 'monitor-vol' });
+  const upd = () => {
+    b.innerHTML = icon(muted() || vol() === 0 ? 'mute' : 'speaker', 20);
+    b.title = muted() ? 'Включить звук предпросмотра' : 'Выключить звук предпросмотра (на экспорт не влияет)';
+    slider.value = String(Math.round(vol() * 100));
+    slider.title = `Громкость предпросмотра ${slider.value}% — только для прослушивания, на готовое видео не влияет`;
+  };
+  b.addEventListener('click', () => preview.setMonitor(vol(), !muted()));
+  slider.addEventListener('input', () => preview.setMonitor(Number(slider.value) / 100, false));
+  store.on('monitor', upd);
+  upd();
+  return h('div', { class: 'monitor' }, b, slider);
+}
+
 // Панель управления под плеером
 export function initTransport(preview) {
   const bar = $('#transport');
@@ -404,6 +448,7 @@ export function initTransport(preview) {
       btn('fwd5', 'Вперёд на 5 с (L)', () => store.setTime(store.time + 5)),
       btn('end', 'В конец (End)', () => store.setTime(store.duration()))),
     h('div', { class: 'tr-right' },
+      monitorControl(preview),
       btn('fullscreen', 'Во весь экран (Shift+F)', () => preview.fullscreen())),
   );
   const upd = () => {

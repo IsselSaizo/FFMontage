@@ -148,7 +148,14 @@ pub async fn media_thumbs(info: Value) -> R<Value> {
 }
 
 #[tauri::command]
-pub async fn media_peaks(info: Value) -> R<Value> { ff::peaks(&info).await }
+pub async fn media_peaks(info: Value, stream: Option<usize>) -> R<Value> { ff::peaks(&info, stream.unwrap_or(0)).await }
+
+/// Звуковой поток N ≥ 1 отдельным файлом (для предпросмотра) → адрес
+#[tauri::command]
+pub async fn media_audio_stream(info: Value, stream: usize) -> R<String> {
+    let file = ff::audio_stream(&info, stream).await?;
+    Ok(protocol::url(&file))
+}
 
 #[tauri::command]
 pub async fn media_proxy(app: AppHandle, info: Value) -> R<String> {

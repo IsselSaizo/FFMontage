@@ -130,9 +130,43 @@ async function effectsTest(enc) {
   const d = await make('d_old.avi', ['-f', 'lavfi', '-i', 'testsrc=size=640x480:rate=25', '-t', '3',
     '-c:v', 'mpeg4', '-q:v', '5']);
 
+  // Запись «как у NVIDIA/OBS»: два звуковых потока — стерео (игра) и моно (микрофон)
+  const e2 = await make('e_2audio.mp4', ['-f', 'lavfi', '-i', 'testsrc2=size=1280x720:rate=30', '-f', 'lavfi',
+    '-i', 'sine=frequency=440:sample_rate=48000', '-f', 'lavfi', '-i', 'sine=frequency=1000:sample_rate=48000', '-t', '6',
+    '-filter_complex', '[1:a]pan=stereo|c0=c0|c1=0*c0[st]', '-map', '0:v', '-map', '[st]', '-map', '2:a',
+    ...h264, '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-metadata:s:a:1', 'title=Микрофон']);
+
   const ia = await ff.probe(a); const ib = await ff.probe(b); const ic = await ff.probe(c); const id = await ff.probe(d);
+  const ie = await ff.probe(e2);
+  console.log('Звуковые потоки:');
+  assert(ie.audioStreams && ie.audioStreams.length === 2 && ie.audioStreams[0].channels === 2 && ie.audioStreams[1].channels === 1,
+    `два потока: ${JSON.stringify(ie.audioStreams)}`);
+  assert(ie.audioStreams[1].title === 'Микрофон', 'название второго потока');
+  const pk0 = await ff.peaks(ie); const pk1 = await ff.engine('peaks', { info: ie, stream: 1 });
+  assert(pk0.channels && pk0.channels.length === 2 && !pk1.channels, 'волна: стерео — 2 канала, моно — 1');
+  // В левом канале синус, правый пустой
+  const avg = (arr) => arr.reduce((s, x) => s + x, 0) / arr.length;
+  assert(avg(pk0.channels[0]) > 0.5 && avg(pk0.channels[1]) < 0.05, `левый ${avg(pk0.channels[0]).toFixed(2)}, правый ${avg(pk0.channels[1]).toFixed(2)}`);
+  const as1 = await ff.engine('astream', { info: ie, stream: 1 });
+  const ias = await ff.probe(as1);
+  assert(!ias.hasVideo && ias.hasAudio && Math.abs(ias.duration - 6) < 0.15, 'второй поток извлечён для предпросмотра');
+  {
+    // Экспорт: видео без своего звука (noAudio) + только второй поток (1000 Гц) на дорожке с громкостью 50%
+    const out2 = path.join(DIR, 'out_stream1.mp4');
+    const pr = { media: { e: ie }, videoClips: [{ mediaId: 'e', in: 0, out: 6, start: 0, volume: 1, noAudio: true, link: 'L' }],
+      audioTracks: [{ volume: 0.5, clips: [{ mediaId: 'e', in: 0, out: 6, start: 0, volume: 1, stream: 1, link: 'L' }] }] };
+    await startExport(pr, { width: 1280, height: 720, fps: 30, codec: enc.h264_nvenc ? 'h264_nvenc' : 'libx264', quality: 'compact', output: out2 });
+    const vd = await ff.run(ff.findBinaries().ffmpeg, ['-hide_banner', '-i', out2, '-af', 'bandpass=f=1000:width_type=q:width=30,bandpass=f=1000:width_type=q:width=30,volumedetect', '-f', 'null', '-']);
+    const hp = Number((vd.stderr.match(/mean_volume: (-?[\d.]+)/) || [])[1]);
+    const vd2 = await ff.run(ff.findBinaries().ffmpeg, ['-hide_banner', '-i', out2, '-af', 'bandpass=f=440:width_type=q:width=30,bandpass=f=440:width_type=q:width=30,volumedetect', '-f', 'null', '-']);
+    const lp = Number((vd2.stderr.match(/mean_volume: (-?[\d.]+)/) || [])[1]);
+    assert(hp > lp + 15, `в экспорте звучит второй поток (1000 Гц ${hp} дБ), первого (440 Гц ${lp} дБ) нет`);
+  }
   console.log('Анализ:');
-  assert(ia.vcodec === 'av1' && ia.width === 2560 && ia.fps === 60 && ia.hasAudio && !ia.needsProxy, 'AV1 1440p60 распознан, прокси не нужен');
+  // На Linux окно (WebKitGTK) не всегда играет AV1/HEVC — там для предпросмотра делается прокси
+  const linux = process.platform === 'linux';
+  assert(ia.vcodec === 'av1' && ia.width === 2560 && ia.fps === 60 && ia.hasAudio && ia.needsProxy === linux,
+    `AV1 1440p60 распознан, прокси ${linux ? 'нужен (Linux)' : 'не нужен'}`);
   assert(ib.vcodec === 'h264' && ib.fps === 30 && !ib.needsProxy, 'H.264 1080p30 распознан');
   assert(!ic.hasVideo && ic.hasAudio && Math.abs(ic.duration - 20) < 0.2, 'MP3 распознан как аудио');
   assert(id.needsProxy, 'AVI (mpeg4) требует прокси');

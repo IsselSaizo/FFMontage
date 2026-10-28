@@ -248,7 +248,10 @@ function initKeys() {
     switch (code) {
       case 'Space': e.preventDefault(); preview.toggle(); break;
       case 'KeyK': preview.toggle(); break;
-      case 'KeyS': timeline.splitAction(); break;
+      // S — разрезать выделенный клип (или видео под курсором); Alt+S — всё под курсором: видео и звук
+      case 'KeyS': e.preventDefault(); if (e.altKey) timeline.splitAllAction(); else timeline.splitAction(); break;
+      case 'KeyB': timeline.setTool(timeline.tool === 'blade' ? 'select' : 'blade'); break;
+      case 'KeyA': timeline.setTool('select'); break;
       case 'Delete': case 'Backspace': timeline.deleteAction(e.shiftKey); break;
       case 'KeyR': if (clipSel) reverseClip(clipSel); break;
       case 'ArrowLeft': e.preventDefault(); store.setTime(store.time - (e.shiftKey ? 1 : step)); break;
@@ -258,7 +261,7 @@ function initKeys() {
       case 'Home': store.setTime(0); break;
       case 'End': store.setTime(store.duration()); break;
       case 'KeyF': if (e.shiftKey) preview.fullscreen(); else freezeFrame(store.time); break;
-      case 'Escape': store.select(null); break;
+      case 'Escape': if (timeline.tool === 'blade') timeline.setTool('select'); else store.select(null); break;
       default: break;
     }
   });

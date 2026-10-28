@@ -67,9 +67,15 @@ export async function toggleReverse(clipId) {
     const info = await api.fxReverse(m, a, b);
     const cur = store.findClip(clipId);
     if (!cur) return { reversed: false, cancelled: true };
-    store.mutate(() => {
+    store.mutate((p) => {
       const id = ensureDerived(info, { kind: 'reverse', from: m.id, in: a, out: b });
       const cc = store.findClip(clipId).clip;
+      // Развёрнутый файл — со своим развёрнутым звуком: связанный звук на дорожках больше не нужен
+      if (cc.link && f.kind === 'video') {
+        const L = cc.link;
+        for (const t of p.audioTracks) t.clips = t.clips.filter((x) => x.link !== L);
+        delete cc.link; delete cc.noAudio;
+      }
       // Если клип успели подрезать — переводим его границы в координаты развёрнутого файла
       const x = clamp(cc.in, a, b); const y = clamp(cc.out, a, b);
       const total = Math.min(store.media(id).duration || (b - a), b - a);

@@ -1,14 +1,14 @@
 // Таймлайн: основная видеодорожка (клипы по времени, с пустотами и переходами) + аудиодорожки.
 // Клипы «магнитятся» к краям соседей, курсору и началу; пустоты убираются кнопкой-корзиной,
 // на стыке клипов, стоящих впритык, — кнопка «+» для перехода.
-import { store, MIN_CLIP, ADJ, placeVideo } from './store.js';
+import { store, MIN_CLIP, ADJ, placeVideo, overwriteVideo, overwriteAudio, newTrack } from './store.js';
 import { h, $, clamp, icon, fmtTime, rafThrottle, toast } from './util.js';
-import { importPaths } from './media.js';
+import { importPaths, peaksOf, streamCount } from './media.js';
 import { openClipMenu, openLaneMenu, splitClip } from './actions.js';
 import { isReversed, isFreeze } from './fx.js';
 import { transitionById } from './transitions.js';
 
-const HEAD_W = 132;
+const HEAD_W = 168;
 const VIDEO_H = 76;
 const AUDIO_H = 56;
 const SNAP_PX = 12;
@@ -37,6 +37,9 @@ export class Timeline {
     this.playhead = h('div', { class: 'tl-playhead' }, h('div', { class: 'ph-knob' }));
     this.marker = h('div', { class: 'tl-insert' });
     this.snapLine = h('div', { class: 'tl-snapline' });
+    this.bladeLine = h('div', { class: 'tl-bladeline' });
+    this.content.addEventListener('pointermove', (e) => this.onBladeHover(e));
+    this.content.addEventListener('pointerleave', () => { this.bladeLine.style.display = 'none'; });
 
     const rerender = rafThrottle(() => this.render());
     store.on('project', () => { if (this.autoFit && !this.drag) this.fit(false); rerender(); });
@@ -77,7 +80,10 @@ export class Timeline {
         b('redo', 'Повторить (Ctrl+Y)', () => store.redo(), 'tb-redo')),
       h('div', { class: 'tb-sep' }),
       h('div', { class: 'tb-group' },
-        b('split', 'Разрезать по курсору (S)', () => this.splitAction(), 'tb-split'),
+        this.pointerBtn = b('pointer', 'Выделение (A)', () => this.setTool('select'), 'tb-pointer'),
+        this.bladeBtn = b('blade', 'Лезвие (B): щелчок по клипу разрезает его в этом месте вместе со связанным звуком; Alt+щелчок — только этот клип', () => this.setTool(this.tool === 'blade' ? 'select' : 'blade'), 'tb-blade'),
+        h('div', { class: 'tb-sep small' }),
+        b('split', 'Разрезать по курсору (S); всё под курсором — видео и звук (Alt+S)', (e) => (e.altKey ? this.splitAllAction() : this.splitAction()), 'tb-split'),
         b('trash', 'Удалить выделенное (Delete)', () => this.deleteAction(), 'tb-delete'),
         this.magnetBtn),
       h('div', { class: 'tb-time', id: 'tb-time' }),
@@ -89,6 +95,35 @@ export class Timeline {
         b('fit', 'Весь проект (Ctrl+0)', () => { this.autoFit = true; this.fit(true); })),
     );
     this.updateMagnetBtn();
+    this.setTool('select');
+  }
+
+  // Инструмент: 'select' — выделение и перетаскивание, 'blade' — лезвие (как в DaVinci Resolve)
+  setTool(tool) {
+    this.tool = tool;
+    const blade = tool === 'blade';
+    this.root.classList.toggle('blade-mode', blade);
+    this.bladeBtn.classList.toggle('on', blade);
+    this.pointerBtn.classList.toggle('on', !blade);
+    if (!blade && this.bladeLine) this.bladeLine.style.display = 'none';
+  }
+
+  // Время лезвия под мышью: с магнитом к курсору воспроизведения
+  bladeTime(ev) {
+    const t = this.xToTime(ev.clientX);
+    return this.snap(t, [store.time], ev).t;
+  }
+
+  onBladeHover(ev) {
+    if (this.tool !== 'blade' || this.drag) return;
+    const overLanes = ev.target.closest && ev.target.closest('.tl-lane') && !ev.target.closest('.ruler-lane');
+    if (!overLanes) { this.bladeLine.style.display = 'none'; return; }
+    this.bladeLine.style.display = 'block';
+    this.bladeLine.style.transform = `translateX(${HEAD_W + this.bladeTime(ev) * this.pps}px)`;
+  }
+
+  splitAllAction() {
+    if (!store.splitAll(store.time)) toast('Под курсором нет клипов, которые можно разрезать', 'info', 2200);
   }
 
   toggleMagnet() {
@@ -101,7 +136,7 @@ export class Timeline {
   updateMagnetBtn() {
     this.magnetBtn.classList.toggle('on', this.magnet);
     this.magnetBtn.title = this.magnet
-      ? 'Магнит включён — клипы прилипают к соседям, курсору и началу (Alt при перетаскивании — временно без магнита)'
+      ? 'Магнит включён — клипы прилипают к соседям, курсору и началу (Alt при перетаскивании — без магнита и без наложения: клип не затирает соседей, а встаёт рядом)'
       : 'Магнит выключен — клипы ставятся куда угодно';
   }
 
@@ -201,7 +236,7 @@ export class Timeline {
 
     // Видео
     const vLane = h('div', { class: 'tl-lane video-lane', dataset: { lane: 'video' }, style: { width: `${laneW}px`, height: `${VIDEO_H}px` } });
-    const vHead = h('div', { class: 'tl-head' }, h('span', { class: 'th-ic', html: icon('film', 18) }), h('span', { class: 'th-name' }, 'Видео'));
+    const vHead = h('div', { class: 'tl-head' }, h('span', { class: 'th-ic', html: icon('film', 18) }), this.trackNameEl('video'));
     this.content.append(h('div', { class: 'tl-row video' }, vHead, vLane));
     const layout = store.videoLayout();
     if (!layout.length) vLane.append(h('div', { class: 'lane-hint' }, 'Перетащите сюда видео из «Ваши медиа»'));
@@ -210,15 +245,23 @@ export class Timeline {
     if (!this.drag || this.drag.mode === 'fade') this.renderJunctions(vLane, layout);
 
     // Аудио
+    const solo = store.anySolo();
     store.project.audioTracks.forEach((t, i) => {
-      const lane = h('div', { class: `tl-lane audio-lane${t.muted ? ' muted' : ''}`, dataset: { lane: 'audio', track: t.id }, style: { width: `${laneW}px`, height: `${AUDIO_H}px` } });
-      const muteBtn = h('button', { class: `icon-btn tiny${t.muted ? ' on' : ''}`, title: t.muted ? 'Включить звук дорожки' : 'Выключить звук дорожки', onclick: () => store.toggleTrackMute(t.id) });
-      muteBtn.innerHTML = icon(t.muted ? 'mute' : 'speaker', 16);
+      const silent = t.muted || (solo && !t.solo);
+      const lane = h('div', { class: `tl-lane audio-lane${silent ? ' muted' : ''}`, dataset: { lane: 'audio', track: t.id }, style: { width: `${laneW}px`, height: `${AUDIO_H}px` } });
+      const muteBtn = h('button', { class: `icon-btn tiny th-mute${t.muted ? ' on' : ''}`, title: t.muted ? 'Включить звук дорожки' : 'Выключить звук дорожки', onclick: () => store.toggleTrackMute(t.id) });
+      muteBtn.innerHTML = icon(t.muted ? 'mute' : 'speaker', 15);
+      const soloBtn = h('button', {
+        class: `th-solo${t.solo ? ' on' : ''}`, title: t.solo ? 'Снять «соло»' : 'Соло: слушать только эту дорожку (только в предпросмотре, на экспорт не влияет)',
+        onclick: () => store.toggleTrackSolo(t.id),
+      }, 'S');
       const delBtn = h('button', { class: 'icon-btn tiny', title: 'Удалить дорожку', onclick: () => store.removeAudioTrack(t.id) });
-      delBtn.innerHTML = icon('close', 14);
-      const head = h('div', { class: 'tl-head' },
-        h('span', { class: 'th-ic', html: icon('music', 17) }), h('span', { class: 'th-name' }, `Аудио ${i + 1}`),
-        h('span', { class: 'th-actions' }, muteBtn, store.project.audioTracks.length > 1 || t.clips.length ? delBtn : null));
+      delBtn.innerHTML = icon('close', 13);
+      const head = h('div', { class: 'tl-head audio-head' },
+        h('div', { class: 'th-row' },
+          h('span', { class: 'th-ic', html: icon('music', 15) }), this.trackNameEl(t.id),
+          h('span', { class: 'th-actions' }, soloBtn, muteBtn, store.project.audioTracks.length > 1 || t.clips.length ? delBtn : null)),
+        this.trackVolumeEl(t));
       this.content.append(h('div', { class: 'tl-row audio', dataset: { track: t.id } }, head, lane));
       if (!t.clips.length && i === 0) lane.append(h('div', { class: 'lane-hint' }, 'Музыка и звук'));
       // На аудиодорожках показываем только пустоты между клипами (музыка может начинаться не с нуля)
@@ -233,9 +276,54 @@ export class Timeline {
       h('div', { class: 'tl-lane newtrack-lane', dataset: { lane: 'newtrack' }, style: { width: `${laneW}px` } },
         h('span', { class: 'lane-hint left' }, 'Перетащите аудио сюда, чтобы создать новую дорожку'))));
 
-    this.content.append(this.playhead, this.marker, this.snapLine);
+    this.content.append(this.playhead, this.marker, this.snapLine, this.bladeLine);
     this.updatePlayhead();
     this.updateToolbar();
+  }
+
+  // Имя дорожки: двойной щелчок — переименовать
+  trackNameEl(trackId) {
+    const name = store.trackName(trackId);
+    const el = h('span', { class: 'th-name', title: `${name} — двойной щелчок, чтобы переименовать` }, name);
+    el.addEventListener('dblclick', (e) => {
+      e.stopPropagation();
+      const inp = h('input', { class: 'th-rename', value: name, maxlength: '40' });
+      let done = false;
+      const finish = (ok) => {
+        if (done) return; done = true;
+        const v = inp.value.trim();
+        if (ok && v !== name) store.setTrack(trackId, { name: v });
+        else this.render();
+      };
+      inp.addEventListener('keydown', (ev) => {
+        ev.stopPropagation();
+        if (ev.key === 'Enter') finish(true);
+        else if (ev.key === 'Escape') finish(false);
+      });
+      inp.addEventListener('blur', () => finish(true));
+      inp.addEventListener('pointerdown', (ev) => ev.stopPropagation());
+      el.replaceWith(inp);
+      inp.focus(); inp.select();
+    });
+    return el;
+  }
+
+  // Громкость дорожки (умножается на громкость каждого клипа; влияет и на экспорт)
+  trackVolumeEl(t) {
+    const pct = () => Math.round((t.volume ?? 1) * 100);
+    const val = h('span', { class: 'th-volval' }, `${pct()}%`);
+    const r = h('input', { type: 'range', min: '0', max: '200', step: '1', value: String(pct()), class: 'th-vol', title: 'Громкость дорожки (двойной щелчок — 100%)' });
+    let before = null;
+    r.addEventListener('pointerdown', (e) => { e.stopPropagation(); before = store.snapshot(); });
+    r.addEventListener('input', () => {
+      if (!before) before = store.snapshot();
+      const v = Number(r.value) / 100;
+      store.live((p) => { const x = p.audioTracks.find((y) => y.id === t.id); if (x) x.volume = v; });
+      val.textContent = `${r.value}%`;
+    });
+    r.addEventListener('change', () => { store.commitFrom(before); before = null; });
+    r.addEventListener('dblclick', () => store.setTrack(t.id, { volume: 1 }));
+    return h('div', { class: 'th-row vol' }, r, val);
   }
 
   drawRuler(lane) {
@@ -335,8 +423,9 @@ export class Timeline {
     const label = h('div', { class: 'clip-label' });
     if (isReversed(c)) label.append(h('span', { class: 'ci fx', title: 'Задом наперёд', html: icon('reverse', 13) }));
     if (isFreeze(c)) label.append(h('span', { class: 'ci fx', title: 'Стоп-кадр', html: icon('freeze', 13) }));
-    if (c.muted && m.hasAudio) label.append(h('span', { class: 'ci', html: icon('mute', 13) }));
-    else if (m.hasAudio && Math.abs(c.volume - 1) > 0.01) label.append(h('span', { class: 'ci vol' }, `${Math.round(c.volume * 100)}%`));
+    if (c.link && store.linkedOf(c.id).length) label.append(h('span', { class: 'ci link', title: 'Связан со звуком/видео: двигаются и режутся вместе (Alt — только этот клип)', html: icon('link', 13) }));
+    if (c.muted && m.hasAudio && !c.noAudio) label.append(h('span', { class: 'ci', html: icon('mute', 13) }));
+    else if (m.hasAudio && !c.noAudio && Math.abs(c.volume - 1) > 0.01) label.append(h('span', { class: 'ci vol' }, `${Math.round(c.volume * 100)}%`));
     label.append(h('span', { class: 'cn' }, store.clipName(c)));
     if (extra) label.append(extra);
     return label;
@@ -369,8 +458,8 @@ export class Timeline {
     }
     el.append(strip);
 
-    // Полоска звука внизу клипа
-    if (m.hasAudio && width > 8) {
+    // Полоска звука внизу клипа (если звук не вынесен на аудиодорожку)
+    if (m.hasAudio && !c.noAudio && width > 8) {
       const wave = this.waveCanvas(c, rt.peaks, left, width, 18, c.muted ? 0 : c.volume, 'rgba(255,255,255,0.85)');
       if (wave) el.append(h('div', { class: 'clip-wavestrip' }, wave));
     }
@@ -381,20 +470,35 @@ export class Timeline {
 
   audioClipEl(c, track) {
     const m = store.media(c.mediaId) || {};
-    const rt = store.runtime[c.mediaId] || {};
     const left = c.start * this.pps;
     const width = (c.out - c.in) * this.pps;
     const el = this.clipBase('audio', c, left, width, track.muted ? 'track-muted' : '');
-    const wave = this.waveCanvas(c, rt.peaks, left, width, AUDIO_H - 6, c.muted ? 0 : c.volume, 'rgba(210,255,240,0.9)');
-    if (wave) el.append(wave);
-    el.append(this.clipLabel(c, m));
+    const peaks = peaksOf(c.mediaId, c.stream || 0);
+    const gain = c.muted ? 0 : c.volume * (track.volume ?? 1);
+    const col = 'rgba(210,255,240,0.9)';
+    // Стерео — две полосы (левый и правый канал), моно — одна
+    if (peaks && peaks.channels && peaks.channels.length === 2) {
+      const hh = Math.floor((AUDIO_H - 8) / 2);
+      const box = h('div', { class: 'wave-stereo' });
+      peaks.channels.forEach((data, k) => {
+        const cv = this.waveCanvas(c, { rate: peaks.rate, data }, left, width, hh, gain, col);
+        if (cv) { cv.style.top = `${3 + k * (hh + 2)}px`; box.append(cv); }
+      });
+      el.append(box);
+      el.classList.add('stereo');
+    } else {
+      const wave = this.waveCanvas(c, peaks, left, width, AUDIO_H - 6, gain, col);
+      if (wave) el.append(wave);
+    }
+    const streams = streamCount(m);
+    el.append(this.clipLabel(c, m, streams > 1 ? h('span', { class: 'ci stream', title: 'Звуковой поток файла' }, `#${(c.stream || 0) + 1}`) : null));
     this.decorate(el, c, width, el.classList.contains('selected'));
     return el;
   }
 
   // Волна звука: рисуем только видимую часть клипа
   waveCanvas(c, peaks, clipLeft, clipW, height, gain, color) {
-    if (!peaks || !peaks.data.length) return null;
+    if (!peaks || !peaks.data || !peaks.data.length) return null;
     const [vx0, vx1] = this.visibleRange();
     const cx0 = Math.max(0, Math.floor(vx0 - clipLeft));
     const cx1 = Math.min(Math.ceil(clipW), Math.ceil(vx1 - clipLeft));
@@ -449,11 +553,12 @@ export class Timeline {
   // Магнит
   // ------------------------------------------------------------------------
   // Точки притяжения: начало, курсор, края всех клипов (кроме перетаскиваемого)
-  snapPoints(excludeId, videoClips = store.project.videoClips) {
+  snapPoints(exclude, videoClips = store.project.videoClips) {
+    const skip = (id) => (exclude instanceof Set ? exclude.has(id) : id === exclude);
     const pts = [0, store.time];
-    for (const c of videoClips) if (c.id !== excludeId) pts.push(c.start, clipEnd(c));
+    for (const c of videoClips) if (!skip(c.id)) pts.push(c.start, clipEnd(c));
     for (const t of store.project.audioTracks) {
-      for (const c of t.clips) if (c.id !== excludeId) pts.push(c.start, clipEnd(c));
+      for (const c of t.clips) if (!skip(c.id)) pts.push(c.start, clipEnd(c));
     }
     return pts;
   }
@@ -504,6 +609,16 @@ export class Timeline {
     const knob = e.target.closest('.fade-knob');
     e.preventDefault();
 
+    // Лезвие: щелчок по клипу разрезает его в этом месте (вместе со связанными; Alt — только его), курсор не двигается
+    if (this.tool === 'blade' && !e.target.closest('.ruler-lane')) {
+      if (clipEl) {
+        const t = this.bladeTime(e);
+        const n = store.splitAt(t, clipEl.dataset.id, { withLinked: !e.altKey });
+        if (!n) toast('Слишком близко к краю клипа', 'info', 1500);
+      }
+      return;
+    }
+
     if (!clipEl) {
       // Клик по пустому месту / линейке: перемотка
       if (!e.target.closest('.ruler-lane') && !e.target.closest('.tl-playhead')) store.select(null);
@@ -521,20 +636,41 @@ export class Timeline {
     const before = store.snapshot();
     const orig = clone(f.clip);
     const origVideo = clone(store.project.videoClips);
+    const origTracks = clone(store.project.audioTracks);
     const x0 = e.clientX; const y0 = e.clientY;
     const media = store.media(f.clip.mediaId) || { duration: orig.out };
-    const pts = this.snapPoints(id, origVideo);
+    // Связанные клипы (видео и его звук) двигаются и обрезаются вместе
+    const partners = store.linkedOf(id).map((x) => ({ id: x.clip.id, kind: x.kind, o: clone(x.clip) }));
+    const groupIds = new Set([id, ...partners.map((x) => x.id)]);
+    const vOrig = kind === 'video' ? orig : (partners.find((x) => x.kind === 'video') || {}).o || null;
+    const pts = this.snapPoints(groupIds, origVideo);
     let moved = false;
     const mode = knob ? (knob.classList.contains('in') ? 'fade-in' : 'fade-out')
       : handle ? (handle.classList.contains('l') ? 'trim-l' : 'trim-r') : 'move';
     this.drag = { mode: mode.startsWith('fade') ? 'fade' : mode, id };
     document.body.classList.add(mode === 'move' ? 'is-moving' : 'is-trimming');
 
-    // Соседи видеоклипа (для ограничений обрезки)
+    // Соседи видеоклипа группы (для ограничений обрезки)
     const sorted = origVideo.slice().sort((a, b) => a.start - b.start);
-    const vi = sorted.findIndex((c) => c.id === id);
-    const prevEnd = kind === 'video' && vi > 0 ? clipEnd(sorted[vi - 1]) : 0;
-    const nextStart = kind === 'video' && vi >= 0 && vi < sorted.length - 1 ? sorted[vi + 1].start : Infinity;
+    const vi = vOrig ? sorted.findIndex((c) => c.id === vOrig.id) : -1;
+    const prevEnd = vi > 0 ? clipEnd(sorted[vi - 1]) : 0;
+    const nextStart = vi >= 0 && vi < sorted.length - 1 ? sorted[vi + 1].start : Infinity;
+    const mediaDur = (c) => { const m = store.media(c.mediaId); return m ? m.duration : c.out; };
+    // Обрезка партнёров на тот же сдвиг (Alt — только этот клип)
+    const trimPartners = (ev, side, d) => {
+      if (ev.altKey) return;
+      for (const pt of partners) {
+        const f2 = store.findClip(pt.id);
+        if (!f2) continue;
+        const c = f2.clip; const o = pt.o;
+        if (side === 'l') {
+          c.in = clamp(o.in + d, 0, o.out - MIN_CLIP);
+          if (pt.kind === 'video') c.start = o.start + (c.in - o.in);
+        } else {
+          c.out = clamp(o.out + d, o.in + MIN_CLIP, mediaDur(c));
+        }
+      }
+    };
 
     const onMove = (ev) => {
       const dx = ev.clientX - x0;
@@ -552,29 +688,44 @@ export class Timeline {
         let nstart = orig.start + (nin - orig.in);
         const sn = this.snap(nstart, pts, ev);
         if (sn.snapped) { nin += sn.t - nstart; nstart = sn.t; snapAt = sn.t; }
-        // Не залезаем на предыдущий клип / за ноль / за начало файла
-        const lo = Math.max(kind === 'video' ? prevEnd : 0, orig.start - orig.in);
+        // Не залезаем на предыдущий клип / за ноль / за начало файла (и то же для связанного видео)
+        const useV = vOrig && (kind === 'video' || !ev.altKey);
+        const lo = Math.max(0, orig.start - orig.in, useV ? orig.start + (prevEnd - vOrig.start) : 0, useV ? orig.start - vOrig.in : 0);
         if (nstart < lo) { nin += lo - nstart; nstart = lo; }
         nin = clamp(nin, 0, orig.out - MIN_CLIP); nstart = orig.start + (nin - orig.in);
-        store.live(() => { const c = store.findClip(id).clip; c.in = nin; c.start = nstart; });
+        store.live(() => { const c = store.findClip(id).clip; c.in = nin; c.start = nstart; trimPartners(ev, 'l', nin - orig.in); });
         if (kind === 'video') store.setTime(nstart);
       } else if (mode === 'trim-r') {
         let nout = clamp(orig.out + dt, orig.in + MIN_CLIP, media.duration);
         const sn = this.snap(orig.start + (nout - orig.in), pts, ev);
         if (sn.snapped) { nout = clamp(orig.in + (sn.t - orig.start), orig.in + MIN_CLIP, media.duration); snapAt = sn.t; }
-        if (kind === 'video') nout = Math.min(nout, orig.in + (nextStart - orig.start));
-        store.live(() => { store.findClip(id).clip.out = nout; });
+        const useV = vOrig && (kind === 'video' || !ev.altKey);
+        if (useV) nout = Math.min(nout, orig.out + (nextStart - clipEnd(vOrig)), orig.out + (mediaDur(vOrig) - vOrig.out));
+        nout = Math.max(nout, orig.in + MIN_CLIP);
+        store.live(() => { store.findClip(id).clip.out = nout; trimPartners(ev, 'r', nout - orig.out); });
         if (kind === 'video') store.setTime(Math.max(orig.start, orig.start + (nout - orig.in) - 0.001));
-      } else if (kind === 'video') {
-        // Перемещение видео: каждый раз от исходного состояния, чтобы раздвинутые соседи возвращались на место
+      } else if (kind === 'video' || vOrig) {
+        // Перемещение видео (или звука, связанного с видео, — тогда едет видео, а звук за ним).
+        // Каждый раз от исходного состояния: раздвинутые/затёртые соседи возвращаются на место.
+        // Без Alt — наложение: клип затирает то, что под ним; с Alt — как раньше (в пустоту или раздвинуть).
         let nstart = Math.max(0, orig.start + dt);
         const s1 = this.snap(nstart, pts, ev); const s2 = this.snap(nstart + len, pts, ev);
         if (s1.snapped && (!s2.snapped || Math.abs(s1.t - nstart) <= Math.abs(s2.t - nstart - len))) { nstart = s1.t; snapAt = s1.t; } else if (s2.snapped) { nstart = s2.t - len; snapAt = s2.t; }
+        const vstart = Math.max(0, vOrig.start + (nstart - orig.start));
+        const target = kind === 'audio' ? this.trackAt(ev.clientY) : null;
         store.live((p) => {
           p.videoClips = clone(origVideo);
-          const c = p.videoClips.find((x) => x.id === id);
-          placeVideo(p, c, nstart, 'auto');
+          p.audioTracks = clone(origTracks);
+          if (kind === 'audio' && target && target !== 'new') {
+            const from = p.audioTracks.find((t) => t.clips.some((x) => x.id === id));
+            const to = p.audioTracks.find((t) => t.id === target);
+            if (from && to && from !== to) { const c = from.clips.find((x) => x.id === id); from.clips = from.clips.filter((x) => x !== c); to.clips.push(c); }
+          }
+          const v = p.videoClips.find((x) => x.id === vOrig.id);
+          if (ev.altKey) placeVideo(p, v, vstart, 'auto');
+          else overwriteVideo(p, v, vstart);
         });
+        this.dropTarget = null;
       } else {
         let nstart = Math.max(0, orig.start + dt);
         const s1 = this.snap(nstart, pts, ev); const s2 = this.snap(nstart + len, pts, ev);
@@ -582,13 +733,18 @@ export class Timeline {
         nstart = Math.max(0, nstart);
         const target = this.trackAt(ev.clientY);
         this.highlightNewTrack(target === 'new');
-        store.live(() => {
-          const cur = store.findClip(id);
-          cur.clip.start = nstart;
-          if (target && target !== 'new' && target !== cur.track.id) {
-            cur.track.clips = cur.track.clips.filter((x) => x.id !== id);
-            store.project.audioTracks.find((t) => t.id === target).clips.push(cur.clip);
+        store.live((p) => {
+          p.videoClips = clone(origVideo);
+          p.audioTracks = clone(origTracks);
+          let tr = p.audioTracks.find((t) => t.clips.some((x) => x.id === id));
+          const c = tr.clips.find((x) => x.id === id);
+          c.start = nstart;
+          if (target && target !== 'new' && target !== tr.id) {
+            tr.clips = tr.clips.filter((x) => x.id !== id);
+            tr = p.audioTracks.find((t) => t.id === target);
+            tr.clips.push(c);
           }
+          if (!ev.altKey && target !== 'new') overwriteAudio(tr, c);
         });
         this.dropTarget = target;
       }
@@ -613,7 +769,7 @@ export class Timeline {
         store.live(() => {
           const cur = store.findClip(id);
           cur.track.clips = cur.track.clips.filter((x) => x.id !== id);
-          store.project.audioTracks.push({ id: `trk_${Date.now().toString(36)}`, muted: false, clips: [cur.clip] });
+          store.project.audioTracks.push(newTrack({ clips: [cur.clip] }));
         });
       }
       this.dropTarget = null;
@@ -704,7 +860,7 @@ export class Timeline {
   dragLeave() { this.hideMarker(); this.highlightNewTrack(false); }
 
   // ids — медиа из медиатеки или paths — файлы из Проводника. false — точка вне таймлайна.
-  async dropAt(x, y, { ids = [], paths = [] } = {}) {
+  async dropAt(x, y, { ids = [], paths = [], alt = false } = {}) {
     const tg0 = this.dropTargetAt(x, y);
     this.dragLeave();
     if (!tg0) return false;
@@ -712,23 +868,24 @@ export class Timeline {
     const t = this.xToTime(x);
     let vt = this.dropTime(x);
     if (paths.length) ids = await importPaths(paths);
-    this.placeDropped(ids, tg, t, vt);
+    this.placeDropped(ids, tg, t, vt, alt);
     return true;
   }
 
   initDrop() {}
 
-  placeDropped(ids, tg, t, vt) {
+  // Без Alt — наложение (затирает то, что под клипом), с Alt — в пустоту рядом или раздвинуть соседей
+  placeDropped(ids, tg, t, vt, alt = false) {
       let at = t;
       for (const id of ids) {
         const m = store.media(id);
         if (!m) continue;
         if (tg.kind === 'video' && m.hasVideo) {
-          const c = store.insertVideoClip(id, vt, 'auto');
+          const c = store.insertVideoClip(id, vt, alt ? 'auto' : 'overwrite');
           if (c) vt = clipEnd(store.findClip(c.id).clip);
         } else if (m.hasAudio) {
           const track = tg.kind === 'audio' ? tg.track : tg.kind === 'newtrack' ? 'new' : null;
-          const c = store.addAudioClip(id, tg.kind === 'video' ? store.time : at, track);
+          const c = store.addAudioClip(id, tg.kind === 'video' ? store.time : at, track, { overwrite: !alt && tg.kind === 'audio' });
           if (c) at = clipEnd(c);
         } else {
           toast(`${m.name}: в файле нет звука — на аудиодорожку не добавить`, 'error');

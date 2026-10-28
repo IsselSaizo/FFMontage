@@ -129,7 +129,8 @@ export function buildExport(project, settings) {
     const head = c.in - ss;              // сколько кадров «до» реально есть в файле
     const freezeHead = h - head;         // недостающее — повтор первого кадра
     const S = h + len + t;
-    const hasSound = m.hasAudio && !c.muted && c.volume > 0;
+    // noAudio — звук клипа вынесен на аудиодорожки (связанные клипы)
+    const hasSound = m.hasAudio && !c.noAudio && !c.muted && c.volume > 0;
     const k = (m.hasVideo || hasSound) ? addInput(m, ss, head + len + t) : -1;
     if (m.hasVideo) {
       filters.push(`[${k}:v]setpts=PTS-STARTPTS,${scaleChain}` +
@@ -169,16 +170,19 @@ export function buildExport(project, settings) {
   let audioEnd = 0;
   let j = 0;
   (project.audioTracks || []).forEach((tr) => {
-    if (tr.muted) return;
+    // Громкость дорожки умножается на громкость клипа; «Соло» — только для предпросмотра
+    const tv = tr.volume === undefined ? 1 : Number(tr.volume);
     (tr.clips || []).forEach((c) => {
       const m = media[c.mediaId];
       const dur = clipDuration(c);
       if (!m || !m.hasAudio || dur <= 0.001) return;
       audioEnd = Math.max(audioEnd, c.start + dur);
-      if (c.muted || !(c.volume > 0)) return;
+      if (tr.muted || c.muted || !(c.volume > 0) || !(tv > 0)) return;
       const k = addInput(m, c.in, dur);
       const delayMs = Math.max(0, Math.round(c.start * 1000));
-      filters.push(`[${k}:a]${audioFmt},volume=${n6(c.volume)},asetpts=PTS-STARTPTS,apad,atrim=duration=${n6(dur)}` +
+      const nStreams = (m.audioStreams && m.audioStreams.length) || 1;
+      const st = Math.min(Math.max(0, c.stream | 0), nStreams - 1);
+      filters.push(`[${k}:a:${st}]${audioFmt},volume=${n6(c.volume * tv)},asetpts=PTS-STARTPTS,apad,atrim=duration=${n6(dur)}` +
         `${aFades(c, 0, dur)},adelay=delays=${delayMs}:all=1[m${j}]`);
       audio.push(`[m${j}]`);
       j++;

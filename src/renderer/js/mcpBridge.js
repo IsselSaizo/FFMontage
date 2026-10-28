@@ -1,8 +1,8 @@
-// ИИ-ассистент (MCP): выполняет в окне команды, которые присылает MCP-сервер (mcp/ff-montage-mcp.js)
-// через главный процесс (src/main/control.js), и окно «ИИ-ассистент» с готовыми настройками для клиентов.
+// ИИ-ассистент (MCP): выполняет в окне команды, которые присылает MCP-сервер (ff-montage --mcp, src-tauri/src/mcp.rs)
+// через программу (src-tauri/src/control.rs), и окно «ИИ-ассистент» с готовыми настройками для клиентов.
 //
 // Все правки идут через store — с историей, поэтому пользователь видит их сразу и может отменить Ctrl+Z.
-import { store, placeVideo, MIN_CLIP } from './store.js';
+import { store, placeVideo, MIN_CLIP, newTrack } from './store.js';
 import { importPaths } from './media.js';
 import { toggleReverse, freezeFrameAt, isReversed, isFreeze } from './fx.js';
 import { TRANSITIONS, MIN_DURATION as TR_MIN, MAX_DURATION as TR_MAX } from './transitions.js';
@@ -133,6 +133,9 @@ function describeClip(c, kind, track = null) {
   }
   if (kind === 'video' && c.transition) o.transition_in = { type: c.transition.type, duration: r3(c.transition.duration) };
   if (track) o.audio_track_id = track.id;
+  if (c.link) o.link = c.link;                       // видео и его звук (связаны, двигаются вместе)
+  if (kind === 'video' && c.noAudio) o.sound_on_audio_track = true;
+  if (kind === 'audio' && c.stream) o.audio_stream = c.stream;
   if (store.busy[c.id]) o.processing = store.busy[c.id].label;
   return o;
 }
@@ -166,7 +169,7 @@ function getProject() {
     media: Object.values(store.project.media).filter((m) => !m.hidden).map(describeMedia),
     video_track: { clips: v, gaps: gapsR(store.gaps('video')) },
     audio_tracks: store.project.audioTracks.map((t, i) => ({
-      id: t.id, index: i + 1, muted: !!t.muted,
+      id: t.id, index: i + 1, name: store.trackName(t.id), muted: !!t.muted, volume: r3(t.volume ?? 1), solo: !!t.solo,
       clips: [...t.clips].sort((a, b) => a.start - b.start).map((c) => describeClip(c, 'audio', t)),
       gaps: gapsR(store.gaps(t.id)),
     })),
@@ -330,7 +333,7 @@ const TOOLS = {
     let clip;
     if (track === 'video') {
       if (!m.hasVideo) fail(`"${m.name}" has no video — use track "audio".`);
-      clip = store.insertVideoClip(m.id, start === undefined ? null : start, boolArg(args, 'insert') ? 'insert' : 'auto', { in: sin, out: sout });
+      clip = store.insertVideoClip(m.id, start === undefined ? null : start, boolArg(args, 'insert') ? 'insert' : 'auto', { in: sin, out: sout }, { linkAudio: boolArg(args, 'separate_audio') === true });
     } else {
       if (!m.hasAudio) fail(`"${m.name}" has no sound — use track "video".`);
       const tid = audioTrackArg(strArg(args, 'audio_track_id'));
@@ -409,7 +412,7 @@ const TOOLS = {
         if (start !== undefined) cc.start = start;
         if (tid && tid !== cur.track.id) {
           let t = tid === 'new' ? null : p.audioTracks.find((x) => x.id === tid);
-          if (!t) { t = { id: uid('trk'), muted: false, clips: [] }; p.audioTracks.push(t); }
+          if (!t) { t = newTrack(); p.audioTracks.push(t); }
           cur.track.clips = cur.track.clips.filter((x) => x.id !== cc.id);
           t.clips.push(cc);
         }
