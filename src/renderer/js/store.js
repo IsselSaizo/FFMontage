@@ -55,13 +55,26 @@ export function normalizeProject(p) {
     c.fadeIn = Math.max(0, Number(c.fadeIn) || 0);
     c.fadeOut = Math.max(0, Number(c.fadeOut) || 0);
   };
+  const fixTracks = (tracks) => {
+    for (const t of tracks) {
+      if (!t.id) t.id = uid('trk');
+      t.muted = !!t.muted; t.solo = !!t.solo;
+      t.volume = isFinite(t.volume) ? Number(t.volume) : 1;
+      t.clips = t.clips || []; t.clips.forEach(fix);
+    }
+  };
   p.videoClips.forEach(fix);
-  for (const t of p.audioTracks) {
-    if (!t.id) t.id = uid('trk');
-    t.muted = !!t.muted; t.solo = !!t.solo;
-    t.volume = isFinite(t.volume) ? Number(t.volume) : 1;
-    t.clips = t.clips || []; t.clips.forEach(fix);
-  }
+  fixTracks(p.audioTracks);
+  // Эпизоды (кроме открытого) хранят своё содержимое сами
+  if (Array.isArray(p.episodes) && p.episodes.length) {
+    if (!p.episodes.some((e) => e.id === p.activeEpisode)) p.activeEpisode = p.episodes[0].id;
+    for (const e of p.episodes) {
+      if (e.id === p.activeEpisode) { delete e.videoClips; delete e.audioTracks; continue; }
+      e.videoClips = e.videoClips || []; e.videoClips.forEach(fix);
+      e.audioTracks = e.audioTracks && e.audioTracks.length ? e.audioTracks : [newTrack()];
+      fixTracks(e.audioTracks);
+    }
+  } else { delete p.episodes; delete p.activeEpisode; }
   p.version = 2;
   fixup(p);
   return p;
@@ -447,16 +460,165 @@ class Store {
     const ids = this.familyOf(mediaId);
     this.mutate((p) => {
       for (const id of ids) delete p.media[id];
-      p.videoClips = p.videoClips.filter((c) => !ids.has(c.mediaId));
-      for (const t of p.audioTracks) t.clips = t.clips.filter((c) => !ids.has(c.mediaId));
+      for (const s of [p, ...(p.episodes || []).filter((e) => e.videoClips)]) {
+        s.videoClips = s.videoClips.filter((c) => !ids.has(c.mediaId));
+        for (const t of s.audioTracks || []) t.clips = t.clips.filter((c) => !ids.has(c.mediaId));
+      }
     });
   }
 
   usageCount(mediaId) {
     const ids = this.familyOf(mediaId);
-    let n = this.project.videoClips.filter((c) => ids.has(c.mediaId)).length;
-    for (const t of this.project.audioTracks) n += t.clips.filter((c) => ids.has(c.mediaId)).length;
+    let n = 0;
+    for (const s of [this.project, ...(this.project.episodes || []).filter((e) => e.videoClips)]) {
+      n += s.videoClips.filter((c) => ids.has(c.mediaId)).length;
+      for (const t of s.audioTracks || []) n += t.clips.filter((c) => ids.has(c.mediaId)).length;
+    }
     return n;
+  }
+
+  // ------------------------------------------------------------------------
+  // Эпизоды: несколько таймлайнов в одном проекте (как вкладки таймлайнов в DaVinci).
+  // Открытый эпизод лежит прямо в project.videoClips/audioTracks (весь остальной код работает с ним),
+  // остальные хранят своё содержимое в project.episodes[i]. Первый — «Основной» (id 'main').
+  // ------------------------------------------------------------------------
+  episodes() { return this.project.episodes && this.project.episodes.length ? this.project.episodes : [{ id: 'main', name: 'Основной' }]; }
+  activeEpisode() { return this.project.activeEpisode || 'main'; }
+  episodeName(id) { const e = this.episodes().find((x) => x.id === id); return e ? e.name : ''; }
+
+  ensureEpisodes(p) {
+    if (!p.episodes || !p.episodes.length) p.episodes = [{ id: 'main', name: 'Основной' }];
+    if (!p.activeEpisode) p.activeEpisode = 'main';
+  }
+
+  // Убрать открытый эпизод в хранилище, достать другой
+  swapIn(p, id) {
+    const cur = p.episodes.find((e) => e.id === p.activeEpisode);
+    if (cur) { cur.videoClips = p.videoClips; cur.audioTracks = p.audioTracks; cur.videoName = p.videoName; cur.time = this.time; }
+    const next = p.episodes.find((e) => e.id === id);
+    p.videoClips = next.videoClips || [];
+    p.audioTracks = next.audioTracks && next.audioTracks.length ? next.audioTracks : [newTrack()];
+    if (next.videoName) p.videoName = next.videoName; else delete p.videoName;
+    const t = next.time || 0;
+    delete next.videoClips; delete next.audioTracks; delete next.videoName; delete next.time;
+    p.activeEpisode = id;
+    return t;
+  }
+
+  switchEpisode(id) {
+    if (id === this.activeEpisode() || !this.episodes().some((e) => e.id === id)) return false;
+    this.emit('request-pause');
+    let t = 0;
+    this.mutate((p) => { this.ensureEpisodes(p); t = this.swapIn(p, id); }, { history: false });
+    this.selection = null; this.emit('selection');
+    this.setTime(t);
+    this.emit('episodes');
+    return true;
+  }
+
+  addEpisode(name = null) {
+    const id = uid('ep');
+    this.mutate((p) => {
+      this.ensureEpisodes(p);
+      const n = p.episodes.length;
+      p.episodes.push({ id, name: name || `Эпизод ${n}`, videoClips: [], audioTracks: [newTrack()] });
+    });
+    this.switchEpisode(id);
+    return id;
+  }
+
+  renameEpisode(id, name) {
+    name = String(name || '').trim();
+    if (!name) return false;
+    this.mutate((p) => { this.ensureEpisodes(p); const e = p.episodes.find((x) => x.id === id); if (e) e.name = name; });
+    this.emit('episodes');
+    return true;
+  }
+
+  removeEpisode(id) {
+    if (id === 'main' || !this.episodes().some((e) => e.id === id)) return false;
+    if (this.activeEpisode() === id) this.switchEpisode('main');
+    this.mutate((p) => { p.episodes = p.episodes.filter((e) => e.id !== id); });
+    this.emit('episodes');
+    return true;
+  }
+
+  // Содержимое эпизода (копия): { videoClips, audioTracks }
+  episodeContent(id) {
+    const src = id === this.activeEpisode() ? this.project : this.episodes().find((e) => e.id === id);
+    return JSON.parse(JSON.stringify({ videoClips: (src && src.videoClips) || [], audioTracks: (src && src.audioTracks) || [] }));
+  }
+
+  // Длительность эпизода
+  episodeDuration(id) {
+    const c = this.episodeContent(id);
+    let e = 0;
+    for (const v of c.videoClips) e = Math.max(e, end(v));
+    for (const t of c.audioTracks) for (const a of t.clips) e = Math.max(e, end(a));
+    return e;
+  }
+
+  // Вставить эпизод src в эпизод dst (по умолчанию — в основной) начиная с at (по умолчанию — после конца
+  // его видео). Клипы копируются с новыми id; звуковые дорожки — по порядку (1-я к 1-й…).
+  // Видео, на место которого ложится эпизод, раздвигается вправо, чтобы ничего не затереть.
+  insertEpisode(srcId, dstId = 'main', at = null) {
+    if (srcId === dstId) return false;
+    const content = this.episodeContent(srcId);
+    if (!content.videoClips.length && !content.audioTracks.some((t) => t.clips.length)) return false;
+    const linkMap = new Map();
+    const reid = (c) => {
+      c.id = uid('clp');
+      if (c.link) { if (!linkMap.has(c.link)) linkMap.set(c.link, uid('lnk')); c.link = linkMap.get(c.link); }
+      return c;
+    };
+    this.mutate((p) => {
+      this.ensureEpisodes(p);
+      const dst = dstId === p.activeEpisode ? p : p.episodes.find((e) => e.id === dstId);
+      if (!dst) return;
+      dst.videoClips = dst.videoClips || [];
+      dst.audioTracks = dst.audioTracks && dst.audioTracks.length ? dst.audioTracks : [newTrack()];
+      const vEnd = dst.videoClips.reduce((s, c) => Math.max(s, end(c)), 0);
+      const start = at === null ? vEnd : Math.max(0, at);
+      let dur = 0;
+      for (const v of content.videoClips) dur = Math.max(dur, end(v));
+      for (const t of content.audioTracks) for (const a of t.clips) dur = Math.max(dur, end(a));
+      // Раздвигаем то, что правее точки вставки (клип, на который попала точка, сначала разрезается)
+      if (at !== null) {
+        const cut = (list) => {
+          const out = [];
+          for (const c of list) {
+            out.push(c);
+            if (c.start < start - MIN_CLIP && end(c) > start + MIN_CLIP) {
+              const right = { ...JSON.parse(JSON.stringify(c)), id: uid('clp'), in: c.in + (start - c.start), start, fadeIn: 0 };
+              delete right.transition;
+              if (c.link) right.link = splitLink(c.link, start);
+              c.out = c.in + (start - c.start); c.fadeOut = 0;
+              out.push(right);
+            }
+          }
+          return out;
+        };
+        dst.videoClips = cut(dst.videoClips);
+        for (const t of dst.audioTracks) t.clips = cut(t.clips);
+        for (const c of dst.videoClips) if (c.start >= start - ADJ) c.start += dur;
+        for (const t of dst.audioTracks) for (const c of t.clips) if (c.start >= start - ADJ) c.start += dur;
+      }
+      for (const v of content.videoClips) { reid(v); v.start += start; dst.videoClips.push(v); }
+      // Звуковые дорожки: по порядку, но если там уже что-то звучит в этом месте (музыка) — на свободную или новую
+      const used = new Set();
+      const free = (tr, s, e) => tr.clips.every((c) => end(c) <= s + ADJ || c.start >= e - ADJ);
+      content.audioTracks.forEach((t, i) => {
+        if (!t.clips.length) return;
+        const s = Math.min(...t.clips.map((a) => a.start)) + start; const e = Math.max(...t.clips.map(end)) + start;
+        let tr = dst.audioTracks[i] && !used.has(dst.audioTracks[i]) && free(dst.audioTracks[i], s, e) ? dst.audioTracks[i] : null;
+        if (!tr) tr = dst.audioTracks.find((x) => !used.has(x) && free(x, s, e));
+        if (!tr) { tr = newTrack({ name: t.name, volume: t.volume ?? 1 }); dst.audioTracks.push(tr); }
+        used.add(tr);
+        for (const a of t.clips) { reid(a); a.start += start; tr.clips.push(a); }
+      });
+      if (dst !== p) { dst.videoClips.sort(byStart); syncLinks({ videoClips: dst.videoClips, audioTracks: dst.audioTracks }); }
+    });
+    return true;
   }
 
   newClip(mediaId, extra = {}) {

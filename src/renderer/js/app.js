@@ -6,6 +6,7 @@ import { Preview, initTransport } from './preview.js';
 import { Timeline } from './timeline.js';
 import { initInspector } from './inspector.js';
 import { initBrowser } from './browser.js';
+import { initEpisodes } from './episodes.js';
 import { openExport } from './exportDialog.js';
 import { copyClip, pasteClip, reverseClip, freezeFrame } from './actions.js';
 import { closeMenu, menuOpen } from './contextMenu.js';
@@ -294,6 +295,7 @@ function initWindowDrop() {
 async function main() {
   initTopbar();
   timeline = new Timeline($('#timeline'));
+  initEpisodes($('#timeline'));
   preview = new Preview($('#preview'));
   transport = initTransport(preview);
   initMediaPanel({ addToTimeline: (id) => timeline.addMedia(id) });

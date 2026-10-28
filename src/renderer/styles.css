@@ -511,3 +511,15 @@ body.is-moving .junction, body.is-trimming .junction { display: none; }
 body:not(.ready) #app { opacity: 0; }
 #app { transition: opacity .2s; }
 .clip .ci.fxb { font-size: 10px; font-weight: 700; color: #9fe3ff; padding: 0 2px; }
+/* Эпизоды (вкладки таймлайнов) */
+.tl-episodes { display: flex; align-items: center; gap: 3px; padding: 4px 8px 0; min-height: 30px; flex: none; overflow-x: auto; }
+.ep-tab { display: flex; align-items: center; gap: 4px; height: 26px; padding: 0 8px 0 12px; border-radius: 7px 7px 0 0; background: var(--panel); color: var(--text-2); font-size: 12px; cursor: pointer; border: 1px solid var(--line); border-bottom: 0; white-space: nowrap; }
+.ep-tab:hover { color: var(--text); }
+.ep-tab.on { background: var(--accent-soft); color: var(--text); border-color: var(--accent); }
+.ep-x { display: flex; border: 0; background: none; color: var(--text-3); padding: 2px; border-radius: 4px; cursor: pointer; }
+.ep-x:hover { color: var(--danger); background: var(--panel-2); }
+.ep-add { display: flex; align-items: center; gap: 4px; height: 24px; padding: 0 8px; border: 1px dashed var(--line-2); border-radius: 7px; background: none; color: var(--text-3); font: inherit; font-size: 12px; cursor: pointer; }
+.ep-add:hover { color: var(--text); border-color: var(--text-3); }
+.ep-rename { width: 120px; font: inherit; font-size: 12px; color: var(--text); background: var(--panel-2); border: 1px solid var(--accent); border-radius: 5px; padding: 2px 5px; outline: none; }
+.ep-spacer { flex: 1; }
+.ep-join { height: 24px; }

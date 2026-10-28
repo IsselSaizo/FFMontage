@@ -167,6 +167,8 @@ function getProject() {
     duration: r3(store.duration()),
     playhead: r3(store.time),
     aspect: store.project.aspect || 'auto', background: store.background(),
+    // Эпизоды (вкладки таймлайнов): всё ниже — про открытый; переключает пользователь вкладками над таймлайном
+    episodes: store.episodes().map((e) => ({ id: e.id, name: e.name, open: e.id === store.activeEpisode() })),
     can_undo: store.undoStack.length > 0,
     can_redo: store.redoStack.length > 0,
     media: Object.values(store.project.media).filter((m) => !m.hidden).map(describeMedia),

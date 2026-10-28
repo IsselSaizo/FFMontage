@@ -105,6 +105,8 @@ export async function openExport() {
         h('button', { class: 'icon-btn', onclick: close, html: icon('close', 18) })),
       h('div', { class: 'modal-body' },
         h('div', { class: 'form-grid' },
+          store.episodes().length > 1 ? h('label', {}, 'Эпизод') : null,
+          store.episodes().length > 1 ? h('div', { class: 'muted', title: 'Экспортируется открытый эпизод. Чтобы выгрузить другой — откройте его вкладку над таймлайном.' }, `«${store.episodeName(store.activeEpisode())}» (открытый)`) : null,
           h('label', {}, 'Название'), nameInput,
           h('label', {}, 'Сохранить в'), h('div', { class: 'row gap' }, outLabel, pickBtn),
           h('label', {}, 'Разрешение'), select(resOptions, 'res'),
