@@ -1,5 +1,5 @@
 # Проверка при каждом push / pull request: сборка, тест движка (без видеокарты — на процессоре),
-# на Windows ещё автотест интерфейса и ИИ-ассистента (MCP).
+# тест ИИ-ассистента (MCP); на Windows ещё автотест интерфейса.
 name: CI
 on:
   push:
@@ -64,7 +64,7 @@ jobs:
       - name: Библиотеки окна
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev gstreamer1.0-plugins-good xvfb
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
@@ -79,3 +79,12 @@ jobs:
         run: cargo build --release --locked
       - name: Тест движка (процессор)
         run: node tests/engine-test.js
+      - name: Тест ИИ-ассистента (MCP)
+        run: xvfb-run -a node tests/mcp-test.js
+      - name: Журналы
+        if: failure()
+        uses: actions/upload-artifact@v5
+        with:
+          name: logs-linux
+          path: .test-cache/**/logs/**
+          if-no-files-found: ignore

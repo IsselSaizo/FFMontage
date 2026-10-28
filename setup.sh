@@ -19,12 +19,18 @@ if [ "$SKIP_FFMPEG" = 0 ]; then bash "$DIR/tools/fetch-ffmpeg.sh" "$DIR/ffmpeg";
 echo; echo "[2/3] Rust и библиотеки окна"
 if ! pkg-config --exists webkit2gtk-4.1 2>/dev/null; then
   echo "Нужны библиотеки WebKitGTK. Ubuntu/Debian:"
-  echo "  sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev build-essential pkg-config"
+  echo "  sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev gstreamer1.0-plugins-good build-essential pkg-config"
   echo "Fedora: sudo dnf install webkit2gtk4.1-devel gtk3-devel librsvg2-devel gcc"
   read -r -p "Поставить сейчас через apt (нужен sudo)? [y/N] " ans || ans=n
   if [ "${ans,,}" = "y" ]; then
-    sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev build-essential pkg-config curl
+    sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev gstreamer1.0-plugins-good build-essential pkg-config curl
   fi
+fi
+# Без autoaudiosink (gst-plugins-good) окно падает, как только в предпросмотре появляется звук
+if command -v gst-inspect-1.0 >/dev/null && ! gst-inspect-1.0 autoaudiosink >/dev/null 2>&1; then
+  echo "ВНИМАНИЕ: нет GStreamer good (autoaudiosink) — окно упадёт при работе со звуком. Поставьте:"
+  echo "  Ubuntu/Debian: sudo apt install gstreamer1.0-plugins-good"
+  echo "  Fedora: sudo dnf install gstreamer1-plugins-good   Arch: sudo pacman -S gst-plugins-good"
 fi
 CARGO="$(command -v cargo || echo "$HOME/.cargo/bin/cargo")"
 if [ ! -x "$CARGO" ]; then
