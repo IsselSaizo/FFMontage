@@ -1,15 +1,23 @@
-// Таймлайн: основная видеодорожка (клипы встык) + аудиодорожки со свободным размещением.
-import { store, MIN_CLIP } from './store.js';
+// Таймлайн: основная видеодорожка (клипы по времени, с пустотами и переходами) + аудиодорожки.
+// Клипы «магнитятся» к краям соседей, курсору и началу; пустоты убираются кнопкой-корзиной,
+// на стыке клипов, стоящих впритык, — кнопка «+» для перехода.
+import { store, MIN_CLIP, ADJ, placeVideo } from './store.js';
 import { h, $, clamp, icon, fmtTime, rafThrottle, toast } from './util.js';
 import { importPaths } from './media.js';
+import { openClipMenu, openLaneMenu, splitClip } from './actions.js';
+import { isReversed, isFreeze } from './fx.js';
+import { transitionById } from './transitions.js';
 
 const HEAD_W = 132;
 const VIDEO_H = 76;
 const AUDIO_H = 56;
-const SNAP_PX = 9;
+const SNAP_PX = 12;
 const DRAG_THRESHOLD = 4;
 const MIN_PPS = 0.2;
 const MAX_PPS = 800;
+
+const clipEnd = (c) => c.start + c.out - c.in;
+const clone = (x) => JSON.parse(JSON.stringify(x));
 
 export class Timeline {
   constructor(root) {
@@ -17,6 +25,7 @@ export class Timeline {
     this.pps = 40;          // пикселей на секунду
     this.autoFit = true;    // подгонять масштаб, пока пользователь сам не изменит
     this.drag = null;
+    this.magnet = localStorage.getItem('ffm.magnet') !== '0';
 
     this.toolbar = h('div', { class: 'tl-toolbar' });
     this.scroll = h('div', { class: 'tl-scroll' });
@@ -27,12 +36,13 @@ export class Timeline {
 
     this.playhead = h('div', { class: 'tl-playhead' }, h('div', { class: 'ph-knob' }));
     this.marker = h('div', { class: 'tl-insert' });
-    this.ghost = null;
+    this.snapLine = h('div', { class: 'tl-snapline' });
 
     const rerender = rafThrottle(() => this.render());
-    store.on('project', () => { if (this.autoFit) this.fit(false); rerender(); });
+    store.on('project', () => { if (this.autoFit && !this.drag) this.fit(false); rerender(); });
     store.on('media', rerender);
     store.on('selection', rerender);
+    store.on('busy', rerender);
     store.on('time', () => this.updatePlayhead());
     this.scroll.addEventListener('scroll', rafThrottle(() => this.render()));
     const onResize = rafThrottle(() => { if (this.autoFit) this.fit(false); this.render(); });
@@ -41,7 +51,7 @@ export class Timeline {
     this.scroll.addEventListener('wheel', (e) => this.onWheel(e), { passive: false });
     this.content.addEventListener('pointerdown', (e) => this.onPointerDown(e));
     this.content.addEventListener('dblclick', (e) => this.onDblClick(e));
-    this.content.addEventListener('contextmenu', (e) => e.preventDefault());
+    this.content.addEventListener('contextmenu', (e) => this.onContextMenu(e));
     this.initDrop();
     this.render();
   }
@@ -60,6 +70,7 @@ export class Timeline {
       const v = Number(this.zoomSlider.value) / 1000;
       this.setZoom(MIN_PPS * Math.pow(MAX_PPS / MIN_PPS, v), null, true);
     });
+    this.magnetBtn = b('magnet', '', () => this.toggleMagnet(), 'tb-magnet');
     this.toolbar.append(
       h('div', { class: 'tb-group' },
         b('undo', 'Отменить (Ctrl+Z)', () => store.undo(), 'tb-undo'),
@@ -67,7 +78,8 @@ export class Timeline {
       h('div', { class: 'tb-sep' }),
       h('div', { class: 'tb-group' },
         b('split', 'Разрезать по курсору (S)', () => this.splitAction(), 'tb-split'),
-        b('trash', 'Удалить выделенное (Delete)', () => this.deleteAction(), 'tb-delete')),
+        b('trash', 'Удалить выделенное (Delete)', () => this.deleteAction(), 'tb-delete'),
+        this.magnetBtn),
       h('div', { class: 'tb-time', id: 'tb-time' }),
       h('div', { class: 'tb-spacer' }),
       h('div', { class: 'tb-group zoom' },
@@ -76,41 +88,52 @@ export class Timeline {
         b('plus', 'Увеличить', () => this.setZoom(this.pps * 1.4, null, true)),
         b('fit', 'Весь проект (Ctrl+0)', () => { this.autoFit = true; this.fit(true); })),
     );
+    this.updateMagnetBtn();
+  }
+
+  toggleMagnet() {
+    this.magnet = !this.magnet;
+    localStorage.setItem('ffm.magnet', this.magnet ? '1' : '0');
+    this.updateMagnetBtn();
+    toast(this.magnet ? 'Магнит включён: клипы липнут к краям соседей' : 'Магнит выключен', 'info', 1600);
+  }
+
+  updateMagnetBtn() {
+    this.magnetBtn.classList.toggle('on', this.magnet);
+    this.magnetBtn.title = this.magnet
+      ? 'Магнит включён — клипы прилипают к соседям, курсору и началу (Alt при перетаскивании — временно без магнита)'
+      : 'Магнит выключен — клипы ставятся куда угодно';
   }
 
   updateToolbar() {
     $('#tb-undo').disabled = !store.undoStack.length;
     $('#tb-redo').disabled = !store.redoStack.length;
-    $('#tb-delete').disabled = !store.selection;
+    $('#tb-delete').disabled = !store.selection || store.selection.kind === 'transition';
     $('#tb-split').disabled = !this.canSplit();
     this.zoomSlider.value = String(Math.round(1000 * Math.log(this.pps / MIN_PPS) / Math.log(MAX_PPS / MIN_PPS)));
   }
 
   canSplit() {
     const t = store.time;
-    if (store.selection) {
+    if (store.selection && store.selection.kind !== 'transition') {
       const f = store.findClip(store.selection.id);
-      if (f && f.kind === 'audio') return t > f.clip.start + MIN_CLIP && t < f.clip.start + f.clip.out - f.clip.in - MIN_CLIP;
+      if (f) return t > f.clip.start + MIN_CLIP && t < clipEnd(f.clip) - MIN_CLIP;
     }
     return store.videoLayout().some((s) => t > s.start + MIN_CLIP / 2 && t < s.end - MIN_CLIP / 2);
   }
 
   splitAction() {
     const t = store.time;
-    let id = null;
-    if (store.selection) {
-      const f = store.findClip(store.selection.id);
-      if (f && f.kind === 'audio' && t > f.clip.start && t < f.clip.start + f.clip.out - f.clip.in) id = f.clip.id;
-      if (f && f.kind === 'video') {
-        const seg = store.videoLayout().find((s) => s.clip.id === f.clip.id);
-        if (seg && t > seg.start && t < seg.end) id = f.clip.id;
-      }
-    }
-    if (!store.splitAt(t, id)) toast('Поставьте курсор внутрь клипа, чтобы разрезать', 'info', 2200);
+    const sel = store.selection && store.selection.kind !== 'transition' ? store.findClip(store.selection.id) : null;
+    if (sel && t > sel.clip.start && t < clipEnd(sel.clip)) { splitClip(sel.clip.id, t); return; }
+    if (!store.splitAt(t)) toast('Поставьте курсор внутрь клипа, чтобы разрезать', 'info', 2200);
   }
 
-  deleteAction() {
-    if (store.selection) store.deleteClip(store.selection.id);
+  deleteAction(ripple = false) {
+    const s = store.selection;
+    if (!s) return;
+    if (s.kind === 'transition') { store.setTransition(s.id, null); return; }
+    store.deleteClip(s.id, { ripple });
   }
 
   // ------------------------------------------------------------------------
@@ -150,7 +173,7 @@ export class Timeline {
     }
   }
 
-  // координата X внутри дорожки (с) по клиентскому X
+  // время (с) по клиентскому X
   xToTime(clientX) {
     const r = this.content.getBoundingClientRect();
     return Math.max(0, (clientX - r.left - HEAD_W) / this.pps);
@@ -182,7 +205,9 @@ export class Timeline {
     this.content.append(h('div', { class: 'tl-row video' }, vHead, vLane));
     const layout = store.videoLayout();
     if (!layout.length) vLane.append(h('div', { class: 'lane-hint' }, 'Перетащите сюда видео из «Ваши медиа»'));
+    if (!this.drag) for (const g of store.gaps('video')) vLane.append(this.gapEl(g, 'video'));
     for (const seg of layout) vLane.append(this.videoClipEl(seg));
+    if (!this.drag || this.drag.mode === 'fade') this.renderJunctions(vLane, layout);
 
     // Аудио
     store.project.audioTracks.forEach((t, i) => {
@@ -196,6 +221,8 @@ export class Timeline {
         h('span', { class: 'th-actions' }, muteBtn, store.project.audioTracks.length > 1 || t.clips.length ? delBtn : null));
       this.content.append(h('div', { class: 'tl-row audio', dataset: { track: t.id } }, head, lane));
       if (!t.clips.length && i === 0) lane.append(h('div', { class: 'lane-hint' }, 'Музыка и звук'));
+      // На аудиодорожках показываем только пустоты между клипами (музыка может начинаться не с нуля)
+      if (!this.drag) for (const g of store.gaps(t.id)) if (g[0] > ADJ) lane.append(this.gapEl(g, t.id));
       for (const c of t.clips) lane.append(this.audioClipEl(c, t));
     });
 
@@ -206,8 +233,7 @@ export class Timeline {
       h('div', { class: 'tl-lane newtrack-lane', dataset: { lane: 'newtrack' }, style: { width: `${laneW}px` } },
         h('span', { class: 'lane-hint left' }, 'Перетащите аудио сюда, чтобы создать новую дорожку'))));
 
-    this.content.append(this.playhead, this.marker);
-    if (this.ghost) this.content.append(this.ghost);
+    this.content.append(this.playhead, this.marker, this.snapLine);
     this.updatePlayhead();
     this.updateToolbar();
   }
@@ -234,17 +260,86 @@ export class Timeline {
     lane.append(frag);
   }
 
+  // Пустота на дорожке: при наведении — корзина «удалить пустоту»
+  gapEl([g0, g1], lane) {
+    const w = (g1 - g0) * this.pps;
+    const el = h('div', { class: 'tl-gap', dataset: { lane, from: String(g0) }, style: { left: `${g0 * this.pps}px`, width: `${w}px` } });
+    if (w >= 18) {
+      const btn = h('button', {
+        class: 'gap-del', title: `Удалить пустоту (${fmtTime(g1 - g0)}) — клипы правее сдвинутся влево`,
+        onclick: (e) => { e.stopPropagation(); store.closeGap(lane, (g0 + g1) / 2); },
+      });
+      btn.innerHTML = icon('trash', 15);
+      btn.addEventListener('pointerdown', (e) => e.stopPropagation());
+      el.append(btn);
+    }
+    return el;
+  }
+
+  // Стыки клипов, стоящих впритык: «+» (добавить переход) или значок перехода
+  renderJunctions(lane, layout) {
+    for (let i = 1; i < layout.length; i++) {
+      const a = layout[i - 1]; const b = layout[i];
+      if (Math.abs(a.end - b.start) > ADJ) continue;
+      const x = b.start * this.pps;
+      const tr = b.clip.transition;
+      const sel = store.selection && store.selection.kind === 'transition' && store.selection.id === b.clip.id;
+      if (tr) {
+        const w = tr.duration * this.pps;
+        lane.append(h('div', { class: `tr-zone${sel ? ' selected' : ''}`, style: { left: `${x - w / 2}px`, width: `${w}px` } }));
+      }
+      const btn = h('button', {
+        class: `junction${tr ? ' has' : ''}${sel ? ' selected' : ''}`,
+        dataset: { clip: b.clip.id },
+        title: tr ? `Переход: ${transitionById(tr.type).name}, ${String(tr.duration).replace('.', ',')} с — нажмите, чтобы изменить` : 'Добавить переход',
+        style: { left: `${x}px` },
+        onclick: (e) => { e.stopPropagation(); store.select({ kind: 'transition', id: b.clip.id }); store.emit('focus-inspector', 'transition'); },
+      });
+      btn.innerHTML = icon(tr ? 'transition' : 'plus', tr ? 15 : 16);
+      btn.addEventListener('pointerdown', (e) => e.stopPropagation());
+      lane.append(btn);
+    }
+  }
+
   clipBase(kind, c, left, width, extraClass = '') {
-    const sel = store.selection && store.selection.id === c.id;
-    const m = store.media(c.mediaId);
+    const sel = store.selection && store.selection.kind !== 'transition' && store.selection.id === c.id;
     const rt = store.runtime[c.mediaId] || {};
     const el = h('div', {
       class: `clip ${kind}${sel ? ' selected' : ''}${c.muted ? ' clip-muted' : ''}${rt.missing ? ' missing' : ''} ${extraClass}`,
       dataset: { id: c.id, kind },
       style: { left: `${left}px`, width: `${Math.max(2, width)}px` },
-      title: `${m ? m.name : '?'}\n${fmtTime(c.out - c.in)} (из файла ${fmtTime(c.in)} – ${fmtTime(c.out)})`,
+      title: `${store.clipName(c)}\n${fmtTime(c.out - c.in)} (из файла ${fmtTime(c.in)} – ${fmtTime(c.out)})\nПравая кнопка мыши — действия`,
     });
     return el;
+  }
+
+  // Общие украшения клипа: затухания, значки, «идёт обработка», ручки
+  decorate(el, c, width, sel) {
+    if (c.fadeIn > 0.001) el.append(h('div', { class: 'fade-zone in', style: { width: `${Math.min(width, c.fadeIn * this.pps)}px` } }));
+    if (c.fadeOut > 0.001) el.append(h('div', { class: 'fade-zone out', style: { width: `${Math.min(width, c.fadeOut * this.pps)}px` } }));
+    const busy = store.busy[c.id];
+    if (busy) {
+      el.append(h('div', { class: 'clip-busy' },
+        h('span', {}, `${busy.label}… ${Math.round((busy.progress || 0) * 100)}%`),
+        h('div', { class: 'bar', style: { width: `${Math.round((busy.progress || 0) * 100)}%` } })));
+    }
+    el.append(h('div', { class: 'handle l' }), h('div', { class: 'handle r' }));
+    if (sel && width > 40) {
+      el.append(
+        h('div', { class: 'fade-knob in', title: 'Потяните, чтобы сделать плавное появление', style: { left: `${Math.min(width - 10, c.fadeIn * this.pps)}px` } }),
+        h('div', { class: 'fade-knob out', title: 'Потяните, чтобы сделать плавное исчезание', style: { right: `${Math.min(width - 10, c.fadeOut * this.pps)}px` } }));
+    }
+  }
+
+  clipLabel(c, m, extra = null) {
+    const label = h('div', { class: 'clip-label' });
+    if (isReversed(c)) label.append(h('span', { class: 'ci fx', title: 'Задом наперёд', html: icon('reverse', 13) }));
+    if (isFreeze(c)) label.append(h('span', { class: 'ci fx', title: 'Стоп-кадр', html: icon('freeze', 13) }));
+    if (c.muted && m.hasAudio) label.append(h('span', { class: 'ci', html: icon('mute', 13) }));
+    else if (m.hasAudio && Math.abs(c.volume - 1) > 0.01) label.append(h('span', { class: 'ci vol' }, `${Math.round(c.volume * 100)}%`));
+    label.append(h('span', { class: 'cn' }, store.clipName(c)));
+    if (extra) label.append(extra);
+    return label;
   }
 
   videoClipEl(seg) {
@@ -254,6 +349,7 @@ export class Timeline {
     const left = seg.start * this.pps;
     const width = (seg.end - seg.start) * this.pps;
     const el = this.clipBase('video', c, left, width);
+    const sel = el.classList.contains('selected');
     const [vx0, vx1] = this.visibleRange();
 
     // Плёнка из миниатюр (только видимая часть)
@@ -278,13 +374,8 @@ export class Timeline {
       const wave = this.waveCanvas(c, rt.peaks, left, width, 18, c.muted ? 0 : c.volume, 'rgba(255,255,255,0.85)');
       if (wave) el.append(h('div', { class: 'clip-wavestrip' }, wave));
     }
-
-    const label = h('div', { class: 'clip-label' });
-    if (c.muted && m.hasAudio) label.append(h('span', { class: 'ci', html: icon('mute', 13) }));
-    else if (m.hasAudio && Math.abs(c.volume - 1) > 0.01) label.append(h('span', { class: 'ci vol' }, `${Math.round(c.volume * 100)}%`));
-    label.append(h('span', { class: 'cn' }, m.name || '?'));
-    label.append(h('span', { class: 'cd' }, fmtTime(c.out - c.in, { ms: false })));
-    el.append(label, h('div', { class: 'handle l' }), h('div', { class: 'handle r' }));
+    el.append(this.clipLabel(c, m, h('span', { class: 'cd' }, fmtTime(c.out - c.in, { ms: false }))));
+    this.decorate(el, c, width, sel);
     return el;
   }
 
@@ -296,11 +387,8 @@ export class Timeline {
     const el = this.clipBase('audio', c, left, width, track.muted ? 'track-muted' : '');
     const wave = this.waveCanvas(c, rt.peaks, left, width, AUDIO_H - 6, c.muted ? 0 : c.volume, 'rgba(210,255,240,0.9)');
     if (wave) el.append(wave);
-    const label = h('div', { class: 'clip-label' });
-    if (c.muted) label.append(h('span', { class: 'ci', html: icon('mute', 13) }));
-    else if (Math.abs(c.volume - 1) > 0.01) label.append(h('span', { class: 'ci vol' }, `${Math.round(c.volume * 100)}%`));
-    label.append(h('span', { class: 'cn' }, m.name || '?'));
-    el.append(label, h('div', { class: 'handle l' }), h('div', { class: 'handle r' }));
+    el.append(this.clipLabel(c, m));
+    this.decorate(el, c, width, el.classList.contains('selected'));
     return el;
   }
 
@@ -322,13 +410,19 @@ export class Timeline {
     const rate = peaks.rate; const data = peaks.data;
     const g = gain > 0 ? Math.min(1.6, Math.sqrt(gain)) : 0.6;
     const mid = height / 2;
+    const dur = c.out - c.in;
     for (let x = 0; x < w; x += 2) {
-      const t0 = c.in + (cx0 + x) / this.pps;
+      const lt = (cx0 + x) / this.pps;            // время от начала клипа
+      const t0 = c.in + lt;
       const t1 = c.in + (cx0 + x + 2) / this.pps;
       const i0 = Math.floor(t0 * rate); const i1 = Math.max(i0 + 1, Math.ceil(t1 * rate));
       let v = 0;
       for (let i = i0; i < i1 && i < data.length; i++) if (data[i] > v) v = data[i];
-      const hh = Math.max(0.5, Math.min(mid, v * mid * g));
+      // Затухания видны на волне
+      let fg = 1;
+      if (c.fadeIn > 0.001 && lt < c.fadeIn) fg = Math.min(fg, lt / c.fadeIn);
+      if (c.fadeOut > 0.001 && lt > dur - c.fadeOut) fg = Math.min(fg, (dur - lt) / c.fadeOut);
+      const hh = Math.max(0.5, Math.min(mid, v * mid * g * Math.max(0.08, fg)));
       ctx.fillRect(x, mid - hh, 1.4, hh * 2);
     }
     return cv;
@@ -352,33 +446,62 @@ export class Timeline {
   }
 
   // ------------------------------------------------------------------------
-  // Мышь
+  // Магнит
   // ------------------------------------------------------------------------
-  snapPoints(excludeId) {
+  // Точки притяжения: начало, курсор, края всех клипов (кроме перетаскиваемого)
+  snapPoints(excludeId, videoClips = store.project.videoClips) {
     const pts = [0, store.time];
-    for (const s of store.videoLayout()) pts.push(s.start, s.end);
+    for (const c of videoClips) if (c.id !== excludeId) pts.push(c.start, clipEnd(c));
     for (const t of store.project.audioTracks) {
-      for (const c of t.clips) if (c.id !== excludeId) pts.push(c.start, c.start + c.out - c.in);
+      for (const c of t.clips) if (c.id !== excludeId) pts.push(c.start, clipEnd(c));
     }
     return pts;
   }
 
-  snap(t, pts) {
+  snap(t, pts, ev) {
+    if (!this.magnet || (ev && ev.altKey)) return { t, snapped: false };
     const tol = SNAP_PX / this.pps;
     let best = t; let d = tol;
     for (const p of pts) { const dd = Math.abs(p - t); if (dd < d) { d = dd; best = p; } }
     return { t: best, snapped: best !== t };
   }
 
+  showSnap(t) {
+    if (t === null || t === undefined) { this.snapLine.style.display = 'none'; return; }
+    this.snapLine.style.display = 'block';
+    this.snapLine.style.left = `${HEAD_W + t * this.pps - 1}px`;
+  }
+
+  // ------------------------------------------------------------------------
+  // Мышь
+  // ------------------------------------------------------------------------
   onDblClick(e) {
     const clipEl = e.target.closest('.clip');
     if (clipEl) store.setTime(this.xToTime(e.clientX));
+  }
+
+  onContextMenu(e) {
+    e.preventDefault();
+    if (e.target.closest('.tl-head') || e.target.closest('.ruler-lane')) return;
+    const t = this.xToTime(e.clientX);
+    const clipEl = e.target.closest('.clip');
+    if (clipEl) {
+      const id = clipEl.dataset.id;
+      if (!store.selection || store.selection.id !== id) store.select({ kind: clipEl.dataset.kind, id });
+      openClipMenu(id, e.clientX, e.clientY, t);
+      return;
+    }
+    const laneEl = e.target.closest('[data-lane]');
+    if (!laneEl) return;
+    const lane = laneEl.dataset.lane === 'video' ? 'video' : laneEl.dataset.lane === 'audio' ? laneEl.dataset.track : null;
+    if (lane) openLaneMenu(lane, e.clientX, e.clientY, t);
   }
 
   onPointerDown(e) {
     if (e.button !== 0 || e.target.closest('.tl-head')) return;
     const clipEl = e.target.closest('.clip');
     const handle = e.target.closest('.handle');
+    const knob = e.target.closest('.fade-knob');
     e.preventDefault();
 
     if (!clipEl) {
@@ -392,70 +515,84 @@ export class Timeline {
     const kind = clipEl.dataset.kind;
     const f = store.findClip(id);
     if (!f) return;
-    if (!store.selection || store.selection.id !== id) store.select({ kind, id });
+    if (!store.selection || store.selection.id !== id || store.selection.kind === 'transition') store.select({ kind, id });
+    if (store.busy[id]) return; // клип обрабатывается — не двигаем
 
     const before = store.snapshot();
-    const orig = { ...f.clip };
+    const orig = clone(f.clip);
+    const origVideo = clone(store.project.videoClips);
     const x0 = e.clientX; const y0 = e.clientY;
-    const seg = kind === 'video' ? store.videoLayout().find((s) => s.clip.id === id) : null;
-    const media = store.media(f.clip.mediaId);
-    const pts = this.snapPoints(id);
+    const media = store.media(f.clip.mediaId) || { duration: orig.out };
+    const pts = this.snapPoints(id, origVideo);
     let moved = false;
-    let mode = handle ? (handle.classList.contains('l') ? 'trim-l' : 'trim-r') : 'move';
-    this.drag = { mode, id };
+    const mode = knob ? (knob.classList.contains('in') ? 'fade-in' : 'fade-out')
+      : handle ? (handle.classList.contains('l') ? 'trim-l' : 'trim-r') : 'move';
+    this.drag = { mode: mode.startsWith('fade') ? 'fade' : mode, id };
     document.body.classList.add(mode === 'move' ? 'is-moving' : 'is-trimming');
+
+    // Соседи видеоклипа (для ограничений обрезки)
+    const sorted = origVideo.slice().sort((a, b) => a.start - b.start);
+    const vi = sorted.findIndex((c) => c.id === id);
+    const prevEnd = kind === 'video' && vi > 0 ? clipEnd(sorted[vi - 1]) : 0;
+    const nextStart = kind === 'video' && vi >= 0 && vi < sorted.length - 1 ? sorted[vi + 1].start : Infinity;
 
     const onMove = (ev) => {
       const dx = ev.clientX - x0;
       if (!moved && Math.abs(dx) < DRAG_THRESHOLD && Math.abs(ev.clientY - y0) < DRAG_THRESHOLD) return;
       moved = true;
       const dt = dx / this.pps;
-      if (kind === 'video') {
-        if (mode === 'trim-l') {
-          const nin = clamp(orig.in + dt, 0, orig.out - MIN_CLIP);
-          store.live(() => { store.findClip(id).clip.in = nin; });
-          store.setTime(seg.start);
-        } else if (mode === 'trim-r') {
-          let nout = clamp(orig.out + dt, orig.in + MIN_CLIP, media.duration);
-          const sn = this.snap(seg.start + (nout - orig.in), pts.filter((p) => p !== seg.end));
-          if (sn.snapped) nout = clamp(orig.in + (sn.t - seg.start), orig.in + MIN_CLIP, media.duration);
-          store.live(() => { store.findClip(id).clip.out = nout; });
-          store.setTime(Math.max(seg.start, seg.start + (nout - orig.in) - 0.001));
-        } else {
-          this.moveVideoGhost(ev, id, clipEl);
-        }
+      let snapAt = null;
+      const len = orig.out - orig.in;
+
+      if (mode === 'fade-in' || mode === 'fade-out') {
+        const v = clamp((mode === 'fade-in' ? orig.fadeIn : orig.fadeOut) + (mode === 'fade-in' ? dt : -dt), 0, len);
+        store.live(() => { const c = store.findClip(id).clip; if (mode === 'fade-in') c.fadeIn = v; else c.fadeOut = v; });
+      } else if (mode === 'trim-l') {
+        let nin = clamp(orig.in + dt, 0, orig.out - MIN_CLIP);
+        let nstart = orig.start + (nin - orig.in);
+        const sn = this.snap(nstart, pts, ev);
+        if (sn.snapped) { nin += sn.t - nstart; nstart = sn.t; snapAt = sn.t; }
+        // Не залезаем на предыдущий клип / за ноль / за начало файла
+        const lo = Math.max(kind === 'video' ? prevEnd : 0, orig.start - orig.in);
+        if (nstart < lo) { nin += lo - nstart; nstart = lo; }
+        nin = clamp(nin, 0, orig.out - MIN_CLIP); nstart = orig.start + (nin - orig.in);
+        store.live(() => { const c = store.findClip(id).clip; c.in = nin; c.start = nstart; });
+        if (kind === 'video') store.setTime(nstart);
+      } else if (mode === 'trim-r') {
+        let nout = clamp(orig.out + dt, orig.in + MIN_CLIP, media.duration);
+        const sn = this.snap(orig.start + (nout - orig.in), pts, ev);
+        if (sn.snapped) { nout = clamp(orig.in + (sn.t - orig.start), orig.in + MIN_CLIP, media.duration); snapAt = sn.t; }
+        if (kind === 'video') nout = Math.min(nout, orig.in + (nextStart - orig.start));
+        store.live(() => { store.findClip(id).clip.out = nout; });
+        if (kind === 'video') store.setTime(Math.max(orig.start, orig.start + (nout - orig.in) - 0.001));
+      } else if (kind === 'video') {
+        // Перемещение видео: каждый раз от исходного состояния, чтобы раздвинутые соседи возвращались на место
+        let nstart = Math.max(0, orig.start + dt);
+        const s1 = this.snap(nstart, pts, ev); const s2 = this.snap(nstart + len, pts, ev);
+        if (s1.snapped && (!s2.snapped || Math.abs(s1.t - nstart) <= Math.abs(s2.t - nstart - len))) { nstart = s1.t; snapAt = s1.t; } else if (s2.snapped) { nstart = s2.t - len; snapAt = s2.t; }
+        store.live((p) => {
+          p.videoClips = clone(origVideo);
+          const c = p.videoClips.find((x) => x.id === id);
+          placeVideo(p, c, nstart, 'auto');
+        });
       } else {
-        if (mode === 'trim-l') {
-          let nin = clamp(orig.in + dt, 0, orig.out - MIN_CLIP);
-          let nstart = orig.start + (nin - orig.in);
-          if (nstart < 0) { nin -= nstart; nstart = 0; }
-          const sn = this.snap(nstart, pts);
-          if (sn.snapped) { const d = sn.t - nstart; if (orig.in + (nstart + d - orig.start) >= 0 && nin + d <= orig.out - MIN_CLIP) { nin += d; nstart += d; } }
-          store.live(() => { const c = store.findClip(id).clip; c.in = nin; c.start = nstart; });
-        } else if (mode === 'trim-r') {
-          let nout = clamp(orig.out + dt, orig.in + MIN_CLIP, media.duration);
-          const sn = this.snap(orig.start + nout - orig.in, pts);
-          if (sn.snapped) nout = clamp(sn.t - orig.start + orig.in, orig.in + MIN_CLIP, media.duration);
-          store.live(() => { store.findClip(id).clip.out = nout; });
-        } else {
-          let nstart = Math.max(0, orig.start + dt);
-          const d = orig.out - orig.in;
-          const s1 = this.snap(nstart, pts); const s2 = this.snap(nstart + d, pts);
-          if (s1.snapped) nstart = s1.t; else if (s2.snapped) nstart = s2.t - d;
-          nstart = Math.max(0, nstart);
-          const target = this.trackAt(ev.clientY);
-          this.highlightNewTrack(target === 'new');
-          store.live(() => {
-            const cur = store.findClip(id);
-            cur.clip.start = nstart;
-            if (target && target !== 'new' && target !== cur.track.id) {
-              cur.track.clips = cur.track.clips.filter((x) => x.id !== id);
-              store.project.audioTracks.find((t) => t.id === target).clips.push(cur.clip);
-            }
-          });
-          this.dropTarget = target;
-        }
+        let nstart = Math.max(0, orig.start + dt);
+        const s1 = this.snap(nstart, pts, ev); const s2 = this.snap(nstart + len, pts, ev);
+        if (s1.snapped) { nstart = s1.t; snapAt = s1.t; } else if (s2.snapped) { nstart = s2.t - len; snapAt = s2.t; }
+        nstart = Math.max(0, nstart);
+        const target = this.trackAt(ev.clientY);
+        this.highlightNewTrack(target === 'new');
+        store.live(() => {
+          const cur = store.findClip(id);
+          cur.clip.start = nstart;
+          if (target && target !== 'new' && target !== cur.track.id) {
+            cur.track.clips = cur.track.clips.filter((x) => x.id !== id);
+            store.project.audioTracks.find((t) => t.id === target).clips.push(cur.clip);
+          }
+        });
+        this.dropTarget = target;
       }
+      this.showSnap(snapAt);
       this.autoScroll(ev.clientX);
     };
 
@@ -464,20 +601,12 @@ export class Timeline {
       window.removeEventListener('pointerup', onUp);
       document.body.classList.remove('is-moving', 'is-trimming');
       this.drag = null;
+      this.showSnap(null);
       this.highlightNewTrack(false);
       if (!moved) {
         // Простой клик по клипу — переместить курсор
         store.setTime(this.xToTime(ev.clientX));
         this.render();
-        return;
-      }
-      if (kind === 'video' && mode === 'move') {
-        const idx = this.insertIndex;
-        this.clearGhost();
-        const from = store.project.videoClips.findIndex((c) => c.id === id);
-        let to = idx > from ? idx - 1 : idx;
-        if (idx !== undefined && to !== from) store.moveVideoClip(id, to);
-        else this.render();
         return;
       }
       if (kind === 'audio' && mode === 'move' && this.dropTarget === 'new') {
@@ -489,13 +618,13 @@ export class Timeline {
       }
       this.dropTarget = null;
       store.commitFrom(before);
+      this.render();
     };
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
   }
 
   startScrub(e) {
-    const was = store.playing;
     const go = (ev) => store.setTime(this.xToTime(ev.clientX));
     go(e);
     this.drag = { mode: 'scrub' };
@@ -504,10 +633,10 @@ export class Timeline {
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
       this.drag = null;
+      this.render();
     };
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
-    return was;
   }
 
   autoScroll(clientX) {
@@ -529,19 +658,6 @@ export class Timeline {
     if (row) row.classList.toggle('drop-hot', on);
   }
 
-  // Индекс вставки на видеодорожке по X
-  videoInsertIndex(clientX, excludeId = null) {
-    const t = this.xToTime(clientX);
-    const layout = store.videoLayout();
-    let idx = 0;
-    for (const s of layout) {
-      if (s.clip.id === excludeId) { if (t > (s.start + s.end) / 2) idx = s.index + 1; continue; }
-      if (t > (s.start + s.end) / 2) idx = s.index + 1;
-    }
-    const xAt = idx < layout.length ? layout[idx].start : (layout.length ? layout[layout.length - 1].end : 0);
-    return { idx, x: xAt * this.pps };
-  }
-
   showMarker(x, lane = 'video') {
     const row = this.content.querySelector(lane === 'video' ? '.tl-row.video' : `.tl-row.audio[data-track="${lane}"]`)
       || this.content.querySelector('.tl-row.video');
@@ -552,28 +668,10 @@ export class Timeline {
   }
   hideMarker() { this.marker.style.display = 'none'; }
 
-  moveVideoGhost(ev, id, clipEl) {
-    if (!this.ghost) {
-      const w = Math.min(clipEl.offsetWidth, 220);
-      this.ghost = h('div', { class: 'clip-ghost' }, clipEl.querySelector('.clip-label')?.cloneNode(true) || '');
-      this.ghost.style.width = `${w}px`;
-      this.ghost.style.height = `${VIDEO_H - 8}px`;
-      this.content.append(this.ghost);
-      const orig = this.content.querySelector(`.clip[data-id="${id}"]`);
-      if (orig) orig.classList.add('drag-src');
-    }
-    const r = this.content.getBoundingClientRect();
-    const row = this.content.querySelector('.tl-row.video');
-    this.ghost.style.transform = `translate(${ev.clientX - r.left - 40}px, ${row.offsetTop + 4}px)`;
-    const { idx, x } = this.videoInsertIndex(ev.clientX, id);
-    this.insertIndex = idx;
-    this.showMarker(x);
-  }
-
-  clearGhost() {
-    if (this.ghost) { this.ghost.remove(); this.ghost = null; }
-    this.insertIndex = undefined;
-    this.hideMarker();
+  // Время вставки на видеодорожке: под курсором мыши, с магнитом к краям клипов
+  dropTime(clientX) {
+    const t = this.xToTime(clientX);
+    return this.snap(t, this.snapPoints(null)).t;
   }
 
   // ------------------------------------------------------------------------
@@ -598,8 +696,7 @@ export class Timeline {
       if (!tg) { this.hideMarker(); return; }
       const wantsVideo = tg.kind === 'video' && (!m || m.hasVideo);
       if (wantsVideo) {
-        const { x } = this.videoInsertIndex(e.clientX);
-        this.showMarker(x, 'video');
+        this.showMarker(this.dropTime(e.clientX) * this.pps, 'video');
       } else if (tg.kind === 'audio') {
         this.showMarker(this.xToTime(e.clientX) * this.pps, tg.track);
       } else {
@@ -616,7 +713,7 @@ export class Timeline {
       this.highlightNewTrack(false);
       const tg = target(e) || { kind: 'video' };
       const t = this.xToTime(e.clientX);
-      const ins = this.videoInsertIndex(e.clientX).idx;
+      let vt = this.dropTime(e.clientX);
       let ids = [];
       const mid = e.dataTransfer.getData('application/x-ffm-media');
       if (mid) ids = [mid];
@@ -624,16 +721,17 @@ export class Timeline {
         const paths = Array.from(e.dataTransfer.files).map((f) => window.api.pathForFile(f)).filter(Boolean);
         ids = await importPaths(paths);
       }
-      let vi = ins; let at = t;
+      let at = t;
       for (const id of ids) {
         const m = store.media(id);
         if (!m) continue;
         if (tg.kind === 'video' && m.hasVideo) {
-          store.insertVideoClip(id, vi++);
+          const c = store.insertVideoClip(id, vt, 'auto');
+          if (c) vt = clipEnd(store.findClip(c.id).clip);
         } else if (m.hasAudio) {
           const track = tg.kind === 'audio' ? tg.track : tg.kind === 'newtrack' ? 'new' : null;
           const c = store.addAudioClip(id, tg.kind === 'video' ? store.time : at, track);
-          if (c) at = c.start + c.out - c.in;
+          if (c) at = clipEnd(c);
         } else {
           toast(`${m.name}: в файле нет звука — на аудиодорожку не добавить`, 'error');
         }

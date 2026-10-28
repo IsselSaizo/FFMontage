@@ -43,7 +43,7 @@
   preview.play();
   await sleep(2500);
   const t1 = store.time;
-  const act = preview.active;
+  const act = preview.master && preview.master.el;
   log.push(`playback: ${t0.toFixed(2)} -> ${t1.toFixed(2)}, active video ${act ? act.videoWidth + 'x' + act.videoHeight : 'none'}, readyState ${act && act.readyState}, url ${act && decodeURIComponent(act.dataset.url).split('\\').pop()}`);
   const musicEls = [...preview.audio.values()].map((r) => `${r.el.paused ? 'paused' : 'playing'}@${r.el.currentTime.toFixed(2)}`);
   log.push(`music: ${musicEls.join(', ')}`);

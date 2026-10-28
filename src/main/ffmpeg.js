@@ -269,6 +269,144 @@ function proxy(info, onProgress, encoders) {
 }
 
 // ---------------------------------------------------------------------------
+// Файлы-заготовки для эффектов: реверс фрагмента и стоп-кадр.
+// Делаются один раз в кэш в высоком качестве (H.264, играет в окне), экспорт берёт их как обычные клипы.
+// ---------------------------------------------------------------------------
+function fxVideoArgs(encoders, fps) {
+  const gop = String(Math.max(1, Math.round(fps || 30)));
+  if (encoders && encoders.h264_nvenc) {
+    return ['-c:v', 'h264_nvenc', '-preset', 'p4', '-rc', 'constqp', '-qp', '16', '-profile:v', 'high', '-g', gop, '-pix_fmt', 'yuv420p'];
+  }
+  return ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '14', '-profile:v', 'high', '-g', gop, '-pix_fmt', 'yuv420p'];
+}
+
+const n3 = (x) => Number(x).toFixed(3);
+
+// Реверс фрагмента [a, b] исходного файла. Видео разворачивается кусками по нескольку секунд
+// (фильтр reverse держит весь кусок в памяти), куски склеиваются в обратном порядке, звук — areverse целиком.
+function reverse(info, a, b, onProgress, encoders) {
+  a = Math.max(0, a); b = Math.min(info.duration || b, b);
+  const key = `reverse:${info.key}:${n3(a)}:${n3(b)}`;
+  return once(key, async () => {
+    const dir = path.join(mediaCacheDir(info), 'fx');
+    fs.mkdirSync(dir, { recursive: true });
+    const base = `reverse_${n3(a)}_${n3(b)}`.replace(/\./g, '_');
+    const file = path.join(dir, base + (info.hasVideo ? '.mp4' : '.flac'));
+    if (fs.existsSync(file)) return file;
+    const { ffmpeg } = findBinaries();
+    const dur = b - a;
+    const common = ['-hide_banner', '-loglevel', 'error', '-y', '-nostdin'];
+    const work = path.join(dir, `${base}_work`);
+    fs.rmSync(work, { recursive: true, force: true });
+    fs.mkdirSync(work, { recursive: true });
+    try {
+      if (!info.hasVideo) {
+        await run(ffmpeg, [...common, '-ss', n3(a), '-t', n3(dur), '-i', info.path, '-vn', '-sn', '-af', 'areverse', '-c:a', 'flac', path.join(work, 'out.flac')]);
+        onProgress && onProgress(1);
+        fs.renameSync(path.join(work, 'out.flac'), file);
+        return file;
+      }
+      // Длина куска: чтобы в памяти было не больше ~1,2 ГБ кадров
+      const bytesPerSec = Math.max(1, (info.width || 1920) * (info.height || 1080) * 3 * (info.fps || 30));
+      const chunk = Math.max(0.5, Math.min(20, 1.2e9 / bytesPerSec));
+      const n = Math.max(1, Math.ceil(dur / chunk - 1e-6));
+      const parts = [];
+      const steps = n + (info.hasAudio ? 2 : 1);
+      for (let k = 0; k < n; k++) {
+        const i = n - 1 - k;                // с конца фрагмента
+        const ss = a + i * chunk;
+        const d = Math.min(chunk, b - ss);
+        const out = path.join(work, `part_${String(k).padStart(4, '0')}.mp4`);
+        await run(ffmpeg, [...common, '-ss', n3(ss), '-t', n3(d), '-i', info.path, '-an', '-sn', '-dn',
+          '-vf', 'reverse', ...fxVideoArgs(encoders, info.fps), out]);
+        parts.push(out);
+        onProgress && onProgress((k + 1) / steps);
+      }
+      const list = path.join(work, 'list.txt');
+      fs.writeFileSync(list, parts.map((p) => `file '${p.replace(/\\/g, '/').replace(/'/g, "'\\''")}'`).join('\n'));
+      const args = [...common, '-f', 'concat', '-safe', '0', '-i', list];
+      if (info.hasAudio) {
+        const wav = path.join(work, 'audio.wav');
+        await run(ffmpeg, [...common, '-ss', n3(a), '-t', n3(dur), '-i', info.path, '-vn', '-sn', '-af', 'areverse', '-c:a', 'pcm_s16le', wav]);
+        onProgress && onProgress((n + 1) / steps);
+        args.push('-i', wav, '-map', '0:v:0', '-map', '1:a:0', '-c:a', 'aac', '-b:a', '256k');
+      }
+      const tmp = path.join(work, 'out.mp4');
+      args.push('-c:v', 'copy', '-t', n3(dur), '-movflags', '+faststart', tmp);
+      await run(ffmpeg, args);
+      fs.renameSync(tmp, file);
+      onProgress && onProgress(1);
+      return file;
+    } finally {
+      fs.rm(work, { recursive: true, force: true }, () => {});
+    }
+  });
+}
+
+// Стоп-кадр: кадр исходника в момент at, растянутый в ролик длиной dur секунд (без звука)
+const FREEZE_FILE_SEC = 20;
+function freeze(info, at, encoders) {
+  at = Math.max(0, Math.min(at, (info.duration || at)));
+  const key = `freeze:${info.key}:${n3(at)}`;
+  return once(key, async () => {
+    const dir = path.join(mediaCacheDir(info), 'fx');
+    fs.mkdirSync(dir, { recursive: true });
+    const base = `freeze${FREEZE_FILE_SEC}_${n3(at)}`.replace(/\./g, '_');
+    const file = path.join(dir, `${base}.mp4`);
+    if (fs.existsSync(file)) return file;
+    const { ffmpeg } = findBinaries();
+    const png = path.join(dir, `${base}.png`);
+    const common = ['-hide_banner', '-loglevel', 'error', '-y', '-nostdin'];
+    // У самого конца файла кадра может не оказаться — отступаем назад
+    for (const t of [at, at - 0.05, at - 0.25, at - 1]) {
+      if (t < 0) continue;
+      await run(ffmpeg, [...common, '-ss', n3(t), '-i', info.path, '-frames:v', '1', '-an', '-sn', png]).catch(() => {});
+      if (fs.existsSync(png) && fs.statSync(png).size > 0) break;
+    }
+    if (!fs.existsSync(png)) throw new Error('Не удалось взять кадр из файла');
+    // Кадр один и тот же, поэтому 10 кадров/с хватает: при экспорте FFmpeg сам доведёт частоту до нужной
+    const fps = 10;
+    const tmp = path.join(dir, `${base}.part.mp4`);
+    await run(ffmpeg, [...common, '-loop', '1', '-framerate', String(fps), '-i', png, '-t', String(FREEZE_FILE_SEC),
+      '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p', ...fxVideoArgs(encoders, fps), '-movflags', '+faststart', tmp]);
+    fs.renameSync(tmp, file);
+    fs.rm(png, { force: true }, () => {});
+    return file;
+  });
+}
+
+// Один кадр в JPEG (для ИИ-ассистента: «посмотреть» на видео)
+async function frameJpeg(file, t, width = 640) {
+  const { ffmpeg } = findBinaries();
+  const w = Math.max(64, Math.min(1920, Math.round(width / 2) * 2));
+  for (const tt of [t, t - 0.1, t - 0.5]) {
+    if (tt < 0) continue;
+    const { stdout } = await run(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-nostdin', '-ss', n3(tt), '-i', file,
+      '-frames:v', '1', '-an', '-sn', '-vf', `scale=${w}:-2`, '-q:v', '4', '-f', 'image2pipe', '-c:v', 'mjpeg', 'pipe:1'], { binaryStdout: true });
+    if (stdout && stdout.length) return stdout;
+  }
+  throw new Error('Не удалось получить кадр');
+}
+
+// Поиск тишины: [{ start, end }] в секундах файла
+async function silence(file, thresholdDb = -35, minDur = 0.5) {
+  const { ffmpeg } = findBinaries();
+  const { stderr } = await run(ffmpeg, ['-hide_banner', '-nostdin', '-i', file, '-vn', '-sn',
+    '-af', `silencedetect=noise=${Number(thresholdDb)}dB:d=${Number(minDur)}`, '-f', 'null', '-']);
+  const out = [];
+  let cur = null;
+  for (const line of stderr.split(/\r?\n/)) {
+    let m = /silence_start:\s*(-?[\d.]+)/.exec(line);
+    if (m) { cur = { start: Math.max(0, Number(m[1])) }; continue; }
+    m = /silence_end:\s*([\d.]+)/.exec(line);
+    if (m && cur) { cur.end = Number(m[1]); out.push(cur); cur = null; }
+  }
+  if (cur) cur.end = null; // тишина до конца файла
+  if (cur) out.push(cur);
+  return out;
+}
+
+// ---------------------------------------------------------------------------
 // Какие кодировщики реально работают (NVENC может быть в сборке, но без драйвера)
 // ---------------------------------------------------------------------------
 const encodersCache = new Map();
@@ -324,5 +462,5 @@ function resetBinaries() { BIN = null; }
 
 module.exports = {
   findBinaries, searchBinaries, resetBinaries, checkDir, run, probe, thumbs, peaks, proxy,
-  detectEncoders, version, versionInfo, mediaCacheDir,
+  detectEncoders, version, versionInfo, mediaCacheDir, reverse, freeze, frameJpeg, silence, FREEZE_FILE_SEC,
 };

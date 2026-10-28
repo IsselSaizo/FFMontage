@@ -1,6 +1,7 @@
 // Импорт файлов, подготовка миниатюр/волны/прокси и панель «Ваши медиа».
 import { store } from './store.js';
 import { h, $, fmtTime, toast, iconEl, confirmDialog, fmtBytes } from './util.js';
+import { rebuildDerived } from './fx.js';
 
 const api = window.api;
 
@@ -13,6 +14,7 @@ export function playUrl(mediaId) {
 }
 
 // Фоновая подготовка: миниатюры, волна, прокси
+export function prepareMedia(mediaId) { return prepare(mediaId); }
 async function prepare(mediaId) {
   const m = store.media(mediaId);
   if (!m) return;
@@ -68,15 +70,35 @@ export async function pickAndImport() {
 // При открытии проекта: перепроверить файлы и подготовить кэш
 export async function restoreMedia() {
   store.runtime = {};
-  const list = Object.values(store.project.media);
-  await Promise.all(list.map(async (m) => {
+  const all = Object.values(store.project.media);
+  const keep = (m, info) => Object.assign(m, info, { id: m.id, hidden: m.hidden, derived: m.derived });
+  // Сначала исходные файлы
+  await Promise.all(all.filter((m) => !m.derived).map(async (m) => {
     try {
       const info = await api.probe(m.path);
       // Файл мог измениться — обновляем сведения, но сохраняем id
-      Object.assign(m, info, { id: m.id });
+      keep(m, info);
       prepare(m.id);
     } catch {
       store.setRuntime(m.id, { missing: true, status: 'missing' });
+    }
+  }));
+  // Потом сделанные программой (реверс, стоп-кадр): если кэш очистили — пересоздаём
+  await Promise.all(all.filter((m) => m.derived).map(async (m) => {
+    try {
+      keep(m, await api.probe(m.path));
+      prepare(m.id);
+    } catch {
+      store.setRuntime(m.id, { status: 'rebuild' });
+      try {
+        const info = await rebuildDerived(m);
+        keep(m, info);
+        store.setRuntime(m.id, { status: 'ready', missing: false });
+        prepare(m.id);
+      } catch (e) {
+        store.setRuntime(m.id, { missing: true, status: 'missing' });
+        console.warn('rebuild derived', e);
+      }
     }
   }));
   store.emit('project');
@@ -103,7 +125,7 @@ export function initMediaPanel({ addToTimeline }) {
 function renderGrid() {
   const grid = $('#media-grid');
   if (!grid) return;
-  const items = Object.values(store.project.media);
+  const items = Object.values(store.project.media).filter((m) => !m.hidden);
   grid.innerHTML = '';
   if (!items.length) {
     grid.append(h('div', { class: 'media-empty' },

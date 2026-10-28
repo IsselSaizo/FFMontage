@@ -5,7 +5,8 @@ const path = require('path');
 const fs = require('fs');
 
 const APP_DIR = path.resolve(__dirname, '..', '..');
-const CONFIG_FILE = path.join(APP_DIR, 'config.json');
+// FFM_CONFIG — другой файл настроек (автотесты запускают программу с отдельным кэшем, не трогая ваш проект)
+const CONFIG_FILE = process.env.FFM_CONFIG ? path.resolve(process.env.FFM_CONFIG) : path.join(APP_DIR, 'config.json');
 
 // Объект общий для всех модулей: поля заполняются applyConfig() / applyFirstRun()
 const PATHS = {

@@ -102,6 +102,50 @@ export function confirmDialog(title, text, okText = 'OK', cancelText = 'Отме
   });
 }
 
+// Модальный ввод одного значения. Возвращает строку или null (отмена).
+export function promptDialog(title, label, value = '', { okText = 'Готово', hint = '', type = 'text', validate = null } = {}) {
+  return new Promise((resolve) => {
+    const input = h('input', { class: 'input', type, value: String(value), spellcheck: 'false' });
+    const err = h('p', { class: 'setup-error' });
+    const close = (v) => { overlay.remove(); resolve(v); };
+    const ok = () => {
+      const v = input.value.trim();
+      const e = validate ? validate(v) : null;
+      if (e) { err.textContent = e; input.focus(); return; }
+      close(v);
+    };
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); ok(); }
+      if (e.key === 'Escape') { e.preventDefault(); close(null); }
+      e.stopPropagation();
+    });
+    const overlay = h('div', { class: 'modal-overlay' },
+      h('div', { class: 'modal small' },
+        h('div', { class: 'modal-head' }, h('h2', {}, title)),
+        h('div', { class: 'modal-body prompt' }, h('label', { class: 'muted' }, label), input, hint ? h('p', { class: 'muted small' }, hint) : null, err),
+        h('div', { class: 'modal-foot' },
+          h('button', { class: 'btn ghost', onclick: () => close(null) }, 'Отмена'),
+          h('button', { class: 'btn primary', onclick: ok }, okText))));
+    overlay.addEventListener('mousedown', (e) => { if (e.target === overlay) close(null); });
+    document.body.append(overlay);
+    input.focus();
+    input.select();
+  });
+}
+
+// Разбор длительности: «5», «2,5», «1:30», «0:02.5»
+export function parseDuration(s) {
+  const t = String(s || '').trim().replace(',', '.');
+  if (!t) return NaN;
+  if (t.includes(':')) {
+    const parts = t.split(':').map(Number);
+    if (parts.some((x) => !isFinite(x) || x < 0)) return NaN;
+    return parts.reduce((acc, x) => acc * 60 + x, 0);
+  }
+  const v = Number(t);
+  return isFinite(v) && v >= 0 ? v : NaN;
+}
+
 // ---------------------------------------------------------------------------
 // Иконки (простые SVG в стиле Fluent)
 // ---------------------------------------------------------------------------
@@ -134,6 +178,19 @@ const P = {
   warning: '<path d="M12 4l9 16H3z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M12 10v4.5M12 17v.3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
   logo: '<rect x="2" y="2" width="20" height="20" rx="6" fill="url(#lg)"/><path d="M9.5 7.8v8.4l7-4.2z" fill="#fff"/><defs><linearGradient id="lg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#9b7bff"/><stop offset="1" stop-color="#5b3df5"/></linearGradient></defs>',
   export: '<path d="M12 4v11M7.5 8.5L12 4l4.5 4.5" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/><path d="M5 14v4.5A1.5 1.5 0 0 0 6.5 20h11a1.5 1.5 0 0 0 1.5-1.5V14" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>',
+  duplicate: '<rect x="8" y="8" width="12" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M16 8V5.5A1.5 1.5 0 0 0 14.5 4h-9A1.5 1.5 0 0 0 4 5.5v9A1.5 1.5 0 0 0 5.5 16H8" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M14 11v6M11 14h6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>',
+  copy: '<rect x="8" y="8" width="12" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M16 8V5.5A1.5 1.5 0 0 0 14.5 4h-9A1.5 1.5 0 0 0 4 5.5v9A1.5 1.5 0 0 0 5.5 16H8" fill="none" stroke="currentColor" stroke-width="1.7"/>',
+  paste: '<rect x="5" y="5" width="14" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="1.7"/><rect x="9" y="3" width="6" height="4" rx="1.2" fill="none" stroke="currentColor" stroke-width="1.6"/>',
+  reverse: '<path d="M4 9h12.5a3.5 3.5 0 0 1 0 7H13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M8 5L4 9l4 4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 19h6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>',
+  freeze: '<rect x="3" y="6" width="18" height="13" rx="2" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M9 3.5h6M12 9.5v6M9.4 11l5.2 3M14.6 11l-5.2 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>',
+  clock: '<circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M12 7.5V12l3 2" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>',
+  rename: '<path d="M4 20h4L19 9a2.1 2.1 0 0 0-3-3L5 17z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M14 8l2.5 2.5" stroke="currentColor" stroke-width="1.7"/>',
+  more: '<circle cx="6" cy="12" r="1.6" fill="currentColor"/><circle cx="12" cy="12" r="1.6" fill="currentColor"/><circle cx="18" cy="12" r="1.6" fill="currentColor"/>',
+  transition: '<path d="M4 5l8 7-8 7zM20 5l-8 7 8 7z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>',
+  fade: '<path d="M3 19L10 6h4l7 13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M3 19h18" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>',
+  magnet: '<path d="M6 4v8a6 6 0 0 0 12 0V4h-4v8a2 2 0 0 1-4 0V4z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M6 8h4M14 8h4" stroke="currentColor" stroke-width="1.7"/>',
+  ai: '<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M18.5 15.5l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z" fill="currentColor"/>',
+  gapclose: '<path d="M4 6v12M20 6v12M8 12h8M10.5 9.5L8 12l2.5 2.5M13.5 9.5L16 12l-2.5 2.5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>',
 };
 export function icon(name, size = 20) {
   return `<svg class="ic" width="${size}" height="${size}" viewBox="0 0 24 24" aria-hidden="true">${P[name] || ''}</svg>`;

@@ -1,13 +1,14 @@
 {
   "name": "ffmontage",
   "productName": "FF Montage",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Видеоредактор в стиле Clipchamp с FFmpeg под капотом",
   "main": "src/main/main.js",
   "private": true,
   "scripts": {
     "start": "electron .",
-    "test:engine": "node tests/engine-test.js"
+    "test:engine": "node tests/engine-test.js",
+    "test:mcp": "node tests/mcp-test.js"
   },
   "devDependencies": {
     "electron": "^45.0.0"

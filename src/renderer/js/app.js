@@ -6,6 +6,12 @@ import { Preview, initTransport } from './preview.js';
 import { Timeline } from './timeline.js';
 import { initInspector } from './inspector.js';
 import { openExport } from './exportDialog.js';
+import { copyClip, pasteClip, reverseClip, freezeFrame } from './actions.js';
+import { closeMenu, menuOpen } from './contextMenu.js';
+
+// Мост для ИИ-ассистента грузим отдельно: если с ним что-то не так, редактор всё равно запустится
+const mcpReady = import('./mcpBridge.js').catch((e) => { console.error('mcpBridge', e); return null; });
+const showMcpDialog = async () => { const m = await mcpReady; if (m) m.showMcpDialog(); else toast('Модуль ИИ-ассистента не загрузился', 'error'); };
 
 const api = window.api;
 let preview; let timeline; let transport;
@@ -33,6 +39,7 @@ function initTopbar() {
     item('Импорт медиа…', 'Ctrl+I', () => pickAndImport()),
     item('Открыть папку экспорта', '', async () => api.openPath((await api.info()).outputDir)),
     item('Настройки папок…', '', () => api.openSettings()),
+    item('ИИ-ассистент (MCP)…', '', () => showMcpDialog()),
     h('div', { class: 'dd-sep' }),
     item('О программе', '', about));
   function item(label, key, fn) {
@@ -138,6 +145,7 @@ function initKeys() {
     const tag = (e.target.tagName || '').toLowerCase();
     const typing = (tag === 'input' && !['range', 'checkbox', 'button'].includes(e.target.type)) || tag === 'textarea' || tag === 'select';
     if (document.querySelector('.modal-overlay')) return;
+    if (menuOpen()) { if (e.key !== 'Escape' && !e.key.startsWith('Arrow')) closeMenu(); else return; }
     const ctrl = e.ctrlKey || e.metaKey;
     const k = e.key.toLowerCase();
     const code = e.code;
@@ -152,7 +160,10 @@ function initKeys() {
 
     if (ctrl && code === 'KeyZ' && !e.shiftKey) { e.preventDefault(); store.undo(); return; }
     if (ctrl && (code === 'KeyY' || (code === 'KeyZ' && e.shiftKey))) { e.preventDefault(); store.redo(); return; }
-    if (ctrl && code === 'KeyD') { e.preventDefault(); if (store.selection) store.duplicateClip(store.selection.id); return; }
+    const clipSel = store.selection && store.selection.kind !== 'transition' ? store.selection.id : null;
+    if (ctrl && code === 'KeyD') { e.preventDefault(); if (clipSel) store.duplicateClip(clipSel); return; }
+    if (ctrl && code === 'KeyC') { e.preventDefault(); if (clipSel) copyClip(clipSel); return; }
+    if (ctrl && code === 'KeyV') { e.preventDefault(); pasteClip(store.time); return; }
     if (ctrl && (code === 'Digit0' || code === 'Numpad0')) { e.preventDefault(); timeline.autoFit = true; timeline.fit(); return; }
     if (ctrl && (k === '=' || k === '+' || code === 'NumpadAdd')) { e.preventDefault(); timeline.setZoom(timeline.pps * 1.4, null, true); return; }
     if (ctrl && (k === '-' || code === 'NumpadSubtract')) { e.preventDefault(); timeline.setZoom(timeline.pps / 1.4, null, true); return; }
@@ -163,14 +174,15 @@ function initKeys() {
       case 'Space': e.preventDefault(); preview.toggle(); break;
       case 'KeyK': preview.toggle(); break;
       case 'KeyS': timeline.splitAction(); break;
-      case 'Delete': case 'Backspace': timeline.deleteAction(); break;
+      case 'Delete': case 'Backspace': timeline.deleteAction(e.shiftKey); break;
+      case 'KeyR': if (clipSel) reverseClip(clipSel); break;
       case 'ArrowLeft': e.preventDefault(); store.setTime(store.time - (e.shiftKey ? 1 : step)); break;
       case 'ArrowRight': e.preventDefault(); store.setTime(store.time + (e.shiftKey ? 1 : step)); break;
       case 'KeyJ': store.setTime(store.time - 5); break;
       case 'KeyL': store.setTime(store.time + 5); break;
       case 'Home': store.setTime(0); break;
       case 'End': store.setTime(store.duration()); break;
-      case 'KeyF': preview.fullscreen(); break;
+      case 'KeyF': if (e.shiftKey) preview.fullscreen(); else freezeFrame(store.time); break;
       case 'Escape': store.select(null); break;
       default: break;
     }
@@ -218,6 +230,22 @@ async function main() {
   await restoreAutosave();
   updateTitle();
   window.__ffm = { store, preview, timeline, importPaths, openExport };
+  const bridge = await mcpReady;
+  if (bridge) bridge.initMcpBridge({
+    loadProjectText: (text, filePath) => loadFromText(text, filePath),
+    newProject: (name) => {
+      store.load(emptyProject(), null);
+      if (name) { store.project.name = name; store.emit('project'); }
+      store.runtime = {};
+      timeline.autoFit = true; timeline.fit();
+      updateTitle();
+    },
+    saveProject: async (filePath) => {
+      const p = await api.saveProject({ filePath: filePath || store.filePath, text: store.serialize(), suggested: store.project.name });
+      if (p) { store.filePath = p; store.dirty = false; updateTitle(); autosave(); }
+      return p;
+    },
+  });
   document.body.classList.add('ready');
   const info = await api.info();
   if (info.ffmpegMissing || !info.ffmpegVersion) {

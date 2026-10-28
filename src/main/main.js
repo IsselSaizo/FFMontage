@@ -29,6 +29,8 @@ if (!FIRST_RUN) fs.rm(PATHS.FIRSTRUN_DIR, { recursive: true, force: true }, () =
 
 const ff = require('./ffmpeg');
 const exporter = require('./exporter');
+let control = { start() {}, stop() {} };
+try { control = require('./control'); } catch (e) { console.error('control.js', e); }
 
 protocol.registerSchemesAsPrivileged([{
   scheme: 'app',
@@ -295,6 +297,27 @@ function registerIpc() {
 
   ipcMain.handle('enc:detect', async () => ff.detectEncoders());
 
+  // --- эффекты: реверс и стоп-кадр (файл в кэш → сведения о нём, как после импорта) ---
+  const fxInfo = async (file) => {
+    const info = await ff.probe(file);
+    allow(file);
+    info.url = mediaUrl(file);
+    return info;
+  };
+  ipcMain.handle('fx:reverse', async (_e, info, a, b) => {
+    const enc = await ff.detectEncoders();
+    const key = `reverse:${info.key}:${Number(a).toFixed(3)}:${Number(b).toFixed(3)}`;
+    const file = await ff.reverse(info, a, b, (fraction) => send('fx:progress', { key, fraction }), enc);
+    return fxInfo(file);
+  });
+  ipcMain.handle('fx:freeze', async (_e, info, at) => {
+    const enc = await ff.detectEncoders();
+    return fxInfo(await ff.freeze(info, at, enc));
+  });
+  // Кадр файла в JPEG (base64) и поиск тишины — для ИИ-ассистента (MCP)
+  ipcMain.handle('fx:frame', async (_e, file, t, width) => (await ff.frameJpeg(file, t, width)).toString('base64'));
+  ipcMain.handle('fx:silence', async (_e, file, thresholdDb, minDur) => ff.silence(file, thresholdDb, minDur));
+
   // --- экспорт ---
   ipcMain.handle('export:pick', async (_e, suggested) => {
     const r = await dialog.showSaveDialog(win, {
@@ -359,6 +382,8 @@ function registerIpc() {
     if (r.canceled || !r.filePaths[0]) return null;
     return { filePath: r.filePaths[0], text: fs.readFileSync(r.filePaths[0], 'utf8') };
   });
+  // Открыть проект по известному пути (без окна выбора) — для ИИ-ассистента
+  ipcMain.handle('project:read', async (_e, p) => ({ filePath: path.resolve(p), text: fs.readFileSync(path.resolve(p), 'utf8') }));
 
   ipcMain.handle('autosave:write', async (_e, text) => {
     fs.writeFileSync(PATHS.AUTOSAVE + '.tmp', text, 'utf8');
@@ -373,6 +398,16 @@ function registerIpc() {
     return shell.openPath(p);
   });
   ipcMain.handle('win:devtools', async (e) => { senderWindow(e).webContents.toggleDevTools(); return true; });
+  // Снимки экрана посреди автотеста (только в режиме автотеста)
+  if (process.env.FFM_SELFTEST) {
+    ipcMain.handle('test:shot', async (e, name) => {
+      const img = await senderWindow(e).webContents.capturePage();
+      const dir = path.dirname(process.env.FFM_SHOT || path.join(PATHS.TEMP, 'x.png'));
+      const file = path.join(dir, `${String(name).replace(/[^\w.-]+/g, '_')}.png`);
+      fs.writeFileSync(file, img.toPNG());
+      return file;
+    });
+  }
   ipcMain.handle('win:title', async (_e, t) => { win && win.setTitle(t); return true; });
   ipcMain.handle('fs:exists', async (_e, p) => fs.existsSync(p));
 }
@@ -386,8 +421,11 @@ app.whenReady().then(() => {
     fs.mkdirSync(PATHS.OUTPUT_DIR, { recursive: true });
     createWindow();
     ff.detectEncoders().catch(() => {});
+    // Канал управления для ИИ-ассистента (MCP): только локально, с секретным ключом в папке кэша
+    try { control.start({ PATHS, getWindow: () => win, app }); } catch (e) { console.error('control', e); }
   }
 });
+app.on('will-quit', () => { try { control.stop(); } catch { /* ignore */ } });
 
 app.on('second-instance', () => {
   const w = setupWin || win;
