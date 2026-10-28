@@ -118,10 +118,13 @@ async function effectsTest(enc) {
   const enc = await ff.detectEncoders();
   console.log('Кодировщики:', enc);
 
+  // Без видеокарты NVIDIA тестовые файлы и экспорт делаются на процессоре
+  const av1 = enc.av1_nvenc ? ['-c:v', 'av1_nvenc', '-cq', '30'] : ['-c:v', 'libsvtav1', '-preset', '10', '-crf', '35'];
+  const h264 = enc.h264_nvenc ? ['-c:v', 'h264_nvenc'] : ['-c:v', 'libx264', '-preset', 'veryfast'];
   const a = await make('a_av1_1440p60.mp4', ['-f', 'lavfi', '-i', 'testsrc2=size=2560x1440:rate=60', '-f', 'lavfi',
-    '-i', 'sine=frequency=440:sample_rate=48000', '-t', '10', '-c:v', 'av1_nvenc', '-cq', '30', '-c:a', 'aac']);
+    '-i', 'sine=frequency=440:sample_rate=48000', '-t', '10', ...av1, '-pix_fmt', 'yuv420p', '-c:a', 'aac']);
   const b = await make('b_h264_1080p30.mp4', ['-f', 'lavfi', '-i', 'smptehdbars=size=1920x1080:rate=30', '-f', 'lavfi',
-    '-i', 'sine=frequency=880:sample_rate=44100', '-t', '8', '-c:v', 'h264_nvenc', '-c:a', 'aac']);
+    '-i', 'sine=frequency=880:sample_rate=44100', '-t', '8', ...h264, '-pix_fmt', 'yuv420p', '-c:a', 'aac']);
   const c = await make('c_music.mp3', ['-f', 'lavfi', '-i', 'sine=frequency=220:sample_rate=44100:duration=20',
     '-c:a', 'libmp3lame', '-b:a', '192k']);
   const d = await make('d_old.avi', ['-f', 'lavfi', '-i', 'testsrc=size=640x480:rate=25', '-t', '3',
@@ -155,8 +158,9 @@ async function effectsTest(enc) {
   };
   // Ожидаемо: видео 4+4+3 = 11 c, музыка до 17 c → итог 17 c (в конце 6 c чёрного)
 
-  for (const codec of ['av1_nvenc', 'hevc_nvenc', 'h264_nvenc']) {
-    if (!enc[codec]) { console.log(`  --  ${codec} недоступен, пропускаю`); continue; }
+  const pick = (gpu, cpu) => (enc[gpu] ? gpu : cpu);
+  const codecs = { av1: pick('av1_nvenc', 'libsvtav1'), hevc: pick('hevc_nvenc', 'libx265'), h264: pick('h264_nvenc', 'libx264') };
+  for (const [vcodec, codec] of Object.entries(codecs)) {
     const out = path.join(DIR, `out_${codec}.mp4`);
     t0 = Date.now();
     let last = 0;
@@ -167,13 +171,13 @@ async function effectsTest(enc) {
     assert(Math.abs(io.duration - 17) < 0.15, `длительность ${io.duration.toFixed(3)} ≈ 17`);
     assert(io.width === 2560 && io.height === 1440, 'разрешение 2560×1440');
     assert(io.fps === 60, `частота ${io.fps} fps`);
-    assert(io.vcodec === codec.split('_')[0].replace('h264', 'h264'), `кодек ${io.vcodec}`);
+    assert(io.vcodec === vcodec, `кодек ${io.vcodec}`);
     assert(io.acodec === 'aac' && io.sampleRate === 48000, 'звук AAC 48 кГц');
   }
 
   // Проверка звука: 2-я часть (4..8 c) — клип без звука, но с музыкой 220 Гц;
   // 13..17 c — только музыка; до 2 c — только 440 Гц.
-  const out = path.join(DIR, 'out_h264_nvenc.mp4');
+  const out = path.join(DIR, `out_${codecs.h264}.mp4`);
   const vol = async (ss, t) => {
     const { stderr } = await ff.run(ff.findBinaries().ffmpeg, ['-hide_banner', '-ss', String(ss), '-t', String(t), '-i', out,
       '-vn', '-af', 'volumedetect', '-f', 'null', '-']);

@@ -201,8 +201,9 @@ function buildExport(project, settings) {
     filters.push(`${black(total - videoEnd)}[vtail]`);
     pieces.push('[vtail]');
   }
-  if (pieces.length === 1) filters.push(`${pieces[0]}null[vout]`);
-  else filters.push(`${pieces.join('')}concat=n=${pieces.length}:v=1:a=0[vout]`);
+  // xfade может отдать 4:4:4 (FFmpeg 9) — high-профиль H.264 его не принимает, поэтому на выходе всегда 4:2:0
+  if (pieces.length === 1) filters.push(`${pieces[0]}format=yuv420p[vout]`);
+  else filters.push(`${pieces.join('')}concat=n=${pieces.length}:v=1:a=0,format=yuv420p[vout]`);
 
   const tail = `apad,atrim=duration=${n6(total)},alimiter=limit=0.98:attack=5:release=50:level=0[aout]`;
   if (!audio.length) filters.push(`anullsrc=r=48000:cl=stereo,atrim=duration=${n6(total)}[aout]`);
