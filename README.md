@@ -49,7 +49,9 @@
 3. Запустите **`FF Montage.exe`** (Linux: `./ff-montage`). FFmpeg уже внутри архива.
 
 Если Windows пишет «Система Windows защитила ваш компьютер» — «Подробнее» → «Выполнить в любом случае»
-(программа не подписана сертификатом). Linux: нужен WebKitGTK 4.1 (`sudo apt install libwebkit2gtk-4.1-0`, Ubuntu 22.04+).
+(программа не подписана сертификатом). Linux: нужен WebKitGTK 4.1 и GStreamer good (звук в предпросмотре):
+`sudo apt install libwebkit2gtk-4.1-0 gstreamer1.0-plugins-good` (Ubuntu 22.04+),
+Arch: `sudo pacman -S webkit2gtk-4.1 gst-plugins-good`.
 
 Обновление: меню ☰ → **«Проверить обновления…»** — программа сама скачает новый релиз (настройки и проекты не трогаются).
 

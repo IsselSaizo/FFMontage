@@ -129,7 +129,10 @@ fn launch_app() -> Result<(), String> {
         use std::os::windows::process::CommandExt;
         c.creation_flags(0x0000_0008 | 0x0000_0200); // DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
     }
-    c.spawn().map(|_| ()).map_err(|e| format!("launch failed: {e}"))
+    let mut child = c.spawn().map_err(|e| format!("launch failed: {e}"))?;
+    // Забираем код выхода, иначе на Linux/macOS закрытая программа висит зомби, пока жив MCP-сервер
+    std::thread::spawn(move || { let _ = child.wait(); });
+    Ok(())
 }
 
 impl App {
