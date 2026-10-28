@@ -4,7 +4,8 @@
 Монтаж без потери качества: предпросмотр проигрывает исходники как есть, а экспорт делает FFmpeg —
 в исходном разрешении и частоте кадров (например, 1440p60), в AV1, HEVC или H.264, на видеокарте NVIDIA, если она есть.
 
-Работает на **Windows 10/11 x64** и **Linux x86_64**. Node.js для работы не нужен: Electron и FFmpeg ставит setup-скрипт.
+Работает на **Windows 10/11 x64** и **Linux x86_64**. Сделан на [Tauri](https://tauri.app) (Rust + системный WebView):
+программа — один файл ~12 МБ, FFmpeg лежит рядом.
 
 ## Возможности
 
@@ -26,36 +27,33 @@
 
 ## Установка
 
-### Windows
+### Проще всего — готовая сборка (ничего ставить не нужно)
+
+1. Откройте **[Releases](https://github.com/IsselSaizo/FFMontage/releases/latest)** и скачайте
+   `FF-Montage-…-win-x64.zip` (Windows) или `FF-Montage-…-linux-x64.tar.gz` (Linux).
+2. Распакуйте в любую папку (например, `D:\FF Montage`).
+3. Запустите **`FF Montage.exe`** (Linux: `./ff-montage`). FFmpeg уже внутри архива.
+
+Если Windows пишет «Система Windows защитила ваш компьютер» — «Подробнее» → «Выполнить в любом случае»
+(программа не подписана сертификатом). Linux: нужен WebKitGTK 4.1 (`sudo apt install libwebkit2gtk-4.1-0`, Ubuntu 22.04+).
+
+Обновление: меню ☰ → **«Проверить обновления…»** — программа сама скачает новый релиз (настройки и проекты не трогаются).
+
+### Из исходников (для тех, кто хочет свежий код из git)
 
 ```powershell
 git clone https://github.com/IsselSaizo/FFMontage.git
 cd FFMontage
-.\setup.cmd
+.\setup.cmd          # Linux: ./setup.sh
 ```
 
-`setup.cmd` скачает в папку `vendor\` Electron (~150 МБ) и FFmpeg (~105 МБ). Запуск — **`FF Montage.cmd`**.
+`setup` один на систему и делает всё сам: скачивает FFmpeg в папку `ffmpeg\`, ставит Rust (и, если нужно,
+Visual Studio Build Tools через winget), собирает программу в **`FF Montage.exe`** и кладёт ярлык на рабочий стол.
+Первая сборка — 3–6 минут. Потом «Проверить обновления…» делает `git fetch` + `git pull` и пересобирает программу.
 
-Если FFmpeg у вас уже есть: `.\setup.cmd -SkipFFmpeg`, а папку с ним укажете при первом запуске.
-
-### Linux
-
-```bash
-git clone https://github.com/IsselSaizo/FFMontage.git
-cd FFMontage
-./setup.sh
-./ff-montage.sh
-```
-
-Нужны `curl` (или `wget`), `unzip` (или `python3`) и `tar` с поддержкой xz — в Ubuntu/Debian/Fedora/Arch они обычно уже есть.
-
-- `./setup.sh --skip-ffmpeg` — не качать FFmpeg и использовать системный (`sudo apt install ffmpeg`).
-  Подойдёт любой FFmpeg от 5.1, но лучше 7+.
-- Скрипт предложит настроить песочницу Chromium (нужен `sudo`). Если отказаться,
-  `ff-montage.sh` запустит программу с `--no-sandbox` — для редактора локальных файлов это нормально.
-- Кодирование на видеокарте NVIDIA работает с проприетарным драйвером. Без него экспорт идёт на процессоре.
-- HEVC-видео на Linux воспроизводится в окне через прокси (Chromium не декодирует HEVC на NVIDIA в Linux).
-  На экспорт это не влияет.
+- Если FFmpeg уже есть: `.\setup.cmd -SkipFFmpeg`, папку с ним укажете при первом запуске.
+- Кодирование на видеокарте NVIDIA (NVENC) включается само, если оно есть. Без видеокарты экспорт идёт на процессоре
+  (libsvtav1 / libx265 / libx264) — медленнее, но с тем же результатом.
 
 ## Первый запуск
 
@@ -85,7 +83,7 @@ VS Code или Claude Code смогут монтировать по вашей �
 - VS Code: блок для `.vscode/mcp.json` (ключ `"servers"`) — во втором поле окна.
 - Claude Code: готовая команда `claude mcp add …` — в третьем поле.
 
-Сервер запускается тем же Electron, что и программа (`ELECTRON_RUN_AS_NODE=1`), ничего доустанавливать не нужно.
+Сервер — сама программа с ключом `--mcp` (`"FF Montage.exe" --mcp`), ничего доустанавливать не нужно.
 Если FF Montage закрыт, ассистент запустит его сам (программа должна быть уже настроена — папки выбраны при первом запуске).
 
 **Примеры просьб:**
@@ -127,18 +125,25 @@ VS Code или Claude Code смогут монтировать по вашей �
 ## Разработка
 
 ```text
-src/main/       главный процесс: окно, пути и config.json, FFmpeg (анализ, миниатюры, волна, прокси), экспорт
-src/preload/    мост между окном и главным процессом
-src/renderer/   интерфейс: медиатека, плеер, таймлайн, инспектор, окно экспорта, окно настроек
-tests/          тест движка экспорта (node) и автотесты интерфейса
-tools/          сборка архивов Electron/FFmpeg для релиза
+src-tauri/      программа на Rust: окна, пути и config.json, FFmpeg (анализ, миниатюры, волна, прокси, реверс,
+                стоп-кадр), запуск экспорта, протокол media://, канал ИИ-ассистента, MCP-сервер (--mcp), обновления
+src/renderer/   интерфейс: медиатека, плеер, таймлайн, инспектор, окно экспорта, окно настроек;
+                js/api.js — связь с программой, js/exportPlan.js — сборка команды FFmpeg для экспорта
+mcp/tools.json  описание инструментов ИИ-ассистента
+tests/          тест движка (node), автотесты интерфейса и MCP
+tools/          setup, скачивание FFmpeg
+.github/        CI (сборка и тесты на каждый push) и автосборка релизов по тегу v*
 ```
 
-Вместо `setup` можно поставить Electron через npm (нужен Node.js): `npm install`, затем `npm start`
-или `FF Montage.cmd` / `ff-montage.sh` — они найдут Electron и в `vendor/`, и в `node_modules/`.
+Сборка: `cd src-tauri && cargo build --release` → `src-tauri/target/release/ff-montage.exe`.
+Интерфейс встраивается в exe при сборке — после правок в `src/renderer` нужно пересобрать.
 
 Тест движка: `node tests/engine-test.js` — создаёт тестовые ролики, экспортирует проект во все кодеки и проверяет результат
 (в том числе пустоты, переходы, затухания, реверс и стоп-кадр — по цвету пикселей готового видео).
+С `FFM_NO_GPU=1` программа ведёт себя как компьютер без видеокарты NVIDIA (так тесты идут в CI).
+
+Выпуск релиза: `git tag v0.3.0 && git push origin v0.3.0` — GitHub Actions соберёт архивы для Windows и Linux
+и выложит их в Releases.
 
 Тесты интерфейса (Windows): `powershell -ExecutionPolicy Bypass -File tests\run-ui.ps1 ui-selftest3` — запускают программу
 с отдельной папкой кэша (ваш проект и автосохранение не трогаются), гоняют мышь и клавиши и пишут отчёт.
@@ -148,18 +153,6 @@ tools/          сборка архивов Electron/FFmpeg для релиза
 Переходы при экспорте — фильтр `xfade`, затухания — `fade`/`afade`, в плеере то же самое изображает CSS.
 Журнал последнего экспорта с полной командой FFmpeg: `<кэш>/app/logs/last-export.log`.
 
-### Архивы Electron и FFmpeg (для владельца репозитория)
-
-Бинарники не хранятся в Git (GitHub не принимает файлы больше 100 МБ). Setup-скрипты сначала качают их
-из релиза репозитория (`release_base` в `vendor.json`), а если там нет — с официальных сайтов
-(Electron — GitHub electron/electron, FFmpeg — сборки BtbN).
-
-1. `powershell -ExecutionPolicy Bypass -File tools\make-vendor.ps1` — соберёт в `dist\vendor-1\` четыре архива и `SHA256SUMS.txt`.
-2. GitHub → Releases → Draft a new release → тег `vendor-1` → прикрепить файлы из `dist\vendor-1\` → Publish.
-3. При обновлении версий: поменять имена/ссылки в `vendor.json` и выпустить новый тег (`vendor-2`).
-
-Если репозиторий называется иначе, поправьте `release_base` в `vendor.json` и ссылки в этом README.
-
 ## Лицензии
 
-FFmpeg распространяется по лицензии GPL (сборки BtbN `gpl`), Electron — MIT.
+FF Montage — GPL-3.0. FFmpeg — GPL (сборки [BtbN](https://github.com/BtbN/FFmpeg-Builds) `gpl`), Tauri — MIT/Apache-2.0.

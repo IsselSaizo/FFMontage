@@ -41,6 +41,7 @@ function initTopbar() {
     item('Настройки папок…', '', () => api.openSettings()),
     item('ИИ-ассистент (MCP)…', '', () => showMcpDialog()),
     h('div', { class: 'dd-sep' }),
+    item('Проверить обновления…', '', () => checkUpdates()),
     item('О программе', '', about));
   function item(label, key, fn) {
     return h('button', { class: 'dd-item', onclick: () => { menu.classList.remove('open'); fn(); } }, h('span', {}, label), h('kbd', {}, key));
@@ -48,15 +49,89 @@ function initTopbar() {
   menuBtn.addEventListener('click', (e) => { e.stopPropagation(); menu.classList.toggle('open'); });
   document.addEventListener('click', (e) => { if (!menu.contains(e.target)) menu.classList.remove('open'); });
 
-  const saved = h('span', { class: 'save-state', id: 'save-state' });
+  const saved = h('span', { class: 'save-state', id: 'save-state', 'data-tauri-drag-region': '' });
+  // Рамка окна своя: перетаскивание за пустое место панели, двойной щелчок — развернуть
+  const maxBtn = h('button', { title: 'Развернуть', onclick: () => api.winToggleMaximize() });
+  const updMax = async () => {
+    const m = await api.winIsMaximized().catch(() => false);
+    maxBtn.innerHTML = icon(m ? 'wrestore' : 'wmax', 11);
+    maxBtn.title = m ? 'Свернуть в окно' : 'Развернуть';
+  };
+  updMax();
+  api.onWinResize(updMax);
+  bar.setAttribute('data-tauri-drag-region', '');
   bar.append(
-    h('div', { class: 'tb-left' },
-      h('div', { class: 'logo', html: icon('logo', 26) }),
-      h('span', { class: 'app-name' }, 'FF Montage'),
+    h('div', { class: 'tb-left', 'data-tauri-drag-region': '' },
+      h('div', { class: 'logo', html: icon('logo', 26), 'data-tauri-drag-region': '' }),
+      h('span', { class: 'app-name', 'data-tauri-drag-region': '' }, 'FF Montage'),
       h('div', { class: 'menu-wrap' }, menuBtn, menu),
       nameInput, saved),
+    h('div', { class: 'tb-drag', 'data-tauri-drag-region': '' }),
     h('div', { class: 'tb-right' },
-      h('button', { class: 'btn primary export-btn', onclick: () => openExport() }, h('span', { html: icon('export', 18) }), 'Экспорт')));
+      h('button', { class: 'btn primary export-btn', onclick: () => openExport() }, h('span', { html: icon('export', 18) }), 'Экспорт'),
+      h('div', { class: 'win-ctl' },
+        h('button', { title: 'Свернуть', html: icon('wmin', 11), onclick: () => api.winMinimize() }),
+        maxBtn,
+        h('button', { class: 'close', title: 'Закрыть', html: icon('wclose', 11), onclick: () => api.winClose() }))));
+}
+
+// ---------------------------------------------------------------------------
+// Обновления: git-клон — git fetch/pull (+ пересборка), готовая сборка — последний релиз GitHub
+// ---------------------------------------------------------------------------
+async function checkUpdates() {
+  const overlay = h('div', { class: 'modal-overlay' });
+  const body = h('div', { class: 'modal-body' }, h('p', { class: 'muted' }, 'Проверяю…'));
+  const foot = h('div', { class: 'modal-foot' });
+  const close = () => overlay.remove();
+  overlay.append(h('div', { class: 'modal small', style: { width: '560px' } },
+    h('div', { class: 'modal-head' }, h('h2', {}, 'Обновления'), h('button', { class: 'icon-btn', html: icon('close', 18), onclick: close })),
+    body, foot));
+  document.body.append(overlay);
+  const closeBtn = h('button', { class: 'btn ghost', onclick: close }, 'Закрыть');
+  let r;
+  try { r = await api.updateCheck(); } catch (e) {
+    body.innerHTML = '';
+    body.append(h('p', {}, 'Не удалось проверить обновления.'), h('pre', { class: 'error-box' }, String(e)));
+    foot.append(closeBtn);
+    return;
+  }
+  body.innerHTML = '';
+  const logBox = h('div', { class: 'update-log', style: { display: 'none' } });
+  const apply = h('button', { class: 'btn primary' }, h('span', { html: icon('refresh', 17) }), 'Обновить');
+  apply.addEventListener('click', async () => {
+    apply.disabled = true; closeBtn.disabled = true;
+    logBox.style.display = '';
+    const off = api.onUpdateLog(({ text }) => { logBox.textContent += `${text}\n`; logBox.scrollTop = 1e9; });
+    if (store.dirty) await saveProject(false).catch(() => {});
+    try {
+      const res = await api.updateApply();
+      logBox.textContent += `${res.message || 'Готово.'}\n`;
+    } catch (e) {
+      logBox.textContent += `Ошибка: ${e}\n`;
+    }
+    off(); closeBtn.disabled = false;
+  });
+  if (r.mode === 'git') {
+    body.append(
+      h('p', {}, `Версия ${r.current} · git-клон, ветка ${r.branch} (${r.head})`),
+      r.behind
+        ? h('p', {}, `Доступно новых изменений: ${r.behind}`)
+        : h('p', { class: 'muted' }, 'У вас последняя версия.'),
+      r.commits && r.commits.length ? h('pre', { class: 'update-log' }, r.commits.join('\n')) : null,
+      r.ahead ? h('p', { class: 'muted small' }, `Локальных коммитов, которых нет на GitHub: ${r.ahead}`) : null,
+      r.dirty ? h('p', { class: 'muted small' }, 'Есть изменённые файлы — git pull может отказаться обновлять. Сохраните или откатите их.') : null,
+      r.behind && !r.cargo ? h('p', { class: 'muted small' }, 'Rust (cargo) не найден: исходники обновятся, но программу нужно будет пересобрать или скачать готовую сборку.') : null,
+      logBox);
+  } else {
+    body.append(
+      h('p', {}, `Установлена версия ${r.current}. Последний релиз: ${r.latest || '—'}`),
+      r.available ? h('p', {}, `Будет скачан ${r.asset.name}. Настройки и проекты не затрагиваются.`)
+        : h('p', { class: 'muted' }, r.newer ? 'Для этой системы в релизе нет готовой сборки.' : 'У вас последняя версия.'),
+      r.notes ? h('pre', { class: 'update-log' }, r.notes) : null,
+      logBox);
+  }
+  foot.append(closeBtn);
+  if (r.available) foot.append(apply);
 }
 
 function updateTitle() {
@@ -125,7 +200,7 @@ function about() {
       h('div', { class: 'modal small' },
         h('div', { class: 'modal-head' }, h('h2', {}, 'FF Montage'), h('button', { class: 'icon-btn', html: icon('close', 18), onclick: () => overlay.remove() })),
         h('div', { class: 'modal-body' },
-          h('p', {}, `Версия ${i.version} · Electron ${i.electron}`),
+          h('p', {}, `Версия ${i.version} · Tauri ${i.tauri} · WebView ${i.webview}`),
           h('p', { class: 'muted small' }, i.ffmpegVersion || 'FFmpeg не найден!'),
           h('p', { class: 'muted small' }, `FFmpeg: ${i.ffmpeg}`),
           h('p', { class: 'muted small' }, `Кэш: ${i.cacheDir}`),
@@ -193,23 +268,20 @@ function initKeys() {
 function initWindowDrop() {
   const shade = h('div', { class: 'drop-shade' }, h('div', {}, h('span', { html: icon('upload', 40) }), h('p', {}, 'Отпустите, чтобы импортировать')));
   document.body.append(shade);
-  let depth = 0;
-  const isFiles = (e) => e.dataTransfer && Array.from(e.dataTransfer.types).includes('Files');
-  window.addEventListener('dragenter', (e) => { if (isFiles(e)) { depth++; shade.classList.add('on'); } });
-  window.addEventListener('dragleave', (e) => { if (isFiles(e)) { depth = Math.max(0, depth - 1); if (!depth) shade.classList.remove('on'); } });
-  window.addEventListener('dragover', (e) => { if (isFiles(e)) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; } });
-  window.addEventListener('drop', async (e) => {
-    depth = 0; shade.classList.remove('on');
-    if (!isFiles(e)) return;
-    e.preventDefault();
-    const paths = Array.from(e.dataTransfer.files).map((f) => api.pathForFile(f)).filter(Boolean);
-    if (paths.length) {
-      const ids = await importPaths(paths);
-      if (ids.length) toast(`Импортировано файлов: ${ids.length}`, 'success', 2000);
+  // Над таймлайном — маркер места вставки, в остальной части окна — затемнение «импорт»
+  api.onFileDrop(async ({ type, paths, x, y }) => {
+    if (type === 'enter' || type === 'over') {
+      const onTl = timeline.dragHover(x, y);
+      shade.classList.toggle('on', !onTl);
+      return;
     }
+    shade.classList.remove('on');
+    if (type !== 'drop') { timeline.dragLeave(); return; }
+    if (!paths.length) return;
+    if (await timeline.dropAt(x, y, { paths })) return;
+    const ids = await importPaths(paths);
+    if (ids.length) toast(`Импортировано файлов: ${ids.length}`, 'success', 2000);
   });
-  // таймлайн обрабатывает drop сам — гасим подсветку
-  document.addEventListener('drop', () => { depth = 0; shade.classList.remove('on'); }, true);
 }
 
 // ---------------------------------------------------------------------------

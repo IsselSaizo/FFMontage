@@ -190,6 +190,11 @@ const P = {
   fade: '<path d="M3 19L10 6h4l7 13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M3 19h18" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>',
   magnet: '<path d="M6 4v8a6 6 0 0 0 12 0V4h-4v8a2 2 0 0 1-4 0V4z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M6 8h4M14 8h4" stroke="currentColor" stroke-width="1.7"/>',
   ai: '<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M18.5 15.5l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z" fill="currentColor"/>',
+  wmin: '<path d="M3 12h18" stroke="currentColor" stroke-width="2"/>',
+  wmax: '<rect x="3.5" y="3.5" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2"/>',
+  wrestore: '<rect x="3.5" y="7.5" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"/><path d="M7.5 7.5V3.5h13v13h-4" fill="none" stroke="currentColor" stroke-width="2"/>',
+  wclose: '<path d="M3 3l18 18M21 3L3 21" stroke="currentColor" stroke-width="2"/>',
+  refresh: '<path d="M20 11a8 8 0 1 0-2.3 5.7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M20 4v7h-7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>',
   gapclose: '<path d="M4 6v12M20 6v12M8 12h8M10.5 9.5L8 12l2.5 2.5M13.5 9.5L16 12l-2.5 2.5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>',
 };
 export function icon(name, size = 20) {

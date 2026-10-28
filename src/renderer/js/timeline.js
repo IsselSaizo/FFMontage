@@ -677,50 +677,48 @@ export class Timeline {
   // ------------------------------------------------------------------------
   // Перетаскивание из медиатеки и из Проводника
   // ------------------------------------------------------------------------
-  initDrop() {
-    const target = (e) => {
-      const lane = e.target.closest('[data-lane]');
-      if (!lane) return null;
-      return lane.dataset.lane === 'audio' ? { kind: 'audio', track: lane.dataset.track } : { kind: lane.dataset.lane };
-    };
-    this.scroll.addEventListener('dragover', (e) => {
-      const isMedia = e.dataTransfer.types.includes('application/x-ffm-media');
-      const isFiles = e.dataTransfer.types.includes('Files');
-      if (!isMedia && !isFiles) return;
-      e.preventDefault();
-      e.stopPropagation();
-      e.dataTransfer.dropEffect = 'copy';
-      const tg = target(e);
-      const m = window.__ffmDragMedia ? store.media(window.__ffmDragMedia) : null;
-      this.highlightNewTrack(tg && tg.kind === 'newtrack');
-      if (!tg) { this.hideMarker(); return; }
-      const wantsVideo = tg.kind === 'video' && (!m || m.hasVideo);
-      if (wantsVideo) {
-        this.showMarker(this.dropTime(e.clientX) * this.pps, 'video');
-      } else if (tg.kind === 'audio') {
-        this.showMarker(this.xToTime(e.clientX) * this.pps, tg.track);
-      } else {
-        this.hideMarker();
-      }
-    });
-    this.scroll.addEventListener('dragleave', (e) => {
-      if (!this.scroll.contains(e.relatedTarget)) { this.hideMarker(); this.highlightNewTrack(false); }
-    });
-    this.scroll.addEventListener('drop', async (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      this.hideMarker();
-      this.highlightNewTrack(false);
-      const tg = target(e) || { kind: 'video' };
-      const t = this.xToTime(e.clientX);
-      let vt = this.dropTime(e.clientX);
-      let ids = [];
-      const mid = e.dataTransfer.getData('application/x-ffm-media');
-      if (mid) ids = [mid];
-      else if (e.dataTransfer.files.length) {
-        const paths = Array.from(e.dataTransfer.files).map((f) => window.api.pathForFile(f)).filter(Boolean);
-        ids = await importPaths(paths);
-      }
+  // Перетаскивание сделано без HTML5 drag&drop (в Tauri его заменяет перетаскивание файлов из Проводника):
+  // медиатека и окно вызывают dragHover / dragLeave / dropAt с координатами курсора.
+  dropTargetAt(x, y) {
+    const r = this.scroll.getBoundingClientRect();
+    if (x < r.left || x > r.right || y < r.top || y > r.bottom) return null;
+    const el = document.elementFromPoint(x, y);
+    const lane = el && el.closest('[data-lane]');
+    if (!lane) return { kind: 'none' };
+    return lane.dataset.lane === 'audio' ? { kind: 'audio', track: lane.dataset.track } : { kind: lane.dataset.lane };
+  }
+
+  // true — курсор над таймлайном
+  dragHover(x, y, mediaId = null) {
+    const tg = this.dropTargetAt(x, y);
+    if (!tg) { this.dragLeave(); return false; }
+    const m = mediaId ? store.media(mediaId) : null;
+    this.highlightNewTrack(tg.kind === 'newtrack');
+    const wantsVideo = tg.kind === 'video' && (!m || m.hasVideo);
+    if (wantsVideo) this.showMarker(this.dropTime(x) * this.pps, 'video');
+    else if (tg.kind === 'audio') this.showMarker(this.xToTime(x) * this.pps, tg.track);
+    else this.hideMarker();
+    return true;
+  }
+
+  dragLeave() { this.hideMarker(); this.highlightNewTrack(false); }
+
+  // ids — медиа из медиатеки или paths — файлы из Проводника. false — точка вне таймлайна.
+  async dropAt(x, y, { ids = [], paths = [] } = {}) {
+    const tg0 = this.dropTargetAt(x, y);
+    this.dragLeave();
+    if (!tg0) return false;
+    const tg = tg0.kind === 'none' ? { kind: 'video' } : tg0;
+    const t = this.xToTime(x);
+    let vt = this.dropTime(x);
+    if (paths.length) ids = await importPaths(paths);
+    this.placeDropped(ids, tg, t, vt);
+    return true;
+  }
+
+  initDrop() {}
+
+  placeDropped(ids, tg, t, vt) {
       let at = t;
       for (const id of ids) {
         const m = store.media(id);
@@ -736,7 +734,6 @@ export class Timeline {
           toast(`${m.name}: в файле нет звука — на аудиодорожку не добавить`, 'error');
         }
       }
-    });
   }
 
   // Добавление по кнопке «+» в медиатеке

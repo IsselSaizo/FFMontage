@@ -3,14 +3,12 @@
 // строит миниатюры/волну и экспортирует проект в несколько кодеков.
 const path = require('path');
 const fs = require('fs');
-const ff = require('../src/main/ffmpeg');
-const { startExport } = require('../src/main/exporter');
-const { PATHS, ensureDirs, applyConfig, loadConfig } = require('../src/main/paths');
+// Движок — сама программа (ff-montage --engine), папки — из её config.json
+// (если программа ещё не настроена — временная папка .test-cache внутри проекта)
+const ff = require('./engine');
+const { startExport } = ff;
 
-// Берём папки из config.json; если программа ещё не настроена — временная папка внутри проекта
-applyConfig(loadConfig() || { cacheDir: '.test-cache', outputDir: '.test-cache/out', projectsDir: '.test-cache/projects' });
-
-const DIR = path.join(PATHS.TEMP, 'engine-test');
+let DIR = null;
 
 async function make(name, args) {
   const file = path.join(DIR, name);
@@ -110,8 +108,10 @@ async function effectsTest(enc) {
 }
 
 (async () => {
-  ensureDirs();
+  await ff.ready;
+  DIR = path.join(ff.paths().temp, 'engine-test');
   fs.mkdirSync(DIR, { recursive: true });
+  console.log('Программа:', ff.EXE);
   console.log('FFmpeg:', ff.findBinaries().ffmpeg);
   console.log(await ff.version());
 

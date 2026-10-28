@@ -1,5 +1,5 @@
-'use strict';
-// Сборка проекта в одну команду FFmpeg и запуск экспорта.
+// Сборка проекта в одну команду FFmpeg (без окна и без Node — используется окном и автотестами).
+// Запуск команды, прогресс и отмена — в программе (src-tauri/src/export.rs).
 //
 // Модель проекта (то, что присылает интерфейс, версия 2):
 //   project.media       { [id]: { path, hasVideo, hasAudio, duration, ... } }
@@ -9,13 +9,8 @@
 //
 // Настройки экспорта:
 //   { width, height, fps, codec, quality, output }
-const { spawn } = require('child_process');
-const fs = require('fs');
-const path = require('path');
-const { findBinaries } = require('./ffmpeg');
-const { PATHS } = require('./paths');
 
-const QUALITY = {
+export const QUALITY = {
   // Значение CQ: меньше — лучше качество и больше файл
   av1_nvenc: { high: 28, medium: 33, compact: 38 },
   hevc_nvenc: { high: 22, medium: 26, compact: 30 },
@@ -27,12 +22,9 @@ const QUALITY = {
 
 const n6 = (x) => Number(x).toFixed(6);
 const even = (x) => Math.max(2, Math.round(x / 2) * 2);
+const clipDuration = (c) => Math.max(0, c.out - c.in);
 
-function clipDuration(c) {
-  return Math.max(0, c.out - c.in);
-}
-
-function encoderArgs(codec, quality, fps) {
+export function encoderArgs(codec, quality, fps) {
   const q = (QUALITY[codec] || QUALITY.h264_nvenc)[quality] ?? QUALITY.h264_nvenc.medium;
   const gop = String(Math.max(1, Math.round(fps * 2)));
   switch (codec) {
@@ -66,14 +58,14 @@ function xfadeTransition(type) {
 }
 const ADJ = 0.002;
 
-// Возвращает { inputs, filter, duration }.
+// Возвращает { inputs, filter, duration, W, H, F }.
 // Видео: клипы по времени (между ними чёрное), клипы с переходом склеиваются фильтром xfade.
 //   Переход центрирован на стыке: уходящий клип продолжается на d/2 дальше своего конца,
 //   следующий начинается на d/2 раньше (если в файле не хватает кадров — повторяется крайний кадр).
 //   Поэтому длина ролика и положение клипов на таймлайне не меняются.
 // Звук: каждый клип ставится на своё место (adelay) и всё смешивается (amix) — так же работают пустоты,
 //   затухания и плавная смена звука на переходах.
-function buildExport(project, settings) {
+export function buildExport(project, settings) {
   const W = even(settings.width);
   const H = even(settings.height);
   const F = Number(settings.fps) || 30;
@@ -214,23 +206,11 @@ function buildExport(project, settings) {
   return { inputs, filter, duration: total, W, H, F };
 }
 
-// ---------------------------------------------------------------------------
-// Запуск экспорта
-// ---------------------------------------------------------------------------
-let current = null;
-
-function startExport(project, settings, { onProgress, onLog, ffMajor = 99 } = {}) {
-  if (current) throw new Error('Экспорт уже идёт.');
-  const { ffmpeg } = findBinaries();
+// Полная команда для программы: @@FILTER@@ и @@OUT@@ подставит export.rs
+export function exportCommand(project, settings, ffMajor = 99) {
   const plan = buildExport(project, settings);
-  fs.mkdirSync(path.dirname(settings.output), { recursive: true });
-  fs.mkdirSync(PATHS.TEMP, { recursive: true });
-  const filterFile = path.join(PATHS.TEMP, `export-${Date.now()}.filter.txt`);
-  fs.writeFileSync(filterFile, plan.filter);
-  const partFile = settings.output + '.part';
-
   // FFmpeg 7+: «-/filter_complex файл»; старые версии (Linux-дистрибутивы): -filter_complex_script
-  const filterArgs = ffMajor >= 7 ? ['-/filter_complex', filterFile] : ['-filter_complex_script', filterFile];
+  const filterArgs = ffMajor >= 7 ? ['-/filter_complex', '@@FILTER@@'] : ['-filter_complex_script', '@@FILTER@@'];
   const cfrArgs = ffMajor >= 6 ? ['-fps_mode', 'cfr'] : ['-vsync', 'cfr'];
   const args = ['-hide_banner', '-y', '-nostdin', ...plan.inputs,
     ...filterArgs,
@@ -240,76 +220,6 @@ function startExport(project, settings, { onProgress, onLog, ffMajor = 99 } = {}
     '-c:a', 'aac', '-b:a', '192k', '-ar', '48000',
     '-t', n6(plan.duration),
     '-movflags', '+faststart', '-f', 'mp4',
-    '-progress', 'pipe:1', '-nostats', partFile];
-
-  const logFile = path.join(PATHS.LOGS, 'last-export.log');
-  fs.mkdirSync(PATHS.LOGS, { recursive: true });
-  fs.writeFileSync(logFile, `ffmpeg ${args.map((a) => (/\s/.test(a) ? `"${a}"` : a)).join(' ')}\n\n--- filter ---\n${plan.filter}\n\n--- stderr ---\n`);
-
-  const started = Date.now();
-  const proc = spawn(ffmpeg, args, { windowsHide: true });
-  let cancelled = false;
-  let stderrTail = '';
-  let buf = '';
-  let state = {};
-
-  const promise = new Promise((resolve, reject) => {
-    proc.stdout.on('data', (d) => {
-      buf += d.toString();
-      const lines = buf.split(/\r?\n/); buf = lines.pop();
-      for (const l of lines) {
-        const i = l.indexOf('=');
-        if (i > 0) state[l.slice(0, i)] = l.slice(i + 1).trim();
-        if (l.startsWith('progress=')) {
-          const t = Number(state.out_time_us || state.out_time_ms || 0) / 1e6;
-          const frac = Math.max(0, Math.min(1, t / plan.duration));
-          const elapsed = (Date.now() - started) / 1000;
-          const eta = frac > 0.01 ? elapsed * (1 - frac) / frac : null;
-          onProgress && onProgress({
-            fraction: frac, time: t, duration: plan.duration, elapsed, eta,
-            speed: state.speed || '', fps: Number(state.fps || 0), size: Number(state.total_size || 0),
-          });
-        }
-      }
-    });
-    proc.stderr.on('data', (d) => {
-      const s = d.toString();
-      fs.appendFile(logFile, s, () => {});
-      stderrTail = (stderrTail + s).slice(-4000);
-      onLog && onLog(s);
-    });
-    proc.on('error', (e) => { current = null; reject(e); });
-    proc.on('close', (code) => {
-      current = null;
-      fs.rm(filterFile, { force: true }, () => {});
-      if (cancelled) {
-        fs.rm(partFile, { force: true }, () => {});
-        const e = new Error('Экспорт отменён.'); e.cancelled = true; reject(e); return;
-      }
-      if (code !== 0) {
-        fs.rm(partFile, { force: true }, () => {});
-        const lines = stderrTail.trim().split(/\r?\n/).filter((l) => !/^\s*$/.test(l));
-        reject(new Error(`FFmpeg завершился с ошибкой (код ${code}).\n${lines.slice(-6).join('\n')}`));
-        return;
-      }
-      try {
-        fs.rmSync(settings.output, { force: true });
-        fs.renameSync(partFile, settings.output);
-      } catch (e) { reject(e); return; }
-      const size = fs.statSync(settings.output).size;
-      resolve({ output: settings.output, size, duration: plan.duration, elapsed: (Date.now() - started) / 1000 });
-    });
-  });
-
-  current = {
-    cancel: () => { cancelled = true; try { proc.kill('SIGKILL'); } catch { /* ignore */ } },
-  };
-  return promise;
+    '-progress', 'pipe:1', '-nostats', '@@OUT@@'];
+  return { args, filter: plan.filter, duration: plan.duration, output: settings.output };
 }
-
-function cancelExport() {
-  if (current) { current.cancel(); return true; }
-  return false;
-}
-
-module.exports = { buildExport, startExport, cancelExport, QUALITY };

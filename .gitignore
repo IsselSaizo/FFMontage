@@ -1,14 +1,19 @@
-# Зависимости и скачиваемые бинарники (ставятся setup-скриптом или npm install)
-node_modules/
-vendor/
+# Сборка и скачиваемые бинарники (ставятся setup-скриптом)
+src-tauri/target/
+src-tauri/gen/
 ffmpeg/
 dist/
+node_modules/
+vendor/
+/FF Montage.exe
+/FF Montage.old.exe
+/ff-montage
+/ff-montage.old.exe
 
 # Личные настройки и данные — у каждого свои
 config.json
 .firstrun/
 .test-cache/
-.npmrc
 Cache/
 Output/
 Projects/

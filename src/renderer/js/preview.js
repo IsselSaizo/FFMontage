@@ -25,7 +25,7 @@ export class Preview {
     this.root = root;
     this.stage = h('div', { class: 'stage' });
     this.slots = [0, 1].map((i) => {
-      const v = h('video', { class: 'slot', preload: 'auto', playsinline: true, disablepictureinpicture: true });
+      const v = h('video', { class: 'slot', preload: 'auto', playsinline: true, disablepictureinpicture: true, crossorigin: 'anonymous' });
       v.dataset.slot = i;
       v.clipId = null;
       v.addEventListener('error', () => { v.failed = true; this.updateMessage(); });
@@ -341,6 +341,7 @@ export class Preview {
         if (!url) continue;
         if (!rec) {
           const el = new Audio();
+          el.crossOrigin = 'anonymous'; // медиа идут с media.localhost — без CORS Web Audio дал бы тишину
           el.preload = 'auto';
           rec = { el, url: null };
           this.audio.set(c.id, rec);

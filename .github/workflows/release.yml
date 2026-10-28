@@ -1,0 +1,84 @@
+# Автосборка: тег v* (например v0.3.0) → готовые архивы в GitHub Releases.
+#   Windows: FF-Montage-<версия>-win-x64.zip   — распаковать и запустить «FF Montage.exe», FFmpeg внутри
+#   Linux:   FF-Montage-<версия>-linux-x64.tar.gz
+# Выпустить релиз: git tag v0.3.0 && git push origin v0.3.0  (или Actions → Release → Run workflow)
+name: Release
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Тег релиза (например v0.3.0)'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: win-x64
+          - os: ubuntu-22.04
+            target: linux-x64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    env:
+      TAG: ${{ github.event.inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Библиотеки окна (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - name: Сборка
+        working-directory: src-tauri
+        run: cargo build --release --locked
+      - name: Архив (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $name = "FF-Montage-$($env:TAG.TrimStart('v'))-win-x64"
+          $d = "dist/$name"
+          New-Item -ItemType Directory -Force $d | Out-Null
+          Copy-Item src-tauri/target/release/ff-montage.exe "$d/FF Montage.exe"
+          ./tools/fetch-ffmpeg.ps1 -Dest "$d/ffmpeg"
+          Copy-Item LICENSE, README.md $d
+          Set-Content "$d/ПРОЧТИ.txt" -Encoding utf8 -Value @(
+            'FF Montage — запуск: двойной щелчок по «FF Montage.exe».',
+            'При первом запуске программа спросит, где хранить кэш, готовые видео и проекты.',
+            'FFmpeg уже внутри (папка ffmpeg). Обновление: меню ☰ → «Проверить обновления…».',
+            'Если Windows пишет «Система Windows защитила ваш компьютер» — «Подробнее» → «Выполнить в любом случае».')
+          Compress-Archive -Path $d -DestinationPath "dist/$name.zip"
+      - name: Архив (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          name="FF-Montage-${TAG#v}-linux-x64"
+          d="dist/$name"
+          mkdir -p "$d"
+          cp src-tauri/target/release/ff-montage "$d/ff-montage"
+          bash tools/fetch-ffmpeg.sh "$d/ffmpeg"
+          cp LICENSE README.md "$d/"
+          printf 'FF Montage — запуск: ./ff-montage\nНужна библиотека WebKitGTK 4.1 (Ubuntu 22.04+: sudo apt install libwebkit2gtk-4.1-0).\n' > "$d/README.txt"
+          tar -czf "dist/$name.tar.gz" -C dist "$name"
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG }}
+          name: FF Montage ${{ env.TAG }}
+          files: |
+            dist/*.zip
+            dist/*.tar.gz
+          body: |
+            **Windows:** скачайте `FF-Montage-…-win-x64.zip`, распакуйте и запустите `FF Montage.exe`. Ничего ставить не нужно — FFmpeg уже внутри.
+            **Linux:** `FF-Montage-…-linux-x64.tar.gz`, затем `./ff-montage` (нужен WebKitGTK 4.1).
+
+            FFmpeg — сборка [BtbN](https://github.com/BtbN/FFmpeg-Builds) под лицензией GPL, исходники: https://github.com/FFmpeg/FFmpeg

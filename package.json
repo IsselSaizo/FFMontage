@@ -1,16 +1,12 @@
 {
   "name": "ffmontage",
   "productName": "FF Montage",
-  "version": "0.2.0",
-  "description": "Видеоредактор в стиле Clipchamp с FFmpeg под капотом",
-  "main": "src/main/main.js",
+  "version": "0.3.0",
+  "description": "Видеоредактор в стиле Clipchamp с FFmpeg под капотом (Tauri)",
   "private": true,
   "scripts": {
-    "start": "electron .",
+    "build": "cd src-tauri && cargo build --release",
     "test:engine": "node tests/engine-test.js",
     "test:mcp": "node tests/mcp-test.js"
-  },
-  "devDependencies": {
-    "electron": "^45.0.0"
   }
 }

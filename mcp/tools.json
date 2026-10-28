@@ -1,0 +1,650 @@
+{
+ "instructions": "FF Montage is a desktop video editor; these tools edit the project open in its window (the user sees every change and can undo with Ctrl+Z).\nModel: one main video track (clips in time order, gaps allowed, transitions only between adjacent clips) plus audio tracks for music/voice. All times are seconds.\nWorkflow: get_project → import_media (absolute paths) → add_clip (track \"video\"/\"audio\") → trim/move with update_clip, split_clip, delete_clip (ripple), close_gaps → set_transition (clip_id = second clip of the cut) → get_frame / detect_silence to inspect → save_project → export_video, then export_status with wait.\nIds come from get_project; re-read it after edits because splitting creates new clip ids.\nDo not use force=true in new_project/open_project without asking the user.",
+ "tools": [
+  {
+   "name": "get_project",
+   "title": "Get project",
+   "description": "Return the whole project state: media library (ids, paths, durations, resolution, fps), the main video track (clips with timeline start/end and source in/out, volume, fades, transitions, reversed/freeze flags), audio tracks, gaps, playhead, undo/redo availability and export status. All times are in seconds. Call this first and after edits.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {}
+   },
+   "annotations": {
+    "readOnlyHint": true,
+    "destructiveHint": false,
+    "openWorldHint": false
+   }
+  },
+  {
+   "name": "import_media",
+   "title": "Import media files",
+   "description": "Add video/audio files from disk to the project media library (does not put them on the timeline). Paths must be absolute. Returns media ids with duration (seconds), resolution, fps and whether the file has video/audio. Importing the same file twice returns the existing id.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "paths": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      },
+      "description": "Absolute file paths"
+     }
+    },
+    "required": [
+     "paths"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": false,
+    "idempotentHint": false,
+    "openWorldHint": false
+   }
+  },
+  {
+   "name": "add_clip",
+   "title": "Add clip to timeline",
+   "description": "Place a media file (or a part of it) on the timeline. track \"video\" = the single main video track (the clip also carries the file's own sound); track \"audio\" = an audio track (music, voice-over). Video without start is appended to the end of the video track. If start is given and the place is occupied, the clip snaps to a nearby gap or is inserted before/after the clip it hits (later clips move right); with insert=true it is placed exactly at start and later clips are pushed right. Audio without start goes to 0 s; if the chosen track is busy, a free or new track is used. source_in/source_out select the fragment of the file (seconds, default whole file).",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "media_id": {
+      "type": "string",
+      "description": "Media id from import_media/get_project"
+     },
+     "track": {
+      "type": "string",
+      "enum": [
+       "video",
+       "audio"
+      ],
+      "description": "Target track kind"
+     },
+     "start": {
+      "type": "number",
+      "description": "Timeline position of the clip start, seconds",
+      "minimum": 0
+     },
+     "source_in": {
+      "type": "number",
+      "description": "Fragment start inside the file, seconds (default 0)",
+      "minimum": 0
+     },
+     "source_out": {
+      "type": "number",
+      "description": "Fragment end inside the file, seconds (default = file duration)",
+      "minimum": 0
+     },
+     "audio_track_id": {
+      "type": "string",
+      "description": "For track \"audio\": audio track id from get_project, or \"new\" for a new track"
+     },
+     "insert": {
+      "type": "boolean",
+      "description": "Video only: place exactly at start and push later clips right (default false)"
+     }
+    },
+    "required": [
+     "media_id",
+     "track"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": false,
+    "idempotentHint": false,
+    "openWorldHint": false
+   }
+  },
+  {
+   "name": "update_clip",
+   "title": "Update clip",
+   "description": "Change a clip: trim (source_in/source_out or duration, seconds), move (start, seconds; video clips push the following clips right if needed, unless the place is free), volume (0..2, 1 = original), muted, fades (fade_in/fade_out, seconds), name, or move an audio clip to another audio track (audio_track_id or \"new\"). Trimming leaves a gap — use close_gaps to remove it. For reversed clips source_in/source_out are in the ORIGINAL file time and must stay within the reversed fragment.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "clip_id": {
+      "type": "string",
+      "description": "Clip id"
+     },
+     "start": {
+      "type": "number",
+      "description": "New timeline start, seconds",
+      "minimum": 0
+     },
+     "source_in": {
+      "type": "number",
+      "description": "New fragment start inside the file, seconds",
+      "minimum": 0
+     },
+     "source_out": {
+      "type": "number",
+      "description": "New fragment end inside the file, seconds",
+      "minimum": 0
+     },
+     "duration": {
+      "type": "number",
+      "description": "New clip length, seconds (changes source_out; useful for freeze frames)",
+      "minimum": 0.1
+     },
+     "volume": {
+      "type": "number",
+      "description": "Clip volume 0..2 (1 = original, 0 = silent)",
+      "minimum": 0,
+      "maximum": 2
+     },
+     "muted": {
+      "type": "boolean",
+      "description": "Mute the clip sound"
+     },
+     "fade_in": {
+      "type": "number",
+      "description": "Fade-in length, seconds (0 = none)",
+      "minimum": 0
+     },
+     "fade_out": {
+      "type": "number",
+      "description": "Fade-out length, seconds (0 = none)",
+      "minimum": 0
+     },
+     "name": {
+      "type": "string",
+      "description": "Display name (\"\" = file name)"
+     },
+     "audio_track_id": {
+      "type": "string",
+      "description": "Audio clips only: move to this audio track id, or \"new\""
+     },
+     "insert": {
+      "type": "boolean",
+      "description": "Video only, with start: place exactly at start and push later clips right"
+     }
+    },
+    "required": [
+     "clip_id"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": false,
+    "idempotentHint": false,
+    "openWorldHint": false
+   }
+  },
+  {
+   "name": "split_clip",
+   "title": "Split clip",
+   "description": "Cut a clip into two at a timeline time (seconds). Without clip_id the video clip under that time is split; pass clip_id to split an audio clip. The cut must be at least 0.1 s from the clip edges. Returns both halves.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "time": {
+      "type": "number",
+      "description": "Timeline time of the cut, seconds",
+      "minimum": 0
+     },
+     "clip_id": {
+      "type": "string",
+      "description": "Clip to split (optional)"
+     }
+    },
+    "required": [
+     "time"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": false,
+    "idempotentHint": false,
+    "openWorldHint": false
+   }
+  },
+  {
+   "name": "delete_clip",
+   "title": "Delete clip",
+   "description": "Remove a clip from the timeline (the file stays in the media library). ripple=true shifts the following clips of the same track left by the clip length, so no gap remains.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "clip_id": {
+      "type": "string",
+      "description": "Clip id"
+     },
+     "ripple": {
+      "type": "boolean",
+      "description": "Close the resulting gap (default false)"
+     }
+    },
+    "required": [
+     "clip_id"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": true,
+    "idempotentHint": false,
+    "openWorldHint": false
+   }
+  },
+  {
+   "name": "reverse_clip",
+   "title": "Reverse clip",
+   "description": "Toggle reverse playback of a video clip fragment (plays backwards). FFmpeg renders the reversed fragment, which may take a while for long clips. Calling again restores normal direction.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "clip_id": {
+      "type": "string",
+      "description": "Video clip id"
+     }
+    },
+    "required": [
+     "clip_id"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": false,
+    "idempotentHint": false,
+    "openWorldHint": false
+   }
+  },
+  {
+   "name": "freeze_frame",
+   "title": "Freeze frame",
+   "description": "Insert a still frame of the video at a timeline time: the clip is split there, a freeze-frame clip of the given duration is inserted and everything to the right moves right by that duration.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "time": {
+      "type": "number",
+      "description": "Timeline time, seconds (default: playhead)",
+      "minimum": 0
+     },
+     "duration": {
+      "type": "number",
+      "description": "Freeze length, seconds (default 3)",
+      "minimum": 0.1
+     }
+    }
+   },
+   "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": false,
+    "idempotentHint": false,
+    "openWorldHint": false
+   }
+  },
+  {
+   "name": "set_transition",
+   "title": "Set transition",
+   "description": "Set the transition between two adjacent video clips. clip_id is the SECOND clip of the junction (the one the transition leads into); it must start exactly where the previous clip ends (no gap — use close_gaps first). type: one of fade, fadeblack, fadewhite, wipeleft, wiperight, wipeup, wipedown, smoothleft, smoothright, smoothup, smoothdown, slideleft, slideright, slideup, slidedown, circleopen, circleclose, zoomin, hblur, blinds, or \"none\" to remove. duration in seconds (0.1..3, default 0.5; limited by clip lengths). The transition is centred on the cut and does not change the total length.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "clip_id": {
+      "type": "string",
+      "description": "Id of the second clip of the junction"
+     },
+     "type": {
+      "type": "string",
+      "enum": [
+       "fade",
+       "fadeblack",
+       "fadewhite",
+       "wipeleft",
+       "wiperight",
+       "wipeup",
+       "wipedown",
+       "smoothleft",
+       "smoothright",
+       "smoothup",
+       "smoothdown",
+       "slideleft",
+       "slideright",
+       "slideup",
+       "slidedown",
+       "circleopen",
+       "circleclose",
+       "zoomin",
+       "hblur",
+       "blinds",
+       "none"
+      ],
+      "description": "Transition id or \"none\""
+     },
+     "duration": {
+      "type": "number",
+      "description": "Transition length, seconds (0.1..3)",
+      "minimum": 0.1,
+      "maximum": 3
+     }
+    },
+    "required": [
+     "clip_id",
+     "type"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": false,
+    "idempotentHint": false,
+    "openWorldHint": false
+   }
+  },
+  {
+   "name": "close_gaps",
+   "title": "Close gaps",
+   "description": "Remove empty space on a track by shifting clips left. track: \"video\" or an audio track id. With time (seconds) only the gap containing that time is closed; otherwise all gaps on the track (including the one at the start). Other tracks are not moved.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "track": {
+      "type": "string",
+      "description": "\"video\" or audio track id"
+     },
+     "time": {
+      "type": "number",
+      "description": "A time inside the gap to close, seconds",
+      "minimum": 0
+     }
+    },
+    "required": [
+     "track"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": false,
+    "idempotentHint": false,
+    "openWorldHint": false
+   }
+  },
+  {
+   "name": "undo",
+   "title": "Undo",
+   "description": "Undo the last edit (same as Ctrl+Z in the app).",
+   "inputSchema": {
+    "type": "object",
+    "properties": {}
+   },
+   "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": false,
+    "idempotentHint": false,
+    "openWorldHint": false
+   }
+  },
+  {
+   "name": "redo",
+   "title": "Redo",
+   "description": "Redo the last undone edit (same as Ctrl+Y).",
+   "inputSchema": {
+    "type": "object",
+    "properties": {}
+   },
+   "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": false,
+    "idempotentHint": false,
+    "openWorldHint": false
+   }
+  },
+  {
+   "name": "set_playhead",
+   "title": "Set playhead",
+   "description": "Move the playhead (preview position) to a timeline time in seconds, so the user sees that moment.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "time": {
+      "type": "number",
+      "description": "Timeline time, seconds",
+      "minimum": 0
+     }
+    },
+    "required": [
+     "time"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": false,
+    "idempotentHint": true,
+    "openWorldHint": false
+   }
+  },
+  {
+   "name": "new_project",
+   "title": "New project",
+   "description": "Start a new empty project. Fails if the current project has unsaved changes unless force=true (ask the user before forcing; or save_project first).",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "name": {
+      "type": "string",
+      "description": "Project name"
+     },
+     "force": {
+      "type": "boolean",
+      "description": "Discard unsaved changes"
+     }
+    }
+   },
+   "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": true,
+    "idempotentHint": false,
+    "openWorldHint": false
+   }
+  },
+  {
+   "name": "open_project",
+   "title": "Open project",
+   "description": "Open a saved .ffproj project file (absolute path). Fails if the current project has unsaved changes unless force=true.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "path": {
+      "type": "string",
+      "description": "Absolute path to .ffproj"
+     },
+     "force": {
+      "type": "boolean",
+      "description": "Discard unsaved changes"
+     }
+    },
+    "required": [
+     "path"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": true,
+    "idempotentHint": false,
+    "openWorldHint": false
+   }
+  },
+  {
+   "name": "save_project",
+   "title": "Save project",
+   "description": "Save the project as a .ffproj file. Without path: saves to the current file, or to the projects folder with the project name if it was never saved. Returns the path.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "path": {
+      "type": "string",
+      "description": "Absolute path (.ffproj is appended if missing)"
+     }
+    }
+   },
+   "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": false,
+    "idempotentHint": false,
+    "openWorldHint": false
+   }
+  },
+  {
+   "name": "export_video",
+   "title": "Export video",
+   "description": "Render the timeline to an MP4 file in the background and return immediately; poll export_status. codec: av1 (smallest, default), hevc, h264 (most compatible); NVIDIA GPU is used when available. quality: high (default), medium, compact. resolution: source (default) or 2160/1440/1080/720 (height, keeps aspect). fps: frames per second (default: as source). Without path the file goes to the output folder named after the project.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "path": {
+      "type": "string",
+      "description": "Absolute output path (.mp4 is appended if missing); existing file is replaced"
+     },
+     "codec": {
+      "type": "string",
+      "enum": [
+       "av1",
+       "hevc",
+       "h264"
+      ],
+      "description": "Video codec"
+     },
+     "quality": {
+      "type": "string",
+      "enum": [
+       "high",
+       "medium",
+       "compact"
+      ],
+      "description": "Quality / size trade-off"
+     },
+     "resolution": {
+      "type": "string",
+      "enum": [
+       "source",
+       "2160",
+       "1440",
+       "1080",
+       "720"
+      ],
+      "description": "Output height or \"source\""
+     },
+     "fps": {
+      "type": "number",
+      "description": "Output frame rate (e.g. 30, 60)",
+      "minimum": 1,
+      "maximum": 240
+     }
+    }
+   },
+   "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": false,
+    "idempotentHint": false,
+    "openWorldHint": false
+   }
+  },
+  {
+   "name": "export_status",
+   "title": "Export status",
+   "description": "State of the current/last export: idle, running (fraction 0..1, eta seconds), done (output path, size), error or cancelled. wait (seconds, up to 120) blocks until the export finishes or the time passes, to avoid frequent polling.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "wait": {
+      "type": "number",
+      "description": "Wait up to N seconds for completion (0..120)",
+      "minimum": 0,
+      "maximum": 120
+     }
+    }
+   },
+   "annotations": {
+    "readOnlyHint": true,
+    "destructiveHint": false,
+    "openWorldHint": false
+   }
+  },
+  {
+   "name": "cancel_export",
+   "title": "Cancel export",
+   "description": "Stop the running export (the partial file is deleted).",
+   "inputSchema": {
+    "type": "object",
+    "properties": {}
+   },
+   "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": true,
+    "idempotentHint": false,
+    "openWorldHint": false
+   }
+  },
+  {
+   "name": "get_frame",
+   "title": "Get frame",
+   "description": "Look at the video: returns a JPEG image of one frame. Either time (timeline seconds; shows the source frame of the video clip there, without fades/transitions; in a gap the result is a black frame) or media_id + source_time (seconds inside the file). width: image width in pixels (default 640, max 1920).",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "time": {
+      "type": "number",
+      "description": "Timeline time, seconds",
+      "minimum": 0
+     },
+     "media_id": {
+      "type": "string",
+      "description": "Media id (instead of time)"
+     },
+     "source_time": {
+      "type": "number",
+      "description": "Time inside the media file, seconds (with media_id)",
+      "minimum": 0
+     },
+     "width": {
+      "type": "number",
+      "description": "Image width, pixels (64..1920, default 640)",
+      "minimum": 64,
+      "maximum": 1920
+     }
+    }
+   },
+   "annotations": {
+    "readOnlyHint": true,
+    "destructiveHint": false,
+    "openWorldHint": false
+   }
+  },
+  {
+   "name": "detect_silence",
+   "title": "Detect silence",
+   "description": "Find quiet parts of the sound (pauses in speech, silence) with FFmpeg silencedetect. Give media_id (times in the file) or clip_id (only inside the clip fragment; also returns timeline times). threshold_db: loudness below which is silence (default -35 dB; -50 stricter, -25 looser). min_duration: shortest pause to report, seconds (default 0.5).",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "media_id": {
+      "type": "string",
+      "description": "Media id"
+     },
+     "clip_id": {
+      "type": "string",
+      "description": "Clip id (instead of media_id)"
+     },
+     "threshold_db": {
+      "type": "number",
+      "description": "Silence threshold, dB (default -35)",
+      "minimum": -90,
+      "maximum": 0
+     },
+     "min_duration": {
+      "type": "number",
+      "description": "Minimum silence length, seconds (default 0.5)",
+      "minimum": 0.05,
+      "maximum": 60
+     }
+    }
+   },
+   "annotations": {
+    "readOnlyHint": true,
+    "destructiveHint": false,
+    "openWorldHint": false
+   }
+  }
+ ]
+}

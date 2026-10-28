@@ -12,7 +12,6 @@ const net = require('net');
 const { spawn } = require('child_process');
 
 const APP_DIR = path.resolve(__dirname, '..');
-const SERVER = path.join(APP_DIR, 'mcp', 'ff-montage-mcp.js');
 
 // Папки: рядом с тестовыми файлами engine-test (в кэше из основного config.json)
 function realCacheDir() {
@@ -74,12 +73,13 @@ function prepareDirs() {
   }, null, 2));
 }
 
-// Чем запускать MCP-сервер: так же, как предлагает окно «ИИ-ассистент» — electron в режиме node
+// Чем запускать MCP-сервер: так же, как предлагает окно «ИИ-ассистент» — сама программа с ключом --mcp
 function serverCommand() {
-  const exe = process.platform === 'win32' ? 'electron.exe' : 'electron';
-  const el = [path.join(APP_DIR, 'vendor', 'electron', exe), path.join(APP_DIR, 'node_modules', 'electron', 'dist', exe)].find((p) => fs.existsSync(p));
-  if (process.env.MCP_TEST_NODE || !el) return process.execPath;
-  return el;
+  const name = process.platform === 'win32' ? 'ff-montage.exe' : 'ff-montage';
+  const c = [process.env.FFM_EXE, path.join(APP_DIR, 'src-tauri', 'target', 'release', name), path.join(APP_DIR, 'src-tauri', 'target', 'debug', name)].filter(Boolean);
+  const exe = c.find((p) => fs.existsSync(p));
+  if (!exe) { console.error('Программа не собрана (cargo build --release в src-tauri)'); process.exit(2); }
+  return exe;
 }
 
 // ---------------------------------------------------------------------------
@@ -88,11 +88,11 @@ function serverCommand() {
 class Client {
   constructor() {
     const cmd = serverCommand();
-    console.log(`MCP-сервер: ${path.basename(cmd)} ${path.relative(APP_DIR, SERVER)}`);
-    this.proc = spawn(cmd, [SERVER], {
+    console.log(`MCP-сервер: ${path.basename(cmd)} --mcp`);
+    this.proc = spawn(cmd, ['--mcp'], {
       cwd: BASE,
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', FFM_CONFIG: CONFIG, FFM_ALLOW_QUIT: '1' },
+      env: { ...process.env, FFM_CONFIG: CONFIG, FFM_ALLOW_QUIT: '1' },
       windowsHide: true,
     });
     this.seq = 0;
@@ -342,7 +342,7 @@ async function main() {
   }
   // Программа не настроена (нет config.json) → понятная ошибка, приложение не запускается
   {
-    const p = spawn(process.execPath, [SERVER], { stdio: ['pipe', 'pipe', 'ignore'], env: { ...process.env, FFM_CONFIG: path.join(BASE, 'no-such-config.json'), ELECTRON_RUN_AS_NODE: '1' } });
+    const p = spawn(serverCommand(), ['--mcp'], { stdio: ['pipe', 'pipe', 'ignore'], env: { ...process.env, FFM_CONFIG: path.join(BASE, 'no-such-config.json') } });
     let out = '';
     p.stdout.on('data', (d) => { out += d; });
     p.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'get_project', arguments: {} } })}\n`);

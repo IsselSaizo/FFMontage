@@ -6,7 +6,7 @@ $ErrorActionPreference = 'Stop'
 $App = Split-Path -Parent $PSScriptRoot
 $cfg = Get-Content (Join-Path $App 'config.json') -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json
 $src = if ($cfg) { Join-Path $cfg.cacheDir 'tmp\engine-test' } else { Join-Path $App '.test-cache\tmp\engine-test' }
-$T = Join-Path $env:TEMP 'ffmontage-uitest'
+$T = Join-Path $App '.test-cache\tmp\uitest'
 if ($cfg) { $T = Join-Path $cfg.cacheDir 'tmp\uitest' }
 New-Item -ItemType Directory -Force "$T\cache\tmp\engine-test", "$T\out", "$T\proj" | Out-Null
 foreach ($f in 'a_av1_1440p60.mp4', 'b_h264_1080p30.mp4', 'c_music.mp3', 'd_old.avi') {
@@ -17,13 +17,12 @@ $json = @{ version = 1; cacheDir = "$T\cache"; outputDir = "$T\out"; projectsDir
 [System.IO.File]::WriteAllText("$T\config.json", $json, (New-Object System.Text.UTF8Encoding $false))
 if (-not $KeepAutosave) { Remove-Item "$T\cache\app\autosave.ffproj" -ErrorAction SilentlyContinue }
 Remove-Item "$T\$Test.json" -ErrorAction SilentlyContinue
-Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
 $env:FFM_CONFIG = "$T\config.json"
 $env:FFM_SELFTEST = Join-Path $App "tests\$Test.js"
 $env:FFM_SHOT = "$T\$Test.png"
-$el = Join-Path $App 'vendor\electron\electron.exe'
-if (-not (Test-Path $el)) { $el = Join-Path $App 'node_modules\electron\dist\electron.exe' }
-$p = Start-Process -FilePath $el -ArgumentList "`"$App`"" -PassThru
+$exe = if ($env:FFM_EXE) { $env:FFM_EXE } else { Join-Path $App 'src-tauri\target\release\ff-montage.exe' }
+if (-not (Test-Path $exe)) { $exe = Join-Path $App 'FF Montage.exe' }
+$p = Start-Process -FilePath $exe -WorkingDirectory $App -PassThru
 if (-not $p.WaitForExit($TimeoutSec * 1000)) { $p.Kill(); Write-Output 'TIMEOUT' }
 $r = Get-Content "$T\$Test.json" -Encoding UTF8 -Raw | ConvertFrom-Json
 $r.log

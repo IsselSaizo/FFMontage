@@ -1,0 +1,79 @@
+# Проверка при каждом push / pull request: сборка, тест движка (без видеокарты — на процессоре),
+# на Windows ещё автотест интерфейса и ИИ-ассистента (MCP).
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      FFM_NO_GPU: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: FFmpeg
+        shell: pwsh
+        run: ./tools/fetch-ffmpeg.ps1
+      - name: Сборка
+        working-directory: src-tauri
+        run: cargo build --release --locked
+      - name: Тест движка (процессор, без NVENC)
+        run: node tests/engine-test.js
+      - name: Автотест интерфейса
+        shell: pwsh
+        run: |
+          ./tests/run-ui.ps1 ui-selftest3 -TimeoutSec 300 | Tee-Object -Variable out
+          if ($out -match 'FAIL|ERROR|TIMEOUT') { exit 1 }
+      - name: Тест ИИ-ассистента (MCP)
+        run: node tests/mcp-test.js
+      - name: Журналы
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-windows
+          path: |
+            .test-cache/**/logs/**
+            .test-cache/tmp/uitest/*.png
+            .test-cache/tmp/uitest/*.json
+          if-no-files-found: ignore
+
+  linux:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    env:
+      FFM_NO_GPU: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Библиотеки окна
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: FFmpeg
+        run: bash tools/fetch-ffmpeg.sh
+      - name: Сборка
+        working-directory: src-tauri
+        run: cargo build --release --locked
+      - name: Тест движка (процессор)
+        run: node tests/engine-test.js

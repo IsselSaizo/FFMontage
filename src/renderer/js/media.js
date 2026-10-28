@@ -175,16 +175,47 @@ function card(m) {
   const details = [m.hasVideo ? `${m.width}×${m.height}` : null, m.hasVideo && m.fps ? `${Math.round(m.fps)} fps` : null,
     (m.vcodec || m.acodec || '').toUpperCase(), fmtBytes(m.size)].filter(Boolean).join(' · ');
   const el = h('div', {
-    class: `media-card${rt.missing ? ' missing' : ''}`, draggable: rt.missing ? 'false' : 'true',
+    class: `media-card${rt.missing ? ' missing' : ''}`,
     title: `${m.path}\n${details}`,
     ondblclick: () => onAddToTimeline(m.id),
   }, thumb, h('div', { class: 'media-name' }, m.name), h('div', { class: 'media-meta' }, details));
-  el.addEventListener('dragstart', (e) => {
-    e.dataTransfer.setData('application/x-ffm-media', m.id);
-    e.dataTransfer.effectAllowed = 'copy';
-    document.body.classList.add('dragging-media');
-    window.__ffmDragMedia = m.id;
-  });
-  el.addEventListener('dragend', () => { document.body.classList.remove('dragging-media'); window.__ffmDragMedia = null; });
+  if (!rt.missing) el.addEventListener('pointerdown', (e) => startMediaDrag(e, m, rt));
   return el;
+}
+
+// Перетаскивание карточки на таймлайн (указателем: в Tauri HTML5 drag&drop занят файлами из Проводника)
+function startMediaDrag(e, m, rt) {
+  if (e.button !== 0 || e.target.closest('button')) return;
+  const x0 = e.clientX; const y0 = e.clientY;
+  let ghost = null;
+  const tl = () => window.__ffm && window.__ffm.timeline;
+  const move = (ev) => {
+    if (!ghost) {
+      if (Math.hypot(ev.clientX - x0, ev.clientY - y0) < 5) return;
+      const img = m.hasVideo && rt.thumbs && rt.thumbs.urls.length ? h('img', { src: rt.thumbs.urls[Math.floor(rt.thumbs.urls.length * 0.15)] }) : null;
+      ghost = h('div', { class: 'media-ghost' }, img, h('span', {}, m.name));
+      document.body.append(ghost);
+      document.body.classList.add('dragging-media');
+      window.__ffmDragMedia = m.id;
+    }
+    ghost.style.left = `${ev.clientX}px`;
+    ghost.style.top = `${ev.clientY}px`;
+    if (tl()) tl().dragHover(ev.clientX, ev.clientY, m.id);
+  };
+  const up = (ev) => {
+    window.removeEventListener('pointermove', move);
+    window.removeEventListener('pointerup', up);
+    window.removeEventListener('pointercancel', up);
+    if (!ghost) return;
+    ghost.remove();
+    document.body.classList.remove('dragging-media');
+    window.__ffmDragMedia = null;
+    if (tl()) {
+      if (ev.type === 'pointerup') tl().dropAt(ev.clientX, ev.clientY, { ids: [m.id] });
+      else tl().dragLeave();
+    }
+  };
+  window.addEventListener('pointermove', move);
+  window.addEventListener('pointerup', up);
+  window.addEventListener('pointercancel', up);
 }

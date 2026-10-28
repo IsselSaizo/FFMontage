@@ -64,11 +64,26 @@ kbd {
 /* ---------- Верхняя панель ---------- */
 #topbar {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 0 150px 0 12px; background: #16161b; border-bottom: 1px solid var(--line);
-  -webkit-app-region: drag;
+  padding: 0 0 0 12px; background: #16161b; border-bottom: 1px solid var(--line);
 }
-#topbar button, #topbar input, .dropdown { -webkit-app-region: no-drag; }
-.tb-left, .tb-right { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.tb-left, .tb-right { display: flex; align-items: center; gap: 10px; min-width: 0; height: 100%; }
+.tb-drag { flex: 1; align-self: stretch; min-width: 20px; }
+.win-ctl { display: flex; align-self: stretch; margin-left: 6px; }
+.win-ctl button {
+  width: 46px; border: 0; background: transparent; color: var(--text-2); cursor: default;
+  display: flex; align-items: center; justify-content: center;
+}
+.win-ctl button:hover { background: var(--panel-3); color: var(--text); }
+.win-ctl button.close:hover { background: #e81123; color: #fff; }
+.win-ctl svg { width: 11px; height: 11px; }
+.update-log { max-height: 220px; overflow: auto; font-size: 12px; background: rgba(0,0,0,.3); padding: 8px 10px; border-radius: 8px; white-space: pre-wrap; user-select: text; }
+.media-ghost {
+  position: fixed; z-index: 300; pointer-events: none; width: 120px; border-radius: 8px; overflow: hidden;
+  opacity: .85; box-shadow: 0 10px 28px rgba(0,0,0,.5); border: 2px solid var(--accent); background: var(--panel-2);
+  transform: translate(-50%, -60%);
+}
+.media-ghost img { display: block; width: 100%; }
+.media-ghost span { display: block; padding: 4px 6px; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .logo { display: flex; }
 .app-name { font-weight: 600; font-size: 14px; letter-spacing: .2px; margin-right: 4px; }
 .project-name {
