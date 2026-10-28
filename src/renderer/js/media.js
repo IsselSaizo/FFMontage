@@ -68,12 +68,20 @@ api.onProxyProgress(({ key, fraction }) => {
   if (m) store.setRuntime(m.id, { progress: fraction });
 });
 
+// Картинка (JPG/PNG/WebP…): один кадр, клип можно растянуть на сколько угодно (до часа), по умолчанию 5 с.
+export const IMAGE_MAX = 3600;
+export const IMAGE_DEFAULT = 5;
+function normalizeInfo(info) {
+  if (info.isImage && !info.isAnimation) { info.duration = IMAGE_MAX; info.hasAudio = false; }
+  return info;
+}
+
 // Импорт файлов по путям. Возвращает id добавленных медиа.
 export async function importPaths(paths) {
   const ids = [];
   for (const p of paths) {
     try {
-      const info = await api.probe(p);
+      const info = normalizeInfo(await api.probe(p));
       if (!info.hasVideo && !info.hasAudio) { toast(`${info.name}: нет видео и звука`, 'error'); continue; }
       if (!(info.duration > 0)) { toast(`${info.name}: не удалось определить длительность`, 'error'); continue; }
       const id = store.addMedia(info);
@@ -97,7 +105,7 @@ export async function pickAndImport() {
 export async function restoreMedia() {
   store.runtime = {};
   const all = Object.values(store.project.media);
-  const keep = (m, info) => Object.assign(m, info, { id: m.id, hidden: m.hidden, derived: m.derived });
+  const keep = (m, info) => Object.assign(m, normalizeInfo(info), { id: m.id, hidden: m.hidden, derived: m.derived });
   // Сначала исходные файлы
   await Promise.all(all.filter((m) => !m.derived).map(async (m) => {
     try {
@@ -176,7 +184,7 @@ function card(m) {
   } else {
     thumb.append(h('div', { class: 'spinner' }));
   }
-  thumb.append(h('span', { class: 'badge dur' }, fmtTime(m.duration, { ms: false })));
+  thumb.append(h('span', { class: 'badge dur' }, m.isImage && !m.isAnimation ? 'фото' : m.isAnimation ? `GIF ${fmtTime(m.duration, { ms: false })}` : fmtTime(m.duration, { ms: false })));
   if (used) thumb.append(h('span', { class: 'badge used', title: 'Используется на таймлайне' }, `${used}×`));
   if (rt.status === 'proxy') {
     thumb.append(h('div', { class: 'media-progress' },

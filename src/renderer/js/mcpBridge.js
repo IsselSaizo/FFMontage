@@ -136,6 +136,8 @@ function describeClip(c, kind, track = null) {
   if (c.link) o.link = c.link;                       // видео и его звук (связаны, двигаются вместе)
   if (kind === 'video' && c.noAudio) o.sound_on_audio_track = true;
   if (kind === 'audio' && c.stream) o.audio_stream = c.stream;
+  if (kind === 'video' && Array.isArray(c.effects) && c.effects.length) o.effects = c.effects;
+  if (kind === 'video' && c.fit === 'cover') o.fit = 'cover';
   if (store.busy[c.id]) o.processing = store.busy[c.id].label;
   return o;
 }
@@ -164,6 +166,7 @@ function getProject() {
     unsaved_changes: !!store.dirty,
     duration: r3(store.duration()),
     playhead: r3(store.time),
+    aspect: store.project.aspect || 'auto', background: store.background(),
     can_undo: store.undoStack.length > 0,
     can_redo: store.redoStack.length > 0,
     media: Object.values(store.project.media).filter((m) => !m.hidden).map(describeMedia),

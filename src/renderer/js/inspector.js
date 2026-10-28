@@ -5,6 +5,7 @@ import { TRANSITIONS, transitionById, applyTransition, DEFAULT_DURATION, MIN_DUR
 import { maxTransition } from './store.js';
 import { reverseClip, freezeFrame, renameClip, changeDuration, copyClip } from './actions.js';
 import { isReversed, isFreeze } from './fx.js';
+import { EFFECTS, clipEffects } from './effects.js';
 
 const num = (x, d = 1) => String(Math.round(x * 10 ** d) / 10 ** d).replace('.', ',');
 
@@ -115,7 +116,7 @@ export function initInspector({ onSplit, onDelete }) {
       ...fadeRow('Постепенное возникновение', 'fadeIn', 'fadeOut'),
       ...fadeRow('Постепенное исчезание', 'fadeOut', 'fadeIn'),
       h('p', { class: 'muted small' }, kind === 'video'
-        ? 'Картинка проявляется из чёрного и уходит в чёрный, звук клипа — плавно. Можно тянуть кружки в углах выделенного клипа.'
+        ? 'Картинка проявляется из цвета фона (обычно чёрного) и уходит в него, звук клипа — плавно. Можно тянуть кружки в углах выделенного клипа.'
         : 'Звук плавно нарастает и затихает. Можно тянуть кружки в углах выделенного клипа.'));
     root.append(fade);
 
@@ -133,6 +134,26 @@ export function initInspector({ onSplit, onDelete }) {
       h('button', { class: 'btn ghost small', disabled: m.derived || (clip.in === 0 && Math.abs(clip.out - m.duration) < 0.001),
         onclick: () => store.setClip(clip.id, { in: 0, out: m.duration }) }, 'Исходная длина')));
     root.append(trim);
+
+    // --- Кадр и эффекты (видео) ---
+    if (kind === 'video') {
+      const fr = store.sourceFormat();
+      const sameAspect = m.width && m.height && Math.abs(m.width / m.height - fr.width / fr.height) < 0.01;
+      const fitSec = h('div', { class: 'insp-section', dataset: { section: 'frame' } }, h('h3', {}, 'Кадр'),
+        h('div', { class: 'presets' },
+          h('button', { class: `chip${clip.fit !== 'cover' ? ' on' : ''}`, id: 'fit-contain', onclick: () => store.setClip(clip.id, { fit: undefined }) }, 'Вписать целиком'),
+          h('button', { class: `chip${clip.fit === 'cover' ? ' on' : ''}`, id: 'fit-cover', onclick: () => store.setClip(clip.id, { fit: 'cover' }) }, 'Заполнить (обрезать)')),
+        h('p', { class: 'muted small' }, sameAspect
+          ? 'Пропорции клипа совпадают с форматом проекта — полей нет.'
+          : '«Вписать» — весь кадр виден, по краям поля цвета фона (настраивается в свойствах проекта). «Заполнить» — без полей, лишнее по краям обрезается.'));
+      root.append(fitSec);
+      const fxOn = clipEffects(clip);
+      root.append(h('div', { class: 'insp-section', dataset: { section: 'effects' } }, h('h3', {}, 'Эффекты'),
+        h('div', { class: 'presets' }, ...EFFECTS.map((e) => h('button', {
+          class: `chip${fxOn.includes(e.id) ? ' on' : ''}`, dataset: { fx: e.id }, onclick: () => store.toggleEffect(clip.id, e.id),
+        }, e.name))),
+        h('p', { class: 'muted small' }, 'Эффект действует на весь клип. Для части — разрежьте клип (S или лезвие B). Все эффекты с предпросмотром — во вкладке «Эффекты».')));
+    }
 
     // --- Эффекты и действия ---
     const busy = !!store.busy[clip.id];
@@ -188,8 +209,8 @@ export function initInspector({ onSplit, onDelete }) {
       applyTransition(t.id, 0.5, a, b, ov);
       let raf = null; let t0 = 0;
       const anim = (now) => { const p = ((now - t0) / 1400) % 1; applyTransition(t.id, Math.min(1, p * 1.25), a, b, ov); raf = requestAnimationFrame(anim); };
-      tile.addEventListener('mouseenter', () => { t0 = performance.now(); raf = requestAnimationFrame(anim); });
-      tile.addEventListener('mouseleave', () => { cancelAnimationFrame(raf); applyTransition(t.id, 0.5, a, b, ov); });
+      tile.addEventListener('mouseenter', () => { t0 = performance.now(); raf = requestAnimationFrame(anim); store.emit('preview-transition', { bId: clipId, type: t.id, el: tile }); });
+      tile.addEventListener('mouseleave', () => { cancelAnimationFrame(raf); applyTransition(t.id, 0.5, a, b, ov); store.emit('preview-transition', null); });
       grid.append(tile);
     }
     root.append(h('div', { class: 'insp-section' }, h('h3', {}, tr ? 'Другой переход' : 'Переходы'), grid));
@@ -222,7 +243,21 @@ export function initInspector({ onSplit, onDelete }) {
         h('dt', {}, 'Клипов'), h('dd', {}, String(nClips)),
         h('dt', {}, 'Переходов'), h('dd', {}, String(store.transitions().length)),
         h('dt', {}, 'Файлов'), h('dd', {}, String(files))),
-      h('p', { class: 'muted small' }, 'Формат проекта берётся из самого крупного видео на таймлайне. При экспорте можно выбрать другой.')));
+      h('p', { class: 'muted small' }, 'Размер кадра берётся из самого крупного видео на таймлайне (с учётом выбранных пропорций). При экспорте можно выбрать другой.')));
+
+    // Пропорции кадра и цвет фона
+    const asp = store.project.aspect || 'auto';
+    const bgc = store.background();
+    const color = h('input', { type: 'color', value: bgc, id: 'bg-color', class: 'color-input', title: 'Свой цвет фона' });
+    color.addEventListener('change', () => store.setProjectProps({ background: color.value === '#000000' ? null : color.value }));
+    root.append(h('div', { class: 'insp-section', dataset: { section: 'format' } }, h('h3', {}, 'Формат кадра'),
+      h('div', { class: 'presets' }, ...[['auto', 'Как у видео'], ['16:9', '16:9'], ['9:16', '9:16 (вертикальное)'], ['1:1', '1:1'], ['3:4', '3:4']].map(([id, label]) =>
+        h('button', { class: `chip${asp === id ? ' on' : ''}`, dataset: { aspect: id }, onclick: () => store.setProjectProps({ aspect: id }) }, label))),
+      h('h3', {}, 'Фон'),
+      h('div', { class: 'row gap' }, color,
+        h('div', { class: 'presets' }, ...[['#000000', 'Чёрный'], ['#ffffff', 'Белый'], ['#1f1f24', 'Тёмно-серый'], ['#00b140', 'Зелёный (хромакей)']].map(([c, n]) =>
+          h('button', { class: `swatch${bgc === c ? ' on' : ''}`, title: n, style: { background: c }, onclick: () => store.setProjectProps({ background: c === '#000000' ? null : c }) })))),
+      h('p', { class: 'muted small' }, 'Фон виден по краям вписанных клипов, в пустотах между клипами и при затухании.')));
     root.append(h('div', { class: 'insp-section' }, h('h3', {}, 'Подсказки'),
       h('p', { class: 'muted small' }, 'Правая кнопка мыши на клипе — меню действий. «+» на стыке клипов — переход. Корзина на пустом месте дорожки убирает пустоту.')));
     root.append(h('div', { class: 'insp-section' }, h('h3', {}, 'Горячие клавиши'),

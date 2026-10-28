@@ -37,7 +37,7 @@ jobs:
       - name: Автотест интерфейса
         shell: pwsh
         run: |
-          foreach ($t in 'ui-selftest3', 'ui-selftest4') {
+          foreach ($t in 'ui-selftest3', 'ui-selftest4', 'ui-selftest5') {
             ./tests/run-ui.ps1 $t -TimeoutSec 300 | Tee-Object -Variable out
             if ($out -match 'FAIL|ERROR|TIMEOUT') { exit 1 }
           }

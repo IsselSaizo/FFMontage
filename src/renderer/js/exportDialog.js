@@ -36,10 +36,13 @@ export async function openExport() {
   const prefs = loadPrefs();
   const aspect = src.width / src.height;
   const resOptions = [{ id: 'source', label: `Как в исходнике — ${src.width}×${src.height}`, w: src.width, h: src.height }];
-  for (const hh of [2160, 1440, 1080, 720]) {
-    if (hh === src.height) continue;
-    const w = even(hh * aspect);
-    resOptions.push({ id: String(hh), label: `${hh}p — ${w}×${hh}${hh > src.height ? ' (увеличение)' : ''}`, w, h: hh });
+  // «1080p» — по короткой стороне кадра (для вертикального 9:16 это 1080×1920)
+  const short = Math.min(src.width, src.height);
+  for (const s of [2160, 1440, 1080, 720]) {
+    if (s === short) continue;
+    const w = aspect >= 1 ? even(s * aspect) : s;
+    const hh = aspect >= 1 ? s : even(s / aspect);
+    resOptions.push({ id: String(s), label: `${s}p — ${w}×${hh}${s > short ? ' (увеличение)' : ''}`, w, h: hh });
   }
   const fpsOptions = [{ id: 'source', label: `Как в исходнике — ${src.fps} fps`, v: src.fps }];
   for (const f of [60, 30]) if (Math.abs(f - src.fps) > 0.01) fpsOptions.push({ id: String(f), label: `${f} fps`, v: f });

@@ -6,6 +6,10 @@ export const MIN_CLIP = 0.1;   // минимальная длина клипа, 
 export const ADJ = 0.002;      // допуск «стоят впритык», с
 export const MAX_FADE = 10;    // максимум затухания, с
 
+// Форматы кадра проекта: ширина / высота ('auto' — как у видео)
+export const ASPECTS = { '16:9': 16 / 9, '9:16': 9 / 16, '1:1': 1, '3:4': 3 / 4, '4:3': 4 / 3 };
+const even2 = (x) => Math.max(2, Math.round(x / 2) * 2);
+
 const len = (c) => c.out - c.in;
 const end = (c) => c.start + c.out - c.in;
 const byStart = (a, b) => a.start - b.start;
@@ -384,9 +388,41 @@ class Store {
     if (!list.length) list = Object.values(this.project.media).filter((m) => m.hasVideo);
     if (!list.length) return { width: 1920, height: 1080, fps: 30, fromClip: false };
     const best = list.reduce((a, b) => (b.width * b.height > a.width * a.height ? b : a));
-    const fps = Math.max(...list.map((m) => snapFps(m.fps)));
-    return { width: best.width, height: best.height, fps, fromClip: true };
+    const vids = list.filter((m) => !m.isImage || m.isAnimation);
+    const fps = vids.length ? Math.max(...vids.map((m) => snapFps(m.fps))) : 30;
+    // Формат кадра проекта (16:9, 9:16, 1:1, 3:4): короткая сторона — как у самого крупного видео
+    const ar = ASPECTS[this.project.aspect];
+    if (ar) {
+      const s = Math.min(best.width, best.height);
+      const even = (x) => Math.max(2, Math.round(x / 2) * 2);
+      const [w, hh] = ar >= 1 ? [even(s * ar), s] : [s, even(s / ar)];
+      return { width: w, height: hh, fps, fromClip: true, aspect: this.project.aspect };
+    }
+    return { width: even2(best.width), height: even2(best.height), fps, fromClip: true };
   }
+
+  // Настройки проекта: aspect ('auto' | '16:9' | '9:16' | '1:1' | '3:4'), background ('#rrggbb')
+  setProjectProps(patch) {
+    this.mutate((p) => {
+      for (const [k, v] of Object.entries(patch)) { if (v === null || v === undefined || v === 'auto') delete p[k]; else p[k] = v; }
+    });
+  }
+
+  // Включить/выключить эффект у клипа
+  toggleEffect(clipId, effectId, on = null) {
+    const f = this.findClip(clipId);
+    if (!f || f.kind !== 'video') return false;
+    const cur = Array.isArray(f.clip.effects) ? f.clip.effects : [];
+    const has = cur.includes(effectId);
+    const want = on === null ? !has : on;
+    if (want === has) return true;
+    const next = want ? [...cur, effectId] : cur.filter((x) => x !== effectId);
+    this.mutate(() => { const c = this.findClip(clipId).clip; if (next.length) c.effects = next; else delete c.effects; });
+    return true;
+  }
+
+  // Цвет фона под видео (поля при «вписать», пустоты)
+  background() { return /^#[0-9a-f]{6}$/i.test(this.project.background || '') ? this.project.background : '#000000'; }
 
   // ------------------------------------------------------------------------
   // Операции монтажа
@@ -425,7 +461,8 @@ class Store {
 
   newClip(mediaId, extra = {}) {
     const m = this.media(mediaId);
-    return { id: uid('clp'), mediaId, in: 0, out: m.duration, start: 0, volume: 1, muted: false, fadeIn: 0, fadeOut: 0, ...extra };
+    const out = m.isImage && !m.isAnimation ? Math.min(5, m.duration) : m.duration;
+    return { id: uid('clp'), mediaId, in: 0, out, start: 0, volume: 1, muted: false, fadeIn: 0, fadeOut: 0, ...extra };
   }
 
   // Видео на основную дорожку: по умолчанию в конец, иначе около времени at.

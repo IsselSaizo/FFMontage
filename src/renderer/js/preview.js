@@ -6,8 +6,10 @@ import { store } from './store.js';
 import { playUrl, audioUrl } from './media.js';
 import { h, $, icon, fmtTime } from './util.js';
 import { applyTransition, resetLayer } from './transitions.js';
+import { cssEffects } from './effects.js';
 
 const EPS = 0.004;
+const isStill = (clip) => { const m = store.media(clip.mediaId); return !!(m && m.isImage && !m.isAnimation); };
 const clipEnd = (c) => c.start + c.out - c.in;
 
 // Множитель плавного появления/исчезания клипа в момент t таймлайна (0…1)
@@ -32,9 +34,12 @@ export class Preview {
       v.addEventListener('loadeddata', () => { v.failed = false; this.updateMessage(); });
       return v;
     });
+    this.imgSlots = [0, 1].map(() => h('img', { class: 'slot img', draggable: 'false', alt: '' }));
     this.overlay = h('div', { class: 'stage-overlay' });
     this.msg = h('div', { class: 'stage-msg' });
-    this.stage.append(...this.slots, this.overlay, this.msg);
+    this.stage.append(...this.slots, ...this.imgSlots, this.overlay, this.msg);
+    store.on('preview-transition', (info) => this.hoverTransition(info));
+    store.on('preview-effect', (info) => this.hoverEffect(info));
     this.frame = h('div', { class: 'stage-frame' }, this.stage);
     root.append(this.frame);
 
@@ -63,7 +68,7 @@ export class Preview {
     const ar = f.width / f.height;
     let w = aw; let hh = aw / ar;
     if (hh > ah) { hh = ah; w = ah * ar; }
-    Object.assign(this.stage.style, { width: `${Math.floor(w)}px`, height: `${Math.floor(hh)}px` });
+    Object.assign(this.stage.style, { width: `${Math.floor(w)}px`, height: `${Math.floor(hh)}px`, background: store.background() });
   }
 
   // --- звук ---
@@ -118,6 +123,15 @@ export class Preview {
   // --- что показывать в момент t ---
   // { A: {clip, mt}, B?: {clip, mt}, trans?: {type, p}, master: 'A'|'B' } или null (пустота)
   layersAt(t) {
+    const o = this.override;
+    if (o) {
+      return {
+        A: { clip: o.a, mt: o.a.out - 0.05 },
+        B: { clip: o.b, mt: o.b.in },
+        trans: { type: o.type, p: o.p },
+        master: o.p < 0.5 ? 'A' : 'B',
+      };
+    }
     for (const tr of store.transitions()) {
       if (t >= tr.from - EPS && t < tr.to - EPS) {
         return {
@@ -192,11 +206,20 @@ export class Preview {
         if (url) layers.push({ ...x, role, url });
       }
     }
-    const els = this.assign(layers);
+    // Картинки показываются в <img>, видео — в <video>
+    const vLayers = layers.filter((x) => !isStill(x.clip));
+    const iLayers = layers.filter((x) => isStill(x.clip));
+    const els = this.assign(vLayers);
     this.visible = new Set(els);
     this.master = null;
+    iLayers.forEach((x, i) => {
+      const el = this.imgSlots[i];
+      if (el.dataset.url !== x.url) { el.dataset.url = x.url; el.src = x.url; }
+      x.el = el; x.fade = fadeFactor(x.clip, t);
+    });
+    for (const s of this.imgSlots) s.classList.toggle('on', iLayers.some((x) => x.el === s));
 
-    layers.forEach((x, i) => {
+    vLayers.forEach((x, i) => {
       const el = els[i];
       const mt = this.clampMt(x.clip, x.mt);
       const before = x.mt < -0.001;                       // клип ещё не начался в файле (переход без «запаса» кадров)
@@ -234,14 +257,76 @@ export class Preview {
     }
     const A = layers.find((x) => x.role === 'A');
     const B = layers.find((x) => x.role === 'B');
+    for (const x of layers) if (x.el) x.el.style.filter = '';
     if (L && L.trans) {
       applyTransition(L.trans.type, L.trans.p, A ? A.el : null, B ? B.el : null, this.overlay, A ? A.fade : 1, B ? B.fade : 1);
     } else {
       if (A) resetLayer(A.el, A.fade);
       this.overlay.style.opacity = '0';
     }
-    this.preload(t);
+    // «Заполнить/вписать» и эффекты клипа (поверх фильтра перехода, например размытия)
+    const shownW = this.stage.clientWidth;
+    for (const x of layers) {
+      if (!x.el) continue;
+      x.el.classList.toggle('cover', x.clip.fit === 'cover');
+      const ov = this.effectOverride && this.effectOverride.clipId === x.clip.id ? { ...x.clip, effects: this.effectOverride.effects } : x.clip;
+      const tf = x.el.style.filter;
+      x.el.style.filter = cssEffects(ov, shownW, tf ? [tf] : []);
+    }
+    if (!this.override) this.preload(t);
     this.updateMessage();
+  }
+
+  // --- показ перехода/эффекта при наведении (проект не меняется) ---
+  // Переход: кадры по обе стороны стыка стоят, анимируется сам переход
+  hoverTransition(info) {
+    cancelAnimationFrame(this.hoverRaf);
+    if (!info || this.playing) {
+      if (this.override) { this.override = null; this.seek(store.time); }
+      return;
+    }
+    let bId = info.bId;
+    if (!bId) {
+      // Стык: выделенный переход, иначе ближайший к курсору
+      const s = store.selection;
+      if (s && s.kind === 'transition') bId = s.id;
+      else {
+        let best = null;
+        for (const v of store.project.videoClips) {
+          const j = store.junctionBefore(v.id);
+          if (j && (!best || Math.abs(j.seam - store.time) < Math.abs(best.seam - store.time))) best = { id: v.id, seam: j.seam };
+        }
+        bId = best && best.id;
+      }
+    }
+    const j = bId && store.junctionBefore(bId);
+    if (!j) return;
+    const d = Math.max(0.4, info.duration || (j.b.transition && j.b.transition.duration) || 0.8);
+    this.override = { a: j.a, b: j.b, type: info.type, p: 0, seam: j.seam };
+    const t0 = performance.now();
+    const loop = (now) => {
+      // Элемент, на который навели, исчез или мышь ушла (mouseleave мог не прийти) — показ закончен
+      if (info.el && (!info.el.isConnected || !info.el.matches(':hover')) && now - t0 > 150) { this.hoverTransition(null); return; }
+      const cyc = d * 1000 + 700;
+      this.override.p = Math.min(1, ((now - t0) % cyc) / (d * 1000));
+      this.present(j.seam, true);
+      this.hoverRaf = requestAnimationFrame(loop);
+    };
+    this.hoverRaf = requestAnimationFrame(loop);
+  }
+
+  // Эффект: показываем кадр клипа с эффектом (курсор внутри клипа — там, иначе середина клипа)
+  hoverEffect(info) {
+    if (!info) {
+      if (this.effectOverride) { this.effectOverride = null; this.seek(store.time); }
+      return;
+    }
+    const f = store.findClip(info.clipId);
+    if (!f || f.kind !== 'video' || this.playing) return;
+    this.effectOverride = info;
+    const c = f.clip; const e = c.start + c.out - c.in;
+    const t = store.time >= c.start && store.time < e ? store.time : (c.start + e) / 2;
+    this.present(t, true);
   }
 
   // Заранее грузим следующий клип в свободный элемент
@@ -289,6 +374,8 @@ export class Preview {
   play() {
     const dur = store.duration();
     if (dur <= 0) return;
+    cancelAnimationFrame(this.hoverRaf);
+    this.override = null; this.effectOverride = null;
     if (store.time >= dur - 0.02) store.setTime(0, 'preview');
     this.ensureCtx();
     this.playing = true;

@@ -7,6 +7,7 @@ import { importPaths, peaksOf, streamCount } from './media.js';
 import { openClipMenu, openLaneMenu, splitClip } from './actions.js';
 import { isReversed, isFreeze } from './fx.js';
 import { transitionById } from './transitions.js';
+import { clipEffects, effectById } from './effects.js';
 
 const HEAD_W = 168;
 const VIDEO_H = 76;
@@ -385,6 +386,11 @@ export class Timeline {
       });
       btn.innerHTML = icon(tr ? 'transition' : 'plus', tr ? 15 : 16);
       btn.addEventListener('pointerdown', (e) => e.stopPropagation());
+      // Наведение на переход — он проигрывается в плеере
+      if (tr) {
+        btn.addEventListener('mouseenter', () => store.emit('preview-transition', { bId: b.clip.id, type: tr.type, duration: tr.duration, el: btn }));
+        btn.addEventListener('mouseleave', () => store.emit('preview-transition', null));
+      }
       lane.append(btn);
     }
   }
@@ -423,6 +429,9 @@ export class Timeline {
     const label = h('div', { class: 'clip-label' });
     if (isReversed(c)) label.append(h('span', { class: 'ci fx', title: 'Задом наперёд', html: icon('reverse', 13) }));
     if (isFreeze(c)) label.append(h('span', { class: 'ci fx', title: 'Стоп-кадр', html: icon('freeze', 13) }));
+    const fxl = clipEffects(c);
+    if (fxl.length) label.append(h('span', { class: 'ci fxb', title: `Эффекты: ${fxl.map((x) => effectById(x).name).join(', ')}` }, 'fx'));
+    if (c.fit === 'cover') label.append(h('span', { class: 'ci fxb', title: 'Заполняет кадр (края обрезаны)' }, '▣'));
     if (c.link && store.linkedOf(c.id).length) label.append(h('span', { class: 'ci link', title: 'Связан со звуком/видео: двигаются и режутся вместе (Alt — только этот клип)', html: icon('link', 13) }));
     if (c.muted && m.hasAudio && !c.noAudio) label.append(h('span', { class: 'ci', html: icon('mute', 13) }));
     else if (m.hasAudio && !c.noAudio && Math.abs(c.volume - 1) > 0.01) label.append(h('span', { class: 'ci vol' }, `${Math.round(c.volume * 100)}%`));

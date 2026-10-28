@@ -10,6 +10,8 @@
 // Настройки экспорта:
 //   { width, height, fps, codec, quality, output }
 
+import { ffEffects } from './effects.js';
+
 export const QUALITY = {
   // Значение CQ: меньше — лучше качество и больше файл
   av1_nvenc: { high: 28, medium: 33, compact: 38 },
@@ -74,19 +76,27 @@ export function buildExport(project, settings) {
   const filters = [];
   const audio = [];
 
+  const still = (m) => m.isImage && !m.isAnimation;
   const addInput = (m, ss, dur) => {
-    inputs.push('-ss', n6(Math.max(0, ss)), '-t', n6(dur + 0.5), '-i', m.path);
+    // Картинка: один кадр, повторяется нужное время
+    if (still(m)) inputs.push('-loop', '1', '-framerate', String(F), '-t', n6(dur + 0.5), '-i', m.path);
+    else inputs.push('-ss', n6(Math.max(0, ss)), '-t', n6(dur + 0.5), '-i', m.path);
     return inputs.filter((x) => x === '-i').length - 1;
   };
 
-  const scaleChain = `fps=${F},scale=${W}:${H}:force_original_aspect_ratio=decrease:flags=lanczos,` +
-    `pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1,format=yuv420p`;
+  // Цвет фона: поля вокруг вписанного видео, пустоты, затухания
+  const bg = /^#[0-9a-f]{6}$/i.test(project.background || '') ? project.background.slice(1).toLowerCase() : '000000';
+  // fit 'cover' — заполнить кадр (лишнее обрезается), иначе вписать целиком с полями цвета фона
+  const scaleChain = (c) => (c.fit === 'cover'
+    ? `fps=${F},scale=${W}:${H}:force_original_aspect_ratio=increase:flags=lanczos,crop=${W}:${H},setsar=1,format=yuv420p`
+    : `fps=${F},scale=${W}:${H}:force_original_aspect_ratio=decrease:flags=lanczos,` +
+      `pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2:color=0x${bg},setsar=1,format=yuv420p`);
   const audioFmt = 'aresample=48000,aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo';
-  const black = (dur) => `color=c=black:s=${W}x${H}:r=${F},format=yuv420p,setsar=1,trim=duration=${n6(dur)},setpts=PTS-STARTPTS`;
+  const black = (dur) => `color=c=0x${bg}:s=${W}x${H}:r=${F},format=yuv420p,setsar=1,trim=duration=${n6(dur)},setpts=PTS-STARTPTS`;
   const vFades = (c, head, len) => {
     let s = '';
-    if (c.fadeIn > 0.001) s += `,fade=t=in:st=${n6(head)}:d=${n6(Math.min(c.fadeIn, len))}`;
-    if (c.fadeOut > 0.001) s += `,fade=t=out:st=${n6(head + len - Math.min(c.fadeOut, len))}:d=${n6(Math.min(c.fadeOut, len))}`;
+    if (c.fadeIn > 0.001) s += `,fade=t=in:st=${n6(head)}:d=${n6(Math.min(c.fadeIn, len))}:color=0x${bg}`;
+    if (c.fadeOut > 0.001) s += `,fade=t=out:st=${n6(head + len - Math.min(c.fadeOut, len))}:d=${n6(Math.min(c.fadeOut, len))}:color=0x${bg}`;
     return s;
   };
   const aFades = (c, head, len) => {
@@ -125,7 +135,7 @@ export function buildExport(project, settings) {
       const gap = c.start - cursor;
       if (gap > 0.0005) { filters.push(`${black(gap)}[g${i}]`); pieces.push(`[g${i}]`); }
     }
-    const ss = Math.max(0, c.in - h);
+    const ss = still(m) ? c.in - h : Math.max(0, c.in - h);
     const head = c.in - ss;              // сколько кадров «до» реально есть в файле
     const freezeHead = h - head;         // недостающее — повтор первого кадра
     const S = h + len + t;
@@ -133,7 +143,7 @@ export function buildExport(project, settings) {
     const hasSound = m.hasAudio && !c.noAudio && !c.muted && c.volume > 0;
     const k = (m.hasVideo || hasSound) ? addInput(m, ss, head + len + t) : -1;
     if (m.hasVideo) {
-      filters.push(`[${k}:v]setpts=PTS-STARTPTS,${scaleChain}` +
+      filters.push(`[${k}:v]setpts=PTS-STARTPTS,${ffEffects(c, m.width)}${scaleChain(c)}` +
         (freezeHead > 0.0005 ? `,tpad=start_mode=clone:start_duration=${n6(freezeHead)}` : '') +
         `,tpad=stop_mode=clone:stop_duration=${n6(t + 2)},trim=duration=${n6(S)},setpts=PTS-STARTPTS` +
         `${vFades(c, h, len)}[s${i}]`);

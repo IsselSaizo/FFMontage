@@ -52,6 +52,25 @@ kbd {
   grid-template-columns: 300px minmax(0, 1fr) 300px;
   gap: 8px; padding: 8px 8px 0;
 }
+/* Правая колонка: вкладки Свойства / Переходы / Эффекты */
+#right-side { display: flex; flex-direction: column; gap: 6px; min-height: 0; }
+#right-side > .panel { flex: 1; }
+#right-side > .panel[hidden] { display: none; }
+.rp-tabs { display: flex; gap: 2px; padding: 3px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); flex: none; }
+.rp-tab { flex: 1; border: 0; background: transparent; color: var(--text-2); font: inherit; font-size: 12.5px; padding: 6px 4px; border-radius: 6px; cursor: pointer; }
+.rp-tab:hover { color: var(--text); background: var(--panel-2); }
+.rp-tab.on { background: var(--accent-soft); color: var(--text); }
+.fx-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 8px; margin-top: 10px; }
+.fx-tile { position: relative; display: flex; flex-direction: column; gap: 5px; background: none; border: 0; padding: 0; cursor: pointer; text-align: left; font-size: 11.5px; color: var(--text-2); }
+.fx-tile:disabled { opacity: .45; cursor: default; }
+.fx-tile:not(:disabled):hover { color: var(--text); }
+.fx-sample { height: 64px; border-radius: 6px; border: 1px solid var(--line-2);
+  background: linear-gradient(135deg, #ff5a5a 0%, #ffd23f 30%, #3fd17a 55%, #3f8cff 80%, #b05cff 100%); }
+.fx-tile.on .fx-sample { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+.fx-check { position: absolute; top: 4px; right: 4px; display: flex; background: var(--accent); color: #fff; border-radius: 50%; padding: 2px; }
+.color-input { width: 38px; height: 28px; padding: 0; border: 1px solid var(--line-2); border-radius: 6px; background: none; cursor: pointer; flex: none; }
+.swatch { width: 24px; height: 24px; border-radius: 6px; border: 1px solid var(--line-2); cursor: pointer; padding: 0; }
+.swatch.on { box-shadow: 0 0 0 2px var(--accent); }
 .panel {
   background: var(--panel); border-radius: var(--radius); border: 1px solid var(--line);
   padding: 14px; overflow-y: auto; min-height: 0;
@@ -189,8 +208,9 @@ kbd {
 .stage-frame:fullscreen { background: #000; }
 .stage { position: relative; background: #000; border-radius: 6px; overflow: hidden; box-shadow: 0 6px 30px rgba(0,0,0,.4); }
 .stage-frame:fullscreen .stage { border-radius: 0; }
-.stage video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; visibility: hidden; pointer-events: none; transform-origin: 50% 50%; }
-.stage video.on { visibility: visible; }
+.stage video, .stage img.slot { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; visibility: hidden; pointer-events: none; transform-origin: 50% 50%; }
+.stage video.on, .stage img.slot.on { visibility: visible; }
+.stage .slot.cover { object-fit: cover; }
 .stage-overlay { position: absolute; inset: 0; z-index: 3; opacity: 0; pointer-events: none; background: #fff; }
 .stage-msg {
   position: absolute; inset: 0; display: none; align-items: center; justify-content: center; text-align: center;
@@ -490,3 +510,4 @@ body.is-moving .junction, body.is-trimming .junction { display: none; }
 
 body:not(.ready) #app { opacity: 0; }
 #app { transition: opacity .2s; }
+.clip .ci.fxb { font-size: 10px; font-weight: 700; color: #9fe3ff; padding: 0 2px; }

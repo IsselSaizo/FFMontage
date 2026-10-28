@@ -32,6 +32,39 @@ async function rgb(file, t) {
   return { px, mean: sum / stdout.length };
 }
 const isRed = ([r, g, b]) => r > 150 && g < 80 && b < 80;
+const isGreen = ([r, g, b]) => g > 150 && r < 80 && b < 80;
+
+// Картинки, GIF, вертикальный кадр 9:16, цвет фона, «заполнить», чёрно-белое
+async function viewTest(enc, ib) {
+  console.log('Картинки, формат кадра, фон, эффекты:');
+  const photo = await make('f_photo.png', ['-f', 'lavfi', '-i', 'color=c=red:s=640x480', '-frames:v', '1']);
+  const gif = await make('g_anim.gif', ['-f', 'lavfi', '-i', 'testsrc=size=320x240:rate=10', '-t', '2']);
+  const ip = await ff.probe(photo); const ig = await ff.probe(gif);
+  assert(ip.isImage && !ip.isAnimation && !ip.needsProxy && ip.width === 640, 'PNG — картинка');
+  assert(!ig.isImage && ig.isAnimation && ig.needsProxy && Math.abs(ig.duration - 2) < 0.2, `GIF — анимация ${ig.duration} с`);
+  const gp = await ff.proxy(ig, null, enc);
+  assert(fs.existsSync(gp), 'GIF: видео для предпросмотра');
+  const out = path.join(DIR, 'out_view.mp4');
+  const clip = (mediaId, start, inn, outT, extra = {}) => ({ mediaId, in: inn, out: outT, start, volume: 1, muted: false, fadeIn: 0, fadeOut: 0, ...extra });
+  const pr = {
+    media: { p: ip, g: ig, b: ib }, background: '#00ff00', aspect: '9:16',
+    videoClips: [clip('p', 0, 0, 2), clip('p', 2, 0, 2, { fit: 'cover' }), clip('b', 4, 0, 2, { effects: ['bw'], noAudio: true }), clip('g', 6, 0, 2)],
+    audioTracks: [],
+  };
+  await startExport(pr, { width: 720, height: 1280, fps: 30, codec: enc.h264_nvenc ? 'h264_nvenc' : 'libx264', quality: 'compact', output: out });
+  const io = await ff.probe(out);
+  assert(io.width === 720 && io.height === 1280 && Math.abs(io.duration - 8) < 0.15, `9:16: ${io.width}×${io.height}, ${io.duration} с`);
+  const f1 = await rgb(out, 1);
+  assert(isGreen(f1.px(32, 2)) && isRed(f1.px(32, 18)), `вписать: сверху фон ${f1.px(32, 2)}, в центре картинка ${f1.px(32, 18)}`);
+  const f2 = await rgb(out, 3);
+  assert(isRed(f2.px(32, 2)) && isRed(f2.px(32, 18)), `заполнить: красное до краёв ${f2.px(32, 2)}`);
+  const f3 = await rgb(out, 5);
+  let maxDiff = 0;
+  for (let y = 14; y < 22; y += 2) for (let x = 2; x < 62; x += 3) { const [r, g, b] = f3.px(x, y); maxDiff = Math.max(maxDiff, Math.abs(r - g), Math.abs(g - b)); }
+  assert(maxDiff < 24, `чёрно-белое: разница каналов ${maxDiff}`);
+  const f4 = await rgb(out, 7);
+  assert(!isGreen(f4.px(32, 18)) && isGreen(f4.px(32, 2)), 'GIF в кадре, по краям фон');
+}
 const isBlue = ([r, g, b]) => b > 150 && r < 80 && g < 80;
 
 // Пустоты, переходы, затухания, реверс и стоп-кадр
@@ -222,5 +255,6 @@ async function effectsTest(enc) {
   assert(v2 < v1 && v3 < v1, 'музыка на 50% тише основного звука, отключённый клип не звучит');
 
   await effectsTest(enc);
+  await viewTest(enc, ib);
   console.log('\nВСЁ ОК');
 })().catch((e) => { console.error(e); process.exit(1); });

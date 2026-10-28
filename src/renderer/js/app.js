@@ -5,6 +5,7 @@ import { initMediaPanel, importPaths, pickAndImport, restoreMedia } from './medi
 import { Preview, initTransport } from './preview.js';
 import { Timeline } from './timeline.js';
 import { initInspector } from './inspector.js';
+import { initBrowser } from './browser.js';
 import { openExport } from './exportDialog.js';
 import { copyClip, pasteClip, reverseClip, freezeFrame } from './actions.js';
 import { closeMenu, menuOpen } from './contextMenu.js';
@@ -297,6 +298,7 @@ async function main() {
   transport = initTransport(preview);
   initMediaPanel({ addToTimeline: (id) => timeline.addMedia(id) });
   initInspector({ onSplit: () => timeline.splitAction(), onDelete: () => timeline.deleteAction() });
+  const browser = initBrowser();
   initKeys();
   initWindowDrop();
   store.on('request-pause', () => preview.pause());
@@ -304,7 +306,7 @@ async function main() {
   initResizers();
   await restoreAutosave();
   updateTitle();
-  window.__ffm = { store, preview, timeline, importPaths, openExport };
+  window.__ffm = { store, preview, timeline, importPaths, openExport, browser };
   const bridge = await mcpReady;
   if (bridge) bridge.initMcpBridge({
     loadProjectText: (text, filePath) => loadFromText(text, filePath),
