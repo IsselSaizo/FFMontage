@@ -1,7 +1,8 @@
 # Автосборка: тег vX.Y.Z (например v0.4.0) → архивы в GitHub Releases + SHA256SUMS и подпись SHA256SUMS.sig.
 #   Windows: FF-Montage-<версия>-windows-x64.zip       — распаковать и запустить «FF Montage.exe», FFmpeg внутри
 #   Linux:   FF-Montage-<версия>-linux-x86_64.tar.gz
-#   Linux:   FF-Montage-<версия>-linux-x86_64.AppImage — только при переменной репозитория FFM_APPIMAGE=1 (см. appimage.yml)
+#   Linux:   FF-Montage-<версия>-linux-x86_64.AppImage — Linux / Steam Deck (appimage.yml: сборка + дымовой тест + окно под xvfb);
+#            выключить (например, если сломался сторонний linuxdeploy) — переменная репозитория FFM_APPIMAGE=0
 # Обновление из программы (update.rs) берёт ассет строго с таким именем и ставит его, только если подпись
 # SHA256SUMS верна (открытый ключ зашит в update.rs) и SHA-256 архива совпадает.
 # Нужен секрет FFM_SIGNING_KEY (закрытый ключ ed25519, PEM) — без него релиз не публикуется.
@@ -100,17 +101,19 @@ jobs:
           path: dist/out/*
           if-no-files-found: error
 
+  # AppImage — по умолчанию в каждом релизе; FFM_APPIMAGE=0 — пропустить
   appimage:
     needs: version
-    if: vars.FFM_APPIMAGE == '1'
+    if: vars.FFM_APPIMAGE != '0'
     uses: ./.github/workflows/appimage.yml
     with:
       ref: ${{ github.event.inputs.tag || github.ref_name }}
 
-  # Все файлы релиза → SHA256SUMS → подпись ed25519 (tools/sign-release.mjs) → GitHub Release
+  # Все файлы релиза → SHA256SUMS → подпись ed25519 (tools/sign-release.mjs) → GitHub Release.
+  # Упавший AppImage останавливает релиз: иначе у пользователей AppImage обновление молча пропало бы.
   publish:
     needs: [build, appimage]
-    if: ${{ !cancelled() && needs.build.result == 'success' && needs.appimage.result != 'failure' }}
+    if: ${{ !cancelled() && needs.build.result == 'success' && (needs.appimage.result == 'success' || needs.appimage.result == 'skipped') }}
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v5
@@ -138,7 +141,8 @@ jobs:
           files: dist/*
           body: |
             **Windows:** скачайте `FF-Montage-…-windows-x64.zip`, распакуйте и запустите `FF Montage.exe`. Ничего ставить не нужно — FFmpeg уже внутри.
-            **Linux:** `FF-Montage-…-linux-x86_64.tar.gz`, затем `./ff-montage` (нужен WebKitGTK 4.1).
+            **Linux / Steam Deck:** `FF-Montage-…-linux-x86_64.AppImage` — `chmod +x`, затем запустить; всё внутри (окно, GStreamer, FFmpeg). Как добавить в Steam — в [README](https://github.com/${{ github.repository }}/blob/${{ env.TAG }}/README.md#linux-и-steam-deck-appimage).
+            **Linux (архив):** `FF-Montage-…-linux-x86_64.tar.gz`, затем `./ff-montage` (нужны WebKitGTK 4.1 и GStreamer good).
 
             Что нового — в [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/${{ env.TAG }}/CHANGELOG.md).
 

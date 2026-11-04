@@ -50,20 +50,24 @@
     v.src = url;
   });
 
-  // Диагностика на H.264: без crossOrigin, через blob: (без своей схемы media://), запрос fetch с Range
+  // Диагностика на H.264: без crossOrigin, через blob:, запрос fetch с Range. На Linux адрес медиа — HTTP-мост
+  // http://127.0.0.1:<порт>/<токен>/… (protocol.rs): GStreamer не открывает media://
   try {
     const m = await window.api.probe(dir + 'h264.mp4');
+    const scheme = String(m.url).replace(/^(\w+:\/\/[^/]+).*/, '$1');
+    log.push(`адрес медиа: ${scheme}/…`);
+    if (/linux/i.test(navigator.userAgent) && !/^http:\/\/127\.0\.0\.1:\d+$/.test(scheme)) errors.push(`на Linux адрес медиа не HTTP-мост: ${scheme}`);
     const r1 = await play(m.url, 15000, false);
-    log.push(`диагностика h264 media:// без crossOrigin: ${r1.ok ? 'играет' : 'нет'} (${r1.why})`);
+    log.push(`диагностика h264 без crossOrigin: ${r1.ok ? 'играет' : 'нет'} (${r1.why})`);
     let blobUrl = null;
     try {
       const resp = await fetch(m.url);
       const buf = await resp.blob();
-      log.push(`диагностика fetch media://: status=${resp.status} type=${resp.headers.get('content-type')} size=${buf.size}`);
+      log.push(`диагностика fetch: status=${resp.status} type=${resp.headers.get('content-type')} size=${buf.size}`);
       blobUrl = URL.createObjectURL(new Blob([buf], { type: 'video/mp4' }));
       const r2 = await play(blobUrl, 15000, false);
       log.push(`диагностика h264 через blob: ${r2.ok ? 'играет' : 'нет'} (${r2.why})`);
-    } catch (e) { log.push(`диагностика fetch media://: ошибка ${e}`); }
+    } catch (e) { log.push(`диагностика fetch: ошибка ${e}`); }
     try {
       const resp = await fetch(m.url, { headers: { Range: 'bytes=0-99' } });
       log.push(`диагностика Range 0-99: status=${resp.status} range=${resp.headers.get('content-range')} len=${(await resp.arrayBuffer()).byteLength}`);

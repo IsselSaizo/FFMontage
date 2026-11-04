@@ -50,7 +50,8 @@ macOS и ARM пока не поддерживаются (в планах, см. 
 ### Готовая сборка
 
 1. Откройте **[Releases](https://github.com/IsselSaizo/FFMontage/releases/latest)** и скачайте
-   `FF-Montage-<версия>-windows-x64.zip` (Windows) или `FF-Montage-<версия>-linux-x86_64.tar.gz` (Linux).
+   `FF-Montage-<версия>-windows-x64.zip` (Windows) или `FF-Montage-<версия>-linux-x86_64.tar.gz` (Linux;
+   для Steam Deck и других дистрибутивов проще AppImage — см. ниже).
 2. Распакуйте в любую папку, где можно писать (например, `D:\FF Montage`).
 3. Запустите **`FF Montage.exe`** (Linux: `./ff-montage`). FFmpeg уже внутри архива.
 
@@ -70,7 +71,31 @@ Portable-режим включается и вручную: файл `portable.t
 только если подпись `SHA256SUMS` верна и SHA-256 архива совпадает. Настройки и проекты не затрагиваются.
 Проверить файлы вручную: `sha256sum -c SHA256SUMS --ignore-missing`.
 
-AppImage для Linux / Steam Deck пока собирается вручную (заготовка, см. «Разработка»).
+### Linux и Steam Deck: AppImage
+
+`FF-Montage-<версия>-linux-x86_64.AppImage` — один файл, внутри всё нужное: окно (WebKitGTK), GStreamer для видео
+и звука в плеере, FFmpeg. Ничего ставить не нужно, `sudo` не нужен.
+
+1. Скачайте AppImage из [Releases](https://github.com/IsselSaizo/FFMontage/releases/latest), например в `~/Applications`.
+2. Сделайте файл исполняемым: `chmod +x FF-Montage-*.AppImage` (или в Dolphin: правый щелчок → «Свойства» →
+   «Права» → «Является исполняемым»).
+3. Запустите двойным щелчком или `./FF-Montage-<версия>-linux-x86_64.AppImage`.
+
+**Steam Deck.** Удобнее всего в **режиме рабочего стола** (кнопка питания → «Переключиться на рабочий стол»): там есть
+клавиатура и мышь/тачпад, файлы видно в Dolphin. Чтобы запускать из игрового режима: Steam (на рабочем столе) →
+«Игры» → «Добавить стороннюю игру в мою библиотеку…» → «Обзор…» → выбрать AppImage (фильтр «Все файлы») →
+«Добавить выбранные программы». Окно рассчитано на 1280×800; в игровом режиме для текста и горячих клавиш нужна
+экранная клавиатура (Steam + X) или подключённая клавиатура.
+
+- Данные — в папках XDG (`~/.config/ff-montage`, `~/.local/share/ff-montage`, `~/.cache/ff-montage`): сам AppImage
+  только для чтения. Папки кэша, экспорта и проектов выбираются при первом запуске (на Deck удобно — на SD-карте).
+- **Обновление** («Проверить обновления…») скачивает новый AppImage, проверяет подпись и SHA-256 и подменяет
+  **тот же файл** (имя не меняется, ярлык в Steam продолжает работать). Папка с AppImage должна быть доступна на запись.
+- Если AppImage не запускается с ошибкой про FUSE (на SteamOS FUSE есть; на некоторых системах — нет):
+  `./FF-Montage-….AppImage --appimage-extract-and-run` или установите `libfuse2`.
+- Диагностика: `./FF-Montage-….AppImage --engine info </dev/null` — покажет, откуда взят FFmpeg, какие плагины GStreamer
+  найдены и куда пишутся данные.
+- Аппаратный экспорт на Deck — VA-API (`h264_vaapi`, `hevc_vaapi`); AV1 видеокарта Deck не кодирует — будет процессор.
 
 ### Из исходников
 
@@ -175,6 +200,8 @@ docs/           ROADMAP, аудит, PLUGINS.md, HOTKEYS.md
 | `node tests/subtitles-test.js`, `registry-test.js`, `ffescape-test.js`, `layouts-test.js` | субтитры, реестр, экранирование, пример-плагин |
 | `node tests/i18n-check.js` | все строки интерфейса переведены |
 | `powershell -ExecutionPolicy Bypass -File tests\run-ui.ps1 ui-selftest3` | автотест интерфейса (Windows, отдельный кэш) |
+| `bash tools/appimage-smoke.sh <файл.AppImage>` | AppImage: FFmpeg и GStreamer внутри, FFmpeg берётся из образа, пути XDG, `$APPIMAGE` |
+| `bash tools/appimage-window.sh <файл.AppImage или ff-montage>` | окно под xvfb: `<video>` через GStreamer (H.264/VP9 напрямую, HEVC через прокси) |
 
 С `FFM_NO_GPU=1` программа ведёт себя как компьютер без видеокарты (так тесты идут в CI).
 CI также проверяет `cargo fmt --check`, `cargo clippy`, актуальность `docs/HOTKEYS.md` (`node tools/hotkeys-doc.mjs`)
@@ -186,8 +213,14 @@ CI также проверяет `cargo fmt --check`, `cargo clippy`, актуа
 **Выпуск релиза:** поднять версию в `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json`, `package.json` (и `Cargo.lock`),
 дополнить `CHANGELOG.md`, затем `git tag v0.4.0 && git push origin v0.4.0`. Workflow проверит, что тег совпадает с версией,
 соберёт архивы, посчитает `SHA256SUMS` и подпишет его ключом из секрета `FFM_SIGNING_KEY` (`tools/sign-release.mjs`).
-Без верной подписи программа обновление не установит. AppImage: Actions → AppImage → Run workflow
-(в релиз он попадает при переменной репозитория `FFM_APPIMAGE=1`).
+Без верной подписи программа обновление не установит.
+
+**AppImage** (`.github/workflows/appimage.yml`) собирается на каждый push в `main` и в каждом релизе: tauri-cli с
+дополнительным конфигом `.github/appimage.conf.json` (`bundleMediaFramework` — GStreamer внутри, FFmpeg BtbN по SHA-256
+в `usr/bin/ffmpeg/bin`), затем дымовой тест и окно под xvfb. Готовый файл — артефакт `release-appimage` прогона.
+Если сборка AppImage сломалась из-за внешних инструментов (linuxdeploy), выпустить релиз без него можно
+переменной репозитория `FFM_APPIMAGE=0`. На Linux `<video>`/`<audio>` получают файлы по HTTP с 127.0.0.1
+(случайный порт и токен, `protocol.rs`): GStreamer в WebKitGTK не открывает свои схемы вроде `media://`.
 
 Журнал последнего экспорта с полной командой FFmpeg — `<кэш>/app/logs/last-export.log`.
 

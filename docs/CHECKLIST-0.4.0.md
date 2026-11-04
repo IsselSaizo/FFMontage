@@ -70,16 +70,28 @@
 - [ ] 🔑 Зеркалировать архивы FFmpeg BtbN (`autobuild-2026-11-04-12-51`, win64 и linux64) в свой релиз, например с тегом `ffmpeg-9.0.2`, и поменять URL в `tools/fetch-ffmpeg.*`: BtbN со временем удаляет старые сборки, тогда CI упадёт с 404.
 - [ ] 🖥 Сверить пресеты горячих клавиш Resolve / Premiere / CapCut ([HOTKEYS.md](HOTKEYS.md)) в самих программах.
 
-## 7. Linux и Steam Deck (0.4.2, но сборка уже есть)
+## 7. Linux и Steam Deck (0.4.2)
 
-- [ ] 🧰 Actions → «AppImage» → Run workflow. На Linux и на Steam Deck проверить:
-  - запуск;
-  - видео и звук в плеере (GStreamer);
-  - FFmpeg берётся изнутри AppImage (`usr/bin/ffmpeg`);
-  - данные пишутся в `~/.config` / `~/.cache` (XDG);
-  - самообновление через `$APPIMAGE`.
+Уже проверяет CI на каждый push в main (workflow «AppImage», без видеокарты, под xvfb): AppImage собирается
+(`bundleMediaFramework`, FFmpeg BtbN по SHA-256 в `usr/bin/ffmpeg/bin`), внутри есть ffmpeg/ffprobe с `h264_vaapi`/`hevc_vaapi`
+и нужные плагины GStreamer (autodetect, playback, isomp4, matroska, libav, pulseaudio…), движок из образа берёт FFmpeg
+из образа (подставной `ffmpeg` в `PATH` игнорируется), режим путей — system (XDG), программа видит свой `$APPIMAGE`,
+обновление выберет ассет `…-linux-x86_64.AppImage`; окно открывается и играет `<video>` H.264/VP9 напрямую, HEVC — через прокси.
+AppImage входит в каждый релиз (выключить — переменная репозитория `FFM_APPIMAGE=0`).
 
-  После проверки — переменная репозитория `FFM_APPIMAGE=1`, тогда AppImage пойдёт в релизы.
+Руками, на живом Steam Deck (и на одном обычном Linux, например Ubuntu 24.04 или Fedora):
+
+- [ ] 🎮 `chmod +x`, запуск двойным щелчком в режиме рабочего стола; окно первого запуска, папки на SD-карте.
+- [ ] 🎮 Видео и **звук** в плеере (GStreamer из образа → PulseAudio/PipeWire Deck), перемотка, несколько дорожек.
+      Если окно белое/пустое — попробовать `WEBKIT_DISABLE_DMABUF_RENDERER=1 ./FF-Montage-….AppImage` и записать результат.
+- [ ] 🎮 Импорт записи с Deck (H.264) и HEVC-файла: HEVC уходит в прокси и играет.
+- [ ] 🎮 Экспорт: `h264_vaapi` / `hevc_vaapi` видны в списке кодировщиков и работают (AV1 — процессор).
+- [ ] 🎮 `./FF-Montage-….AppImage --engine info </dev/null`: `ffmpeg.bundled: true`, `gst.missing: []`, `paths.mode: system`.
+- [ ] 🎮 Добавить как «стороннюю игру» в Steam, запуск из игрового режима: окно на весь экран, экранная клавиатура (Steam + X).
+- [ ] 🎮 Обновление: поставить AppImage прошлой версии → «Проверить обновления…» → файл подменился (то же имя), программа
+      перезапустилась новой версией, ярлык Steam работает.
+- [ ] 🎮 ИИ-ассистент: в настройках MCP-клиента путь — к самому `.AppImage`, а не к `/tmp/.mount_…`.
+- [ ] 🎮 Тач и геймпад (gamepad.js, крупные ручки при `pointer: coarse`): сенсорный экран Deck и кнопки/стики в окне.
 
 ## 8. Разное
 

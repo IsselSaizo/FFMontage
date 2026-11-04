@@ -141,7 +141,7 @@
 | M0.9 | ✅ Таймауты для probe/run, исправить reverse при b<a, LOCKS/Mutex (R-7); `focus_existing` с таймаутом (R-5) — *`ff::Limits` у каждого запуска, отравленные Mutex не паникуют, `focus_existing` — 3 с* | RS | S | — |
 | M0.10 | ✅ Обновления: SHA256 и подпись, выбор ассета по ОС и архитектуре, проверка «тег = версия» (R-4) — *ed25519 (`ed25519-dalek`), ключ вне репозитория, `tools/sign-release.mjs`; проверить вживую можно только на 0.4.1* | RS | M | — |
 | M0.11 | ✅ Профиль release: `lto`, `codegen-units=1`, `opt-level="s"`, `panic="abort"`, `getrandom 0.3`. Цель — exe ~6–8 МБ — *без `panic="abort"` (паника не должна закрывать всю программу); exe 15,9 → 10,9 МБ; сборка ~7,5 мин, для разработки — `--profile fast`* | RS | S | — |
-| M0.12 | ✅ CI: clippy + fmt + `cargo test`, FFmpeg зафиксирован по версии и SHA256, SHA256SUMS в релизе, убрать `libayatana`. Подготовить job для AppImage — *job lint (fmt, clippy -D warnings, i18n, хоткеи, версия), FFmpeg BtbN n9.0.2 по SHA256, `appimage.yml` (не проверен на Linux)* | QA | M | — |
+| M0.12 | ✅ CI: clippy + fmt + `cargo test`, FFmpeg зафиксирован по версии и SHA256, SHA256SUMS в релизе, убрать `libayatana`. Подготовить job для AppImage — *job lint (fmt, clippy -D warnings, i18n, хоткеи, версия), FFmpeg BtbN n9.0.2 по SHA256, `appimage.yml` (с 0.4.2 — собирается и проверяется на каждый push в main, входит в релиз)* | QA | M | — |
 
 ### M1. Ядро: рефакторинг под модульность — ~2–3 недели
 

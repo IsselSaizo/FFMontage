@@ -565,11 +565,17 @@ fn sweep_parts(dir: &Path, depth: u32) {
 // ---------------------------------------------------------------------------
 // thumbs.json: имена файлов относительно папки миниатюр (B-9)
 // ---------------------------------------------------------------------------
+/// Старые thumbs.json хранят полные пути — и виндовые (`F:\…\0001.jpg`), и Unix: имя берётся после последнего `\` или `/`
+/// на любой ОС (Path::file_name на Linux обратную косую черту разделителем не считает — кэш с Windows не находился бы)
 fn thumb_names(v: &Value) -> Vec<String> {
     v["files"]
         .as_array()
         .map(|a| {
-            a.iter().filter_map(|f| f.as_str()).filter_map(|f| Path::new(f).file_name().map(|n| n.to_string_lossy().to_string())).collect()
+            a.iter()
+                .filter_map(|f| f.as_str())
+                .filter_map(|f| f.rsplit(['/', '\\']).next().filter(|n| !n.is_empty() && *n != "." && *n != ".."))
+                .map(str::to_string)
+                .collect()
         })
         .unwrap_or_default()
 }
