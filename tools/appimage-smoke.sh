@@ -8,10 +8,21 @@
 set -uo pipefail
 A="$(readlink -f "$1")"
 FAILS=0
-err() { echo "::error title=AppImage::$*"; FAILS=$((FAILS + 1)); }
-note() { echo "::notice title=AppImage::$*"; }
 W="$(mktemp -d)"
-trap 'rm -rf "$W"' EXIT
+err() { echo "::error title=AppImage::$*"; FAILS=$((FAILS + 1)); }
+# Заметки копятся и в конце выводятся по 2 в аннотации: GitHub показывает не больше 10 аннотаций одного вида на шаг
+note() { echo "$*" >>"$W/notes"; echo "$*"; }
+flush_notes() {
+  [ -f "$W/notes" ] || return 0
+  local buf="" i=0 l
+  while IFS= read -r l; do
+    buf="${buf:+$buf ¦ }$l"; i=$((i + 1))
+    if [ "$i" -ge 2 ]; then echo "::notice title=AppImage::$buf"; buf=""; i=0; fi
+  done <"$W/notes"
+  [ -n "$buf" ] && echo "::notice title=AppImage::$buf"
+  rm -f "$W/notes"
+}
+trap 'flush_notes; rm -rf "$W"' EXIT
 
 [ -f "$A" ] || { err "нет файла $1"; exit 1; }
 [ -x "$A" ] || err "файл не исполняемый (chmod +x)"

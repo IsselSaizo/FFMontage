@@ -79,6 +79,12 @@ jobs:
           ls -la dist/out
       - name: Дымовой тест (FFmpeg и GStreamer внутри, движок, пути XDG)
         run: bash tools/appimage-smoke.sh "dist/out/FF-Montage-${{ steps.ver.outputs.version }}-linux-x86_64.AppImage"
+      # Для сравнения: тот же exe без AppImage, с GStreamer системы раннера (не влияет на результат)
+      - name: Окно без AppImage под xvfb (сравнение)
+        continue-on-error: true
+        env:
+          FFMPEG: dist/appimage-ffmpeg/bin/ffmpeg
+        run: bash tools/appimage-window.sh src-tauri/target/release/ff-montage dist/plain-test
       - name: Окно под xvfb (<video> через GStreamer из образа)
         run: bash tools/appimage-window.sh "dist/out/FF-Montage-${{ steps.ver.outputs.version }}-linux-x86_64.AppImage"
       - uses: actions/upload-artifact@v5

@@ -41,7 +41,7 @@ jobs:
         run: |
           set -o pipefail
           cargo clippy --locked --all-targets --message-format=short -- -D warnings -A clippy::type_complexity 2>&1 | tee clippy.log || {
-            grep -E '^[^ ]+\.rs:[0-9]+:[0-9]+: (error|warning)' clippy.log | head -n 10 | sed 's/^/::error title=Clippy::/'
+            grep -E 'error|warning' clippy.log | grep -vE '^\s*(Compiling|Checking)' | head -n 12 | sed 's/^/::error title=Clippy::/'
             exit 1
           }
       - name: Перевод интерфейса (i18n)
@@ -137,7 +137,7 @@ jobs:
         run: |
           set -o pipefail
           cargo test --release --locked 2>&1 | tee test.log || {
-            grep -E '^test .* FAILED|^error' test.log | head -n 8 | sed 's/^/::error title=cargo test::/'
+            grep -E 'FAILED|error' test.log | grep -vE '^\s*Compiling' | head -n 10 | sed 's/^/::error title=cargo test::/'
             grep -A4 'panicked at' test.log | head -n 30 | tr '\n' ' ' | cut -c1-1500 | sed 's/^/::error title=cargo test (паника)::/'
             echo
             exit 1

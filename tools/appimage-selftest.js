@@ -24,9 +24,11 @@
   log.push('canPlayType: ' + Object.entries(types).map(([k, t]) => `${k}=${probe.canPlayType(t) || 'no'}`).join(' '));
 
   // Первый кадр и 1,5 с воспроизведения (без звука: на раннере нет звуковой карты)
-  const play = (url, ms = 20000) => new Promise((resolve) => {
+  // cors — как в плеере (preview.js: crossOrigin='anonymous' ради Web Audio)
+  const play = (url, ms = 20000, cors = true) => new Promise((resolve) => {
     const v = document.createElement('video');
-    v.muted = true; v.preload = 'auto'; v.crossOrigin = 'anonymous';
+    v.muted = true; v.preload = 'auto';
+    if (cors) v.crossOrigin = 'anonymous';
     v.style.cssText = 'position:fixed;left:0;top:0;width:160px;height:120px;z-index:99999';
     document.body.appendChild(v);
     let done = false;
@@ -36,8 +38,8 @@
       try { v.pause(); v.removeAttribute('src'); v.load(); v.remove(); } catch { /* ignore */ }
       resolve(r);
     };
-    const timer = setTimeout(() => fin({ ok: false, why: `timeout readyState=${v.readyState} t=${v.currentTime.toFixed(2)}` }), ms);
-    v.addEventListener('error', () => fin({ ok: false, why: `error code=${v.error && v.error.code} ${(v.error && v.error.message) || ''}` }));
+    const timer = setTimeout(() => fin({ ok: false, why: `timeout readyState=${v.readyState} network=${v.networkState} t=${v.currentTime.toFixed(2)}` }), ms);
+    v.addEventListener('error', () => fin({ ok: false, why: `error code=${v.error && v.error.code} network=${v.networkState} ${(v.error && v.error.message) || ''}` }));
     v.addEventListener('loadeddata', async () => {
       const w = v.videoWidth; const h = v.videoHeight;
       try { await v.play(); } catch (e) { fin({ ok: false, why: `play(): ${e}` }); return; }
@@ -47,6 +49,27 @@
     }, { once: true });
     v.src = url;
   });
+
+  // Диагностика на H.264: без crossOrigin, через blob: (без своей схемы media://), запрос fetch с Range
+  try {
+    const m = await window.api.probe(dir + 'h264.mp4');
+    const r1 = await play(m.url, 15000, false);
+    log.push(`диагностика h264 media:// без crossOrigin: ${r1.ok ? 'играет' : 'нет'} (${r1.why})`);
+    let blobUrl = null;
+    try {
+      const resp = await fetch(m.url);
+      const buf = await resp.blob();
+      log.push(`диагностика fetch media://: status=${resp.status} type=${resp.headers.get('content-type')} size=${buf.size}`);
+      blobUrl = URL.createObjectURL(new Blob([buf], { type: 'video/mp4' }));
+      const r2 = await play(blobUrl, 15000, false);
+      log.push(`диагностика h264 через blob: ${r2.ok ? 'играет' : 'нет'} (${r2.why})`);
+    } catch (e) { log.push(`диагностика fetch media://: ошибка ${e}`); }
+    try {
+      const resp = await fetch(m.url, { headers: { Range: 'bytes=0-99' } });
+      log.push(`диагностика Range 0-99: status=${resp.status} range=${resp.headers.get('content-range')} len=${(await resp.arrayBuffer()).byteLength}`);
+    } catch (e) { log.push(`диагностика Range: ошибка ${e}`); }
+    if (blobUrl) URL.revokeObjectURL(blobUrl);
+  } catch (e) { log.push(`диагностика: ${e}`); }
 
   // [файл, должен играть напрямую на Linux]
   for (const [name, direct] of [['h264.mp4', true], ['h264_aac.mp4', true], ['vp9.webm', null], ['hevc.mp4', false]]) {
