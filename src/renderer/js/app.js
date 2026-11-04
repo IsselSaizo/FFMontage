@@ -12,6 +12,7 @@ import { copyClip, pasteClip, reverseClip, freezeFrame } from './actions.js';
 import { closeMenu, menuOpen } from './contextMenu.js';
 import { initViewbar } from './viewbar.js';
 import { initCropMode } from './cropMode.js';
+import { initAudioRack } from './audioRack.js';
 import { modeTabs, initModes } from './modes.js';
 import { closePopover, popoverOpen } from './popover.js';
 
@@ -205,7 +206,6 @@ async function restoreAutosave() {
 // Заглушки режимов «Аудио» и «Анимации», пока их модули не подключены
 function initModePlaceholders() {
   const ph = (sel, title, text) => { const el = $(sel); if (el && !el.childElementCount) el.append(h('div', { class: 'mode-placeholder' }, h('h2', {}, title), h('p', {}, text))); };
-  ph('#audio-rack', 'Аудио', 'Здесь будет стойка эффектов выбранного клипа или дорожки: эквалайзер, компрессор, шумодав. Остальное — плагинами.');
   ph('#anim-presets', 'Анимации', 'Пресеты лёгких анимаций (например, «Дождь» из своей картинки).');
   ph('#anim-params', 'Параметры', 'Настройки выбранного пресета.');
 }
@@ -337,6 +337,7 @@ async function main() {
   transport = initTransport(preview);
   initViewbar();
   const crop = initCropMode(preview);
+  initAudioRack();
   initModePlaceholders();
   initModes();
   initMediaPanel({ addToTimeline: (id) => timeline.addMedia(id) });

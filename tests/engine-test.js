@@ -118,6 +118,31 @@ async function speedTest(enc) {
   const c1 = await rgb(outc, 0.5); const c2 = await rgb(outc, 1.5);
   assert(isRed(c1.px(4, 18)) && isRed(c1.px(60, 18)), `правая половина срезана, красное на весь кадр ${c1.px(60, 18)}`);
   assert(isBlue(c2.px(32, 18)) && c2.px(2, 18).every((x) => x < 30), `левая половина срезана, синий квадрат вписан с полями ${c2.px(2, 18)}`);
+
+  // Аудиоэффекты: клип 0–2 с без эффектов, клип 2–4 с на дорожке с компрессором (+12 дБ) и эквалайзером/шумодавом у клипа
+  console.log('Аудиоэффекты:');
+  const afx = await import(pathToFileURL(path.join(__dirname, '..', 'src', 'renderer', 'js', 'audioFx.js')).href);
+  const comp = afx.newAudioFx('comp'); comp.p.threshold = 0; comp.p.makeup = 12;
+  const eq = afx.newAudioFx('eq'); eq.p.mid = 3; eq.p.midF = 440;
+  const dn = afx.newAudioFx('denoise');
+  const pa = {
+    media: { m: im },
+    videoClips: [],
+    audioTracks: [
+      { muted: false, clips: [{ mediaId: 'm', in: 0, out: 2, start: 0, volume: 1, muted: false }] },
+      { muted: false, afx: [comp], clips: [{ mediaId: 'm', in: 0, out: 2, start: 2, volume: 1, muted: false, afx: [eq, dn] }] },
+    ],
+  };
+  const ba = plan.buildExport(pa, { width: 320, height: 180, fps: 30 });
+  assert(/equalizer=f=440\.0:t=q:w=1:g=3\.00/.test(ba.filter) && /afftdn=nr=12\.0:nf=-50\.0/.test(ba.filter) && /acompressor=threshold=1\.000000/.test(ba.filter), 'фильтры EQ, шумодав, компрессор в графе');
+  const outa = path.join(DIR, 'out_afx.mp4');
+  await startExport(pa, { width: 320, height: 180, fps: 30, codec, quality: 'compact', output: outa });
+  const vd = async (ss, tt) => {
+    const { stderr } = await ff.run(ff.findBinaries().ffmpeg, ['-hide_banner', '-ss', String(ss), '-t', String(tt), '-i', outa, '-vn', '-af', 'volumedetect', '-f', 'null', '-']);
+    return parseFloat(/mean_volume: (-?[\d.]+)/.exec(stderr)[1]);
+  };
+  const a1 = await vd(0.3, 1.4); const a2 = await vd(2.3, 1.4);
+  assert(a2 - a1 > 10 && a2 - a1 < 17, `дорожка с усилением компрессора громче на ${(a2 - a1).toFixed(1)} дБ (≈ 12–15)`);
 }
 
 // Пустоты, переходы, затухания, реверс и стоп-кадр

@@ -1,6 +1,7 @@
 // Состояние проекта: данные, отмена/повтор, производные значения и операции монтажа.
 import { uid, clamp, snapFps } from './util.js';
 import { speedOf, tlLen, clipEnd, srcAt, tlAt, MIN_SPEED, MAX_SPEED } from './clipTime.js';
+import { newAudioFx } from './audioFx.js';
 import { MIN_DURATION as TR_MIN, MAX_DURATION as TR_MAX, DEFAULT_DURATION as TR_DEFAULT, TRANSITIONS } from './transitions.js';
 
 export const MIN_CLIP = 0.1;   // минимальная длина клипа, с
@@ -325,7 +326,7 @@ class Store {
   validateSelection() {
     const s = this.selection;
     if (!s) return;
-    let ok = !!this.findClip(s.id);
+    let ok = s.kind === 'track' ? this.project.audioTracks.some((t) => t.id === s.id) : !!this.findClip(s.id);
     if (ok && s.kind === 'transition') ok = !!this.junctionBefore(s.id);
     if (!ok) { this.selection = null; this.emit('selection'); }
   }
@@ -849,6 +850,41 @@ class Store {
       }
     }, opts);
     return true;
+  }
+
+  // --- Звуковые эффекты: target = { kind: 'clip' | 'track', id } ---
+  fxOwner(target, p = this.project) {
+    if (!target) return null;
+    if (target.kind === 'track') return p.audioTracks.find((t) => t.id === target.id) || null;
+    for (const c of p.videoClips) if (c.id === target.id) return c;
+    for (const t of p.audioTracks) for (const c of t.clips) if (c.id === target.id) return c;
+    return null;
+  }
+  addAudioFx(target, type) {
+    const fx = newAudioFx(type);
+    if (!fx || !this.fxOwner(target)) return -1;
+    let idx = -1;
+    this.mutate((p) => { const o = this.fxOwner(target, p); o.afx = [...(o.afx || []), fx]; idx = o.afx.length - 1; });
+    return idx;
+  }
+  // patch: { on?, p?: { ...параметры } }; live — без записи в историю (для ползунков)
+  setAudioFx(target, index, patch, { live = false } = {}) {
+    const fn = (p) => {
+      const o = this.fxOwner(target, p);
+      const fx = o && o.afx && o.afx[index];
+      if (!fx) return;
+      if (patch.on !== undefined) fx.on = !!patch.on;
+      if (patch.p) fx.p = { ...fx.p, ...patch.p };
+    };
+    if (live) this.live(fn); else this.mutate(fn);
+  }
+  removeAudioFx(target, index) {
+    this.mutate((p) => {
+      const o = this.fxOwner(target, p);
+      if (!o || !o.afx) return;
+      o.afx = o.afx.filter((_, i) => i !== index);
+      if (!o.afx.length) delete o.afx;
+    });
   }
 
   // Кадрирование видеоклипов: crop { l, t, r, b } — доли кадра, срезанные слева/сверху/справа/снизу.

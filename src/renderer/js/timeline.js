@@ -9,6 +9,7 @@ import { isReversed, isFreeze } from './fx.js';
 import { transitionById } from './transitions.js';
 import { clipEffects, effectById } from './effects.js';
 import { speedOf, tlLen, clipEnd, fmtSpeed } from './clipTime.js';
+import { activeFx, fxSummary } from './audioFx.js';
 
 const HEAD_W = 168;
 const VIDEO_H = 76;
@@ -145,7 +146,7 @@ export class Timeline {
   updateToolbar() {
     $('#tb-undo').disabled = !store.undoStack.length;
     $('#tb-redo').disabled = !store.redoStack.length;
-    $('#tb-delete').disabled = !store.selection || store.selection.kind === 'transition';
+    $('#tb-delete').disabled = !store.selection || store.selection.kind === 'transition' || store.selection.kind === 'track';
     $('#tb-split').disabled = !this.canSplit();
     this.zoomSlider.value = String(Math.round(1000 * Math.log(this.pps / MIN_PPS) / Math.log(MAX_PPS / MIN_PPS)));
   }
@@ -168,7 +169,7 @@ export class Timeline {
 
   deleteAction(ripple = false) {
     const s = store.selection;
-    if (!s) return;
+    if (!s || s.kind === 'track') return;
     if (s.kind === 'transition') { store.setTransition(s.id, null); return; }
     store.deleteClip(s.id, { ripple });
   }
@@ -259,9 +260,15 @@ export class Timeline {
       }, 'S');
       const delBtn = h('button', { class: 'icon-btn tiny', title: 'Удалить дорожку', onclick: () => store.removeAudioTrack(t.id) });
       delBtn.innerHTML = icon('close', 13);
-      const head = h('div', { class: 'tl-head audio-head' },
+      const trSel = store.selection && store.selection.kind === 'track' && store.selection.id === t.id;
+      const head = h('div', {
+        class: `tl-head audio-head${trSel ? ' selected' : ''}`, dataset: { trackHead: t.id },
+        title: 'Щелчок — выбрать дорожку (эффекты дорожки — во вкладке «Аудио»)',
+        onclick: (e) => { if (e.target.closest('button, input')) return; store.select({ kind: 'track', id: t.id }); },
+      },
         h('div', { class: 'th-row' },
           h('span', { class: 'th-ic', html: icon('music', 15) }), this.trackNameEl(t.id),
+          activeFx(t.afx).length ? h('span', { class: 'th-fx', title: `Эффекты дорожки: ${fxSummary(t.afx)}` }, 'ƒx') : null,
           h('span', { class: 'th-actions' }, soloBtn, muteBtn, store.project.audioTracks.length > 1 || t.clips.length ? delBtn : null)),
         this.trackVolumeEl(t));
       this.content.append(h('div', { class: 'tl-row audio', dataset: { track: t.id } }, head, lane));
@@ -434,6 +441,7 @@ export class Timeline {
     if (fxl.length) label.append(h('span', { class: 'ci fxb', title: `Эффекты: ${fxl.map((x) => effectById(x).name).join(', ')}` }, 'fx'));
     if (c.fit === 'cover') label.append(h('span', { class: 'ci fxb', title: 'Заполняет кадр (края обрезаны)' }, '▣'));
     if (c.fit === 'stretch') label.append(h('span', { class: 'ci fxb', title: 'Растянут на весь кадр' }, '⇔'));
+    if (activeFx(c.afx).length) label.append(h('span', { class: 'ci fxb', title: `Аудиоэффекты: ${fxSummary(c.afx)}` }, 'ƒx'));
     if (speedOf(c) !== 1) label.append(h('span', { class: 'ci speed', title: 'Скорость клипа' }, fmtSpeed(speedOf(c))));
     if (c.link && store.linkedOf(c.id).length) label.append(h('span', { class: 'ci link', title: 'Связан со звуком/видео: двигаются и режутся вместе (Alt — только этот клип)', html: icon('link', 13) }));
     if (c.muted && m.hasAudio && !c.noAudio) label.append(h('span', { class: 'ci', html: icon('mute', 13) }));

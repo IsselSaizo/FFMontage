@@ -8,6 +8,7 @@ import { h, $, icon, fmtTime } from './util.js';
 import { applyTransition, resetLayer } from './transitions.js';
 import { cssEffects } from './effects.js';
 import { speedOf, tlLen, clipEnd, srcAt, tlAt } from './clipTime.js';
+import { activeFx, fxParam } from './audioFx.js';
 
 const EPS = 0.004;
 // crop { l, t, r, b } — доли кадра, срезанные с каждой стороны
@@ -53,6 +54,8 @@ export class Preview {
 
     this.ctx = null;
     this.gains = new Map();      // element -> GainNode
+    this.routes = new Map();     // element -> { g, nodes, sig, dest } — цепочка эффектов клипа
+    this.buses = new Map();      // trackId -> { input, nodes, sig } — эффекты дорожки
     this.audio = new Map();      // clipId -> { el, url }
     this.visible = new Set();    // показанные сейчас <video>
     this.master = null;          // { el, clip } — по нему идут часы воспроизведения
@@ -108,6 +111,57 @@ export class Preview {
     const g = this.ctx.createGain();
     src.connect(g).connect(this.out);
     this.gains.set(el, g);
+    this.routes.set(el, { g, nodes: [], sig: '' });
+  }
+
+  // Эффекты в предпросмотре: элемент → громкость → эффекты клипа → шина дорожки (эффекты дорожки) → общий выход.
+  // Шумоподавления в Web Audio нет — его слышно только в готовом видео.
+  fxNodes(list) {
+    const nodes = [];
+    for (const fx of activeFx(list)) {
+      const p = (k) => fxParam(fx, k);
+      if (fx.type === 'eq') {
+        const mk = (type, f, gain, q) => { const b = this.ctx.createBiquadFilter(); b.type = type; b.frequency.value = f; b.gain.value = gain; if (q) b.Q.value = q; return b; };
+        nodes.push(mk('lowshelf', 120, p('low')), mk('peaking', p('midF'), p('mid'), 1.4), mk('highshelf', 8000, p('high')));
+      } else if (fx.type === 'comp') {
+        const c = this.ctx.createDynamicsCompressor();
+        c.threshold.value = p('threshold'); c.ratio.value = p('ratio'); c.knee.value = 6;
+        c.attack.value = p('attack') / 1000; c.release.value = p('release') / 1000;
+        const mk = this.ctx.createGain(); mk.gain.value = 10 ** (p('makeup') / 20);
+        nodes.push(c, mk);
+      }
+    }
+    return nodes;
+  }
+  // Цепочка from → nodes → to; старые узлы отключаются
+  rewire(from, oldNodes, nodes, to) {
+    from.disconnect();
+    for (const n of oldNodes) n.disconnect();
+    let cur = from;
+    for (const n of nodes) { cur.connect(n); cur = n; }
+    cur.connect(to);
+  }
+  trackBus(track) {
+    if (!this.ctx || !track) return this.out;
+    let b = this.buses.get(track.id);
+    if (!b) { b = { input: this.ctx.createGain(), nodes: [], sig: null }; this.buses.set(track.id, b); }
+    const sig = JSON.stringify(activeFx(track.afx));
+    if (b.sig !== sig) {
+      const nodes = this.fxNodes(track.afx);
+      this.rewire(b.input, b.nodes, nodes, this.out);
+      b.nodes = nodes; b.sig = sig;
+    }
+    return b.input;
+  }
+  route(el, clip, track) {
+    const r = this.routes.get(el);
+    if (!r) return;
+    const dest = this.trackBus(track);
+    const sig = `${JSON.stringify(activeFx(clip && clip.afx))}|${track ? track.id : ''}`;
+    if (r.sig === sig && r.dest === dest) return;
+    const nodes = this.fxNodes(clip && clip.afx);
+    this.rewire(r.g, r.nodes, nodes, dest);
+    r.nodes = nodes; r.sig = sig; r.dest = dest;
   }
   setGain(el, v) {
     const g = this.gains.get(el);
@@ -478,6 +532,7 @@ export class Preview {
           this.attach(el);
         }
         if (this.ctx && !this.gains.has(rec.el)) this.attach(rec.el);
+        if (this.ctx) this.route(rec.el, c, track);
         if (rec.url !== url) { rec.url = url; rec.el.src = url; }
         const expected = srcAt(c, t);
         const sp = speedOf(c);

@@ -611,3 +611,18 @@ body[data-mode="anim"] #anim-presets, body[data-mode="anim"] #anim-params { disp
   background: rgba(20,20,26,.92); border: 1px solid var(--line-2); border-radius: 9px; }
 .crop-bar .check-row { margin: 0 6px 0 2px; }
 body.cropping #viewbar .vb-crop { background: var(--accent-soft); color: var(--text); }
+/* ---------- Вкладка «Аудио»: стойка эффектов ---------- */
+.rack-target { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 13px; margin-bottom: 4px; }
+.fx-card { background: var(--panel-2); border: 1px solid var(--line); border-radius: 9px; padding: 8px 10px 10px; margin: 10px 0; }
+.fx-card.off .fx-param { opacity: .45; }
+.fx-card-head { display: flex; align-items: center; justify-content: space-between; }
+.fx-card-head .check-row { margin: 0; }
+.fx-param { margin-top: 6px; }
+.fx-pname { display: block; font-size: 11.5px; color: var(--text-2); margin-bottom: 2px; }
+.fx-param .slider { flex: 1; min-width: 0; }
+.fx-param .vol-val { min-width: 58px; text-align: right; font-size: 11.5px; }
+.rack-add { display: flex; flex-direction: column; gap: 4px; margin-top: 14px; }
+.tl-head.audio-head { cursor: pointer; }
+.tl-head.audio-head.selected { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
+.th-fx { font-size: 10px; font-weight: 700; color: #9fe3ff; margin-left: 2px; }
+body[data-mode="audio"] .tl-row.video { opacity: .55; }

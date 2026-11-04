@@ -13,6 +13,7 @@
 
 import { ffEffects } from './effects.js';
 import { speedOf, atempoChain } from './clipTime.js';
+import { ffAudioFx } from './audioFx.js';
 
 export const QUALITY = {
   // Значение CQ: меньше — лучше качество и больше файл
@@ -183,7 +184,7 @@ export function buildExport(project, settings) {
     // Звук клипа: со «ступеньками» для перехода, на своём месте
     if (hasSound) {
       const L = head + len + t;
-      let af = `[${k}:a]${audioFmt}${aSpeed(sp)},volume=${n6(c.volume)},asetpts=PTS-STARTPTS,apad,atrim=duration=${n6(L)}`;
+      let af = `[${k}:a]${audioFmt}${aSpeed(sp)},volume=${n6(c.volume)}${ffAudioFx(c.afx)},asetpts=PTS-STARTPTS,apad,atrim=duration=${n6(L)}`;
       if (tin[i]) af += `,afade=t=in:st=0:d=${n6(head + h)}`;
       af += aFades(c, head, len);
       if (t > 0) af += `,afade=t=out:st=${n6(head + len - t)}:d=${n6(2 * t)}`;
@@ -201,6 +202,9 @@ export function buildExport(project, settings) {
   (project.audioTracks || []).forEach((tr) => {
     // Громкость дорожки умножается на громкость клипа; «Соло» — только для предпросмотра
     const tv = tr.volume === undefined ? 1 : Number(tr.volume);
+    // Эффекты дорожки: её клипы сначала смешиваются между собой, потом — общая цепочка эффектов
+    const trFx = tr.muted ? '' : ffAudioFx(tr.afx);
+    const trLabels = [];
     (tr.clips || []).forEach((c) => {
       const m = media[c.mediaId];
       const dur = clipDuration(c);
@@ -212,11 +216,18 @@ export function buildExport(project, settings) {
       const delayMs = Math.max(0, Math.round(c.start * 1000));
       const nStreams = (m.audioStreams && m.audioStreams.length) || 1;
       const st = Math.min(Math.max(0, c.stream | 0), nStreams - 1);
-      filters.push(`[${k}:a:${st}]${audioFmt}${aSpeed(sp)},volume=${n6(c.volume * tv)},asetpts=PTS-STARTPTS,apad,atrim=duration=${n6(dur)}` +
+      filters.push(`[${k}:a:${st}]${audioFmt}${aSpeed(sp)},volume=${n6(c.volume * tv)}${ffAudioFx(c.afx)},asetpts=PTS-STARTPTS,apad,atrim=duration=${n6(dur)}` +
         `${aFades(c, 0, dur)},adelay=delays=${delayMs}:all=1[m${j}]`);
-      audio.push(`[m${j}]`);
+      (trFx ? trLabels : audio).push(`[m${j}]`);
       j++;
     });
+    if (trLabels.length) {
+      const tk = `[tk${audio.length}_${j}]`;
+      filters.push(trLabels.length === 1
+        ? `[${trLabels[0].slice(1, -1)}]${trFx.slice(1)}${tk}`
+        : `[${trLabels.map((x) => x.slice(1, -1)).join('][')}]amix=inputs=${trLabels.length}:duration=longest:dropout_transition=0:normalize=0${trFx}${tk}`);
+      audio.push(tk);
+    }
   });
 
   const total = Math.max(videoEnd, audioEnd);
