@@ -851,6 +851,23 @@ class Store {
     return true;
   }
 
+  // Кадрирование видеоклипов: crop { l, t, r, b } — доли кадра, срезанные слева/сверху/справа/снизу.
+  // null или все нули — без кадрирования. ids — список клипов (один шаг отмены).
+  setCrop(ids, crop) {
+    const set = new Set(ids);
+    const q = (x) => Math.round(clamp(Number(x) || 0, 0, 0.95) * 10000) / 10000;
+    let cr = crop ? { l: q(crop.l), t: q(crop.t), r: q(crop.r), b: q(crop.b) } : null;
+    if (cr && (cr.l + cr.r > 0.95 || cr.t + cr.b > 0.95)) return false;
+    if (cr && !(cr.l || cr.t || cr.r || cr.b)) cr = null;
+    this.mutate((p) => {
+      for (const c of p.videoClips) {
+        if (!set.has(c.id)) continue;
+        if (cr) c.crop = { ...cr }; else delete c.crop;
+      }
+    });
+    return true;
+  }
+
   // Подгонка кадра видеоклипов: 'contain' (вписать, по умолчанию) | 'cover' (заполнить) | 'stretch' (растянуть).
   // ids — список клипов (один шаг отмены на всех)
   setFit(ids, fit) {

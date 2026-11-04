@@ -103,7 +103,7 @@
   {
    "name": "update_clip",
    "title": "Update clip",
-   "description": "Change a clip: trim (source_in/source_out or duration, seconds), move (start, seconds; video clips push the following clips right if needed, unless the place is free), volume (0..2, 1 = original), muted, fades (fade_in/fade_out, seconds), name, or move an audio clip to another audio track (audio_track_id or \"new\"). Trimming leaves a gap — use close_gaps to remove it. For reversed clips source_in/source_out are in the ORIGINAL file time and must stay within the reversed fragment. Speed: \"speed\" 0.1..16 (1 = normal; 2 = twice as fast and half as long on the timeline; sound keeps its pitch). A video and its own sound change speed together. By default the following clips stay in place (a sped-up clip leaves a gap, a slowed-down clip overwrites what is under it); set \"shift_following\": true to move everything after the clip by the length difference. \"duration\" is the length on the timeline at the current speed.",
+   "description": "Change a clip: trim (source_in/source_out or duration, seconds), move (start, seconds; video clips push the following clips right if needed, unless the place is free), volume (0..2, 1 = original), muted, fades (fade_in/fade_out, seconds), name, or move an audio clip to another audio track (audio_track_id or \"new\"). Trimming leaves a gap — use close_gaps to remove it. For reversed clips source_in/source_out are in the ORIGINAL file time and must stay within the reversed fragment. Speed: \"speed\" 0.1..16 (1 = normal; 2 = twice as fast and half as long on the timeline; sound keeps its pitch). A video and its own sound change speed together. By default the following clips stay in place (a sped-up clip leaves a gap, a slowed-down clip overwrites what is under it); set \"shift_following\": true to move everything after the clip by the length difference. \"duration\" is the length on the timeline at the current speed. Crop (video): \"crop\" { left, top, right, bottom } — fractions of the frame cut from each side (0..0.95; all zeros removes the crop); the cropped picture is then fitted like the whole frame.",
    "inputSchema": {
     "type": "object",
     "properties": {
@@ -172,6 +172,32 @@
      "shift_following": {
       "type": "boolean",
       "description": "With \"speed\": shift the following clips by the length difference (default false)"
+     },
+     "crop": {
+      "type": "object",
+      "description": "Video crop: fractions of the frame cut from each side",
+      "properties": {
+       "left": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 0.95
+       },
+       "top": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 0.95
+       },
+       "right": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 0.95
+       },
+       "bottom": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 0.95
+       }
+      }
      }
     },
     "required": [

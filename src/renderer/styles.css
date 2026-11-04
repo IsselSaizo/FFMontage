@@ -596,3 +596,18 @@ body[data-mode="anim"] #anim-presets, body[data-mode="anim"] #anim-params { disp
 .check-row input { accent-color: var(--accent); width: 15px; height: 15px; margin: 0; }
 #speed-slider { flex: 1; min-width: 60px; }
 .sec-wrap span:first-child { padding-left: 8px; }
+/* ---------- Кадрирование в плеере ---------- */
+.crop-layer { position: absolute; inset: 0; z-index: 20; }
+.crop-box { position: absolute; border: 1.5px solid #fff; box-shadow: 0 0 0 9999px rgba(0,0,0,.6); cursor: move; touch-action: none;
+  background-image: linear-gradient(rgba(255,255,255,.25) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.25) 1px, transparent 1px);
+  background-size: 33.333% 33.333%; background-position: -1px -1px; }
+.crop-size { position: absolute; left: 6px; top: 6px; font-size: 11px; background: rgba(0,0,0,.6); padding: 1px 6px; border-radius: 4px; pointer-events: none; }
+.crop-h { position: absolute; width: 16px; height: 16px; background: #fff; border: 2px solid var(--accent); border-radius: 3px; touch-action: none; }
+.crop-h.nw { left: -3px; top: -3px; cursor: nwse-resize; } .crop-h.se { right: -3px; bottom: -3px; cursor: nwse-resize; }
+.crop-h.ne { right: -3px; top: -3px; cursor: nesw-resize; } .crop-h.sw { left: -3px; bottom: -3px; cursor: nesw-resize; }
+.crop-h.n { left: calc(50% - 8px); top: -3px; cursor: ns-resize; } .crop-h.s { left: calc(50% - 8px); bottom: -3px; cursor: ns-resize; }
+.crop-h.w { top: calc(50% - 8px); left: -3px; cursor: ew-resize; } .crop-h.e { top: calc(50% - 8px); right: -3px; cursor: ew-resize; }
+.crop-bar { position: absolute; right: 10px; bottom: 10px; display: flex; align-items: center; gap: 8px; padding: 6px 8px;
+  background: rgba(20,20,26,.92); border: 1px solid var(--line-2); border-radius: 9px; }
+.crop-bar .check-row { margin: 0 6px 0 2px; }
+body.cropping #viewbar .vb-crop { background: var(--accent-soft); color: var(--text); }

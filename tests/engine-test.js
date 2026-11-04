@@ -97,6 +97,27 @@ async function speedTest(enc) {
   const f1 = await rgb(out, 1.0); const f2 = await rgb(out, 2.2); const f3 = await rgb(out, 4.5);
   assert(isRed(f1.px(32, 18)) && isBlue(f2.px(32, 18)), '×2: на 1 с ещё красный (2 с файла), на 2,2 с уже синий (4,4 с файла)');
   assert(isRed(f3.px(32, 18)), '×0,5: второй клип красный до конца');
+
+  // Кадрирование: слева красная половина, справа синяя; срезаем правую половину и растягиваем
+  console.log('Кадрирование:');
+  const half = await make('s_halves.mp4', ['-f', 'lavfi', '-i', 'color=c=red:s=320x360:r=30:d=2', '-f', 'lavfi', '-i', 'color=c=blue:s=320x360:r=30:d=2',
+    '-filter_complex', '[0:v][1:v]hstack[v]', '-map', '[v]', '-c:v', 'libx264', '-pix_fmt', 'yuv420p']);
+  const ih = await ff.probe(half);
+  const pc = {
+    media: { h: ih },
+    videoClips: [
+      { mediaId: 'h', in: 0, out: 1, start: 0, volume: 1, muted: false, crop: { l: 0, t: 0, r: 0.5, b: 0 }, fit: 'stretch' },
+      { mediaId: 'h', in: 0, out: 1, start: 1, volume: 1, muted: false, crop: { l: 0.5, t: 0, r: 0, b: 0 } },
+    ],
+    audioTracks: [],
+  };
+  const bc = plan.buildExport(pc, { width: 640, height: 360, fps: 30 });
+  assert(/crop=w=trunc\(iw\*0\.500000\/2\)\*2:h=trunc\(ih\*1\.000000\/2\)\*2:x=iw\*0\.000000:y=ih\*0\.000000,fps=/.test(bc.filter), 'crop перед подгонкой');
+  const outc = path.join(DIR, 'out_crop.mp4');
+  await startExport(pc, { width: 640, height: 360, fps: 30, codec, quality: 'high', output: outc });
+  const c1 = await rgb(outc, 0.5); const c2 = await rgb(outc, 1.5);
+  assert(isRed(c1.px(4, 18)) && isRed(c1.px(60, 18)), `правая половина срезана, красное на весь кадр ${c1.px(60, 18)}`);
+  assert(isBlue(c2.px(32, 18)) && c2.px(2, 18).every((x) => x < 30), `левая половина срезана, синий квадрат вписан с полями ${c2.px(2, 18)}`);
 }
 
 // Пустоты, переходы, затухания, реверс и стоп-кадр

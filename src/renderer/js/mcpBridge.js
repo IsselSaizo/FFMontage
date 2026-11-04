@@ -140,6 +140,7 @@ function describeClip(c, kind, track = null) {
   if (kind === 'audio' && c.stream) o.audio_stream = c.stream;
   if (kind === 'video' && Array.isArray(c.effects) && c.effects.length) o.effects = c.effects;
   if (kind === 'video' && (c.fit === 'cover' || c.fit === 'stretch')) o.fit = c.fit;
+  if (kind === 'video' && c.crop) o.crop = { left: c.crop.l, top: c.crop.t, right: c.crop.r, bottom: c.crop.b };
   if (store.busy[c.id]) o.processing = store.busy[c.id].label;
   return o;
 }
@@ -392,6 +393,14 @@ const TOOLS = {
     const insert = boolArg(args, 'insert');
     const speed = numArg(args, 'speed', { min: MIN_SPEED, max: MAX_SPEED });
     const shiftFollowing = boolArg(args, 'shift_following');
+    let crop;
+    if (args.crop !== undefined && args.crop !== null) {
+      if (f.kind !== 'video') fail('"crop" applies only to video clips.');
+      if (typeof args.crop !== 'object') fail('"crop" must be an object { left, top, right, bottom } with fractions 0..0.95.');
+      const g = (k) => { const v = args.crop[k] === undefined ? 0 : Number(args.crop[k]); if (!isFinite(v) || v < 0 || v > 0.95) fail(`crop.${k} must be a fraction 0..0.95.`); return v; };
+      crop = { l: g('left'), t: g('top'), r: g('right'), b: g('bottom') };
+      if (crop.l + crop.r > 0.95 || crop.t + crop.b > 0.95) fail('The crop leaves less than 5% of the frame.');
+    }
     if (speed !== undefined && m.isImage && !m.isAnimation) fail('A still image has no speed; change its \"duration\" instead.');
     let tid = strArg(args, 'audio_track_id');
     if (tid !== undefined && f.kind !== 'audio') fail('"audio_track_id" applies only to audio clips.');
@@ -429,6 +438,7 @@ const TOOLS = {
         }
       }
     });
+    if (crop) store.setCrop([c.id], crop);
     if (speed !== undefined && Math.abs(speed - speedOf(c)) > 1e-6) store.setSpeed(c.id, speed, { ripple: !!shiftFollowing });
     ai('изменён клип');
     const d = describeById(c.id);

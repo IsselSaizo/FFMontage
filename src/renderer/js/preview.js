@@ -10,6 +10,9 @@ import { cssEffects } from './effects.js';
 import { speedOf, tlLen, clipEnd, srcAt, tlAt } from './clipTime.js';
 
 const EPS = 0.004;
+// crop { l, t, r, b } — доли кадра, срезанные с каждой стороны
+export const cropViewBox = (cr) => (cr && (cr.l || cr.t || cr.r || cr.b)
+  ? `inset(${+(cr.t * 100).toFixed(3)}% ${+(cr.r * 100).toFixed(3)}% ${+(cr.b * 100).toFixed(3)}% ${+(cr.l * 100).toFixed(3)}%)` : '');
 const isStill = (clip) => { const m = store.media(clip.mediaId); return !!(m && m.isImage && !m.isAnimation); };
 
 // Множитель плавного появления/исчезания клипа в момент t таймлайна (0…1)
@@ -277,8 +280,13 @@ export class Preview {
     const shownW = this.stage.clientWidth;
     for (const x of layers) {
       if (!x.el) continue;
-      x.el.classList.toggle('cover', x.clip.fit === 'cover');
-      x.el.classList.toggle('stretch', x.clip.fit === 'stretch');
+      // В режиме кадрирования клип показывается целиком (вписан), рамку рисует cropMode.js
+      const editing = this.cropEdit === x.clip.id;
+      x.el.classList.toggle('cover', !editing && x.clip.fit === 'cover');
+      x.el.classList.toggle('stretch', !editing && x.clip.fit === 'stretch');
+      // Кадрирование: object-view-box вырезает часть кадра, а object-fit подгоняет уже её (как crop→scale в экспорте)
+      const vb = editing ? '' : cropViewBox(x.clip.crop);
+      if (x.el.style.objectViewBox !== vb) x.el.style.objectViewBox = vb;
       const ov = this.effectOverride && this.effectOverride.clipId === x.clip.id ? { ...x.clip, effects: this.effectOverride.effects } : x.clip;
       const tf = x.el.style.filter;
       x.el.style.filter = cssEffects(ov, shownW, tf ? [tf] : []);

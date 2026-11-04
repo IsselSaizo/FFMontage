@@ -26,6 +26,15 @@ export const QUALITY = {
 
 const n6 = (x) => Number(x).toFixed(6);
 const even = (x) => Math.max(2, Math.round(x / 2) * 2);
+// Кадрирование: crop { l, t, r, b } — доли кадра, срезанные с каждой стороны; потом обычная подгонка
+export function cropChain(c) {
+  const cr = c.crop;
+  if (!cr || !(cr.l || cr.t || cr.r || cr.b)) return '';
+  const f = (x) => Math.max(0, Math.min(0.95, Number(x) || 0));
+  const w = Math.max(0.05, 1 - f(cr.l) - f(cr.r)).toFixed(6); const hh = Math.max(0.05, 1 - f(cr.t) - f(cr.b)).toFixed(6);
+  return `crop=w=trunc(iw*${w}/2)*2:h=trunc(ih*${hh}/2)*2:x=iw*${f(cr.l).toFixed(6)}:y=ih*${f(cr.t).toFixed(6)},`;
+}
+
 // Длина клипа на таймлайне (с учётом скорости)
 const clipDuration = (c) => Math.max(0, (c.out - c.in) / speedOf(c));
 // Скорость в графе: кадры — setpts (потом fps= выравнивает частоту), звук — atempo (тон сохраняется)
@@ -94,7 +103,7 @@ export function buildExport(project, settings) {
   const bg = /^#[0-9a-f]{6}$/i.test(project.background || '') ? project.background.slice(1).toLowerCase() : '000000';
   // fit 'cover' — заполнить кадр (лишнее обрезается), 'stretch' — растянуть без сохранения пропорций,
   // иначе вписать целиком с полями цвета фона
-  const scaleChain = (c) => (c.fit === 'cover'
+  const scaleChain = (c) => cropChain(c) + (c.fit === 'cover'
     ? `fps=${F},scale=${W}:${H}:force_original_aspect_ratio=increase:flags=lanczos,crop=${W}:${H},setsar=1,format=yuv420p`
     : c.fit === 'stretch'
       ? `fps=${F},scale=${W}:${H}:flags=lanczos,setsar=1,format=yuv420p`

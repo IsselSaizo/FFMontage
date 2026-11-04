@@ -49,7 +49,8 @@ export class Timeline {
     store.on('busy', rerender);
     store.on('time', () => this.updatePlayhead());
     this.scroll.addEventListener('scroll', rafThrottle(() => this.render()));
-    const onResize = rafThrottle(() => { if (this.autoFit) this.fit(false); this.render(); });
+    // Во время перетаскивания масштаб не трогаем: иначе клип «уезжает» из-под мыши
+    const onResize = rafThrottle(() => { if (this.autoFit && !this.drag) this.fit(false); this.render(); });
     new ResizeObserver(() => onResize()).observe(this.scroll);
 
     this.scroll.addEventListener('wheel', (e) => this.onWheel(e), { passive: false });

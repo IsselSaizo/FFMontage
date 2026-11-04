@@ -11,6 +11,7 @@ import { openExport } from './exportDialog.js';
 import { copyClip, pasteClip, reverseClip, freezeFrame } from './actions.js';
 import { closeMenu, menuOpen } from './contextMenu.js';
 import { initViewbar } from './viewbar.js';
+import { initCropMode } from './cropMode.js';
 import { modeTabs, initModes } from './modes.js';
 import { closePopover, popoverOpen } from './popover.js';
 
@@ -335,6 +336,7 @@ async function main() {
   preview = new Preview($('#preview'));
   transport = initTransport(preview);
   initViewbar();
+  const crop = initCropMode(preview);
   initModePlaceholders();
   initModes();
   initMediaPanel({ addToTimeline: (id) => timeline.addMedia(id) });
@@ -347,7 +349,7 @@ async function main() {
   initResizers();
   await restoreAutosave();
   updateTitle();
-  window.__ffm = { store, preview, timeline, importPaths, openExport, browser };
+  window.__ffm = { store, preview, timeline, importPaths, openExport, browser, crop };
   const bridge = await mcpReady;
   if (bridge) bridge.initMcpBridge({
     loadProjectText: (text, filePath) => loadFromText(text, filePath),
