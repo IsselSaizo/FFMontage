@@ -2,7 +2,9 @@
 //   in/out  — фрагмент ФАЙЛА (секунды исходника)
 //   start   — где клип стоит на ТАЙМЛАЙНЕ
 //   speed   — скорость (0.1…16, нет поля — 1): клип на таймлайне длится (out − in) / speed
-// Модуль без зависимостей — его используют и окно, и сборка экспорта в автотестах.
+// Модуль почти без зависимостей (только i18n.js, он грузится и в Node) — его используют и окно,
+// и сборка экспорта в автотестах.
+import { getLang } from './i18n.js';
 export const MIN_SPEED = 0.1;
 export const MAX_SPEED = 16;
 export const SPEED_PRESETS = [0.25, 0.5, 1, 1.5, 2, 4, 8, 16];
@@ -30,5 +32,8 @@ export function atempoChain(s) {
   return parts.map((x) => `atempo=${Number(x).toFixed(6)}`).join(',');
 }
 
-// «×1,5» — для подписей
-export const fmtSpeed = (s) => `×${String(Math.round(s * 100) / 100).replace('.', ',')}`;
+// «×1,5» — для подписей (десятичный разделитель — по языку интерфейса)
+export const fmtSpeed = (s) => {
+  const v = String(Math.round(s * 100) / 100);
+  return `×${getLang() === 'ru' ? v.replace('.', ',') : v}`;
+};

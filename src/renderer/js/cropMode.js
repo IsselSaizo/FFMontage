@@ -1,7 +1,7 @@
 // Режим кадрирования в плеере: рамка с ручками поверх всего кадра клипа.
 // Enter — применить, Esc — отменить. Галочка «ко всем клипам этого файла» — по желанию (по умолчанию выключена).
 import { store } from './store.js';
-import { h, toast } from './util.js';
+import { h, toast, t } from './util.js';
 import { clipEnd } from './clipTime.js';
 
 const MIN = 0.05;          // самая маленькая рамка — 5% кадра
@@ -84,7 +84,7 @@ export function initCropMode(preview) {
     const crop = st.crop;
     exit();
     store.setCrop(ids, crop);
-    if (ids.length > 1) toast(`Кадрирование — для ${ids.length} клипов этого файла`, 'success', 2200);
+    if (ids.length > 1) toast(t('Кадрирование — для {n} клипов этого файла', { n: ids.length }), 'success', 2200);
   }
 
   function onKey(e) {
@@ -118,11 +118,11 @@ export function initCropMode(preview) {
     const same = store.project.videoClips.filter((c) => c.mediaId === f.clip.mediaId).length;
     st.ui = h('div', { class: 'crop-layer' }, st.box,
       h('div', { class: 'crop-bar', onpointerdown: (e) => e.stopPropagation() },
-        same > 1 ? h('label', { class: 'check-row', title: 'Необязательно: та же рамка у всех клипов, вырезанных из этого файла' },
-          st.allCheck, h('span', {}, `Ко всем клипам этого файла (${same})`)) : null,
-        h('button', { class: 'btn ghost small', id: 'crop-reset', onclick: () => { st.crop = { l: 0, t: 0, r: 0, b: 0 }; draw(); } }, 'Сбросить'),
-        h('button', { class: 'btn ghost small', id: 'crop-cancel', title: 'Esc', onclick: exit }, 'Отмена'),
-        h('button', { class: 'btn primary small', id: 'crop-apply', title: 'Enter', onclick: apply }, 'Применить')));
+        same > 1 ? h('label', { class: 'check-row', title: t('Необязательно: та же рамка у всех клипов, вырезанных из этого файла') },
+          st.allCheck, h('span', {}, t('Ко всем клипам этого файла ({n})', { n: same }))) : null,
+        h('button', { class: 'btn ghost small', id: 'crop-reset', onclick: () => { st.crop = { l: 0, t: 0, r: 0, b: 0 }; draw(); } }, t('Сбросить')),
+        h('button', { class: 'btn ghost small', id: 'crop-cancel', title: 'Esc', onclick: exit }, t('Отмена')),
+        h('button', { class: 'btn primary small', id: 'crop-apply', title: 'Enter', onclick: apply }, t('Применить'))));
     preview.stage.append(st.ui);
     document.body.classList.add('cropping');
     document.addEventListener('keydown', onKey, true);

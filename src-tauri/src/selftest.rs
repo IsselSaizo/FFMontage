@@ -1,12 +1,15 @@
 // Автотесты интерфейса: FFM_SELFTEST=<скрипт.js> — скрипт выполняется в окне после загрузки,
 // результат (то, что вернул скрипт) пишется в <FFM_SHOT>.json, снимок окна — в FFM_SHOT (.png).
+use crate::tr;
 use serde_json::Value;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tauri::{AppHandle, Manager, WebviewWindow};
 
-static STARTED: AtomicBool = AtomicBool::new(false);
+/// Скрипт выполняется после каждой загрузки окна, пока не сообщит результат: так тест может проверить
+/// перезагрузку окна (смена языка) — состояние между запусками он хранит в sessionStorage.
+static DONE: AtomicBool = AtomicBool::new(false);
 
 fn script_path() -> Option<PathBuf> {
     std::env::var("FFM_SELFTEST").ok().filter(|s| !s.is_empty()).map(PathBuf::from)
@@ -19,7 +22,7 @@ pub fn shot_path() -> PathBuf {
 
 pub fn on_loaded(app: AppHandle, label: String) {
     let Some(file) = script_path() else { return };
-    if STARTED.swap(true, Ordering::SeqCst) { return; }
+    if DONE.load(Ordering::SeqCst) { return; }
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(Duration::from_millis(1200)).await;
         let script = match std::fs::read_to_string(&file) {
@@ -41,6 +44,7 @@ pub fn on_loaded(app: AppHandle, label: String) {
 }
 
 async fn finish(app: &AppHandle, label: &str, mut result: Value) {
+    if DONE.swap(true, Ordering::SeqCst) { return; }
     tokio::time::sleep(Duration::from_millis(600)).await;
     let shot = shot_path();
     if let Some(w) = app.get_webview_window(label) {
@@ -63,7 +67,7 @@ pub async fn test_done(window: WebviewWindow, result: Value) {
 
 #[tauri::command]
 pub async fn test_shot(window: WebviewWindow, name: String) -> Result<String, String> {
-    if script_path().is_none() { return Err("только в режиме автотеста".into()); }
+    if script_path().is_none() { return Err(tr!("только в режиме автотеста", "only in self-test mode").into()); }
     let safe: String = name.chars().map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_' { c } else { '_' }).collect();
     let dir = shot_path().parent().map(|p| p.to_path_buf()).unwrap_or_default();
     let file = dir.join(format!("{safe}.png"));
@@ -105,13 +109,13 @@ pub async fn capture(w: &WebviewWindow, file: &std::path::Path) -> Result<(), St
             send(Err(e.to_string()));
         }
     }).map_err(|e| e.to_string())?;
-    let data = tokio::time::timeout(Duration::from_secs(10), rx).await.map_err(|_| "снимок: нет ответа".to_string())?
-        .map_err(|_| "снимок: отменён".to_string())??;
+    let data = tokio::time::timeout(Duration::from_secs(10), rx).await.map_err(|_| tr!("снимок: нет ответа", "screenshot: no response").to_string())?
+        .map_err(|_| tr!("снимок: отменён", "screenshot: cancelled").to_string())??;
     if let Some(d) = file.parent() { let _ = std::fs::create_dir_all(d); }
     std::fs::write(file, data).map_err(|e| e.to_string())
 }
 
 #[cfg(not(windows))]
 pub async fn capture(_w: &WebviewWindow, _file: &std::path::Path) -> Result<(), String> {
-    Err("снимок окна поддерживается только в Windows".into())
+    Err(tr!("снимок окна поддерживается только в Windows", "window screenshots are supported only on Windows").into())
 }

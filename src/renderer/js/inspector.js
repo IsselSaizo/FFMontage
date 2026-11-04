@@ -1,6 +1,8 @@
 // Правая панель: свойства выделенного клипа / перехода или сведения о проекте.
 import { store, MAX_FADE } from './store.js';
-import { h, $, fmtTime, fmtDur, fmtBytes, icon, iconEl } from './util.js';
+import { h, $, fmtTime, fmtDur, fmtBytes, icon, iconEl, t } from './util.js';
+import { getLang, num as numFixed } from './i18n.js';
+import { keyHint } from './keymap.js';
 import { transitionById, MIN_DURATION } from './transitions.js';
 import { maxTransition } from './store.js';
 import { changeDuration } from './actions.js';
@@ -8,7 +10,9 @@ import { isReversed, isFreeze } from './fx.js';
 import { EFFECTS, clipEffects } from './effects.js';
 import { speedOf, tlLen, fmtSpeed, SPEED_PRESETS, MIN_SPEED, MAX_SPEED } from './clipTime.js';
 
-const num = (x, d = 1) => String(Math.round(x * 10 ** d) / 10 ** d).replace('.', ',');
+// Число как есть, но с десятичным разделителем языка: 0,8 / 0.8 (без лишних нулей, в отличие от i18n num)
+const dec = (x) => (getLang() === 'ru' ? String(x).replace('.', ',') : String(x));
+const num = (x, d = 1) => dec(Math.round(x * 10 ** d) / 10 ** d);
 
 export function initInspector() {
   const root = $('#inspector');
@@ -34,14 +38,14 @@ export function initInspector() {
 
   // Числовое поле «0,8 с» рядом со слайдером
   function secInput(value, max, onSet) {
-    const inp = h('input', { class: 'input sec', type: 'text', value: num(value), title: 'Секунды' });
+    const inp = h('input', { class: 'input sec', type: 'text', value: num(value), title: t('Секунды') });
     const apply = () => {
       const v = Number(String(inp.value).replace(',', '.'));
       if (isFinite(v)) onSet(Math.max(0, Math.min(max, v))); else inp.value = num(value);
     };
     inp.addEventListener('change', apply);
     inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); inp.blur(); } e.stopPropagation(); });
-    return h('label', { class: 'sec-wrap' }, inp, h('span', {}, 'с'));
+    return h('label', { class: 'sec-wrap' }, inp, h('span', {}, t('с')));
   }
 
   // Скорость ×0.1…×16: кнопки-пресеты, ползунок (логарифмический), поле ввода и «Сдвигать следующие клипы».
@@ -64,25 +68,25 @@ export function initInspector() {
     const snapped = () => { const s = fromPos(Number(slider.value)); return Math.abs(Math.log2(s)) < 0.06 ? 1 : s; };
     slider.addEventListener('input', () => { val.textContent = fmtSpeed(Math.round(snapped() * 100) / 100); });
     slider.addEventListener('change', () => apply(snapped()));
-    const inp = h('input', { class: 'input sec', type: 'text', id: 'speed-input', value: String(cur).replace('.', ','), title: `От ${MIN_SPEED} до ${MAX_SPEED}` });
+    const inp = h('input', { class: 'input sec', type: 'text', id: 'speed-input', value: dec(cur), title: t('От {min} до {max}', { min: MIN_SPEED, max: MAX_SPEED }) });
     inp.addEventListener('change', () => {
       const v = Number(String(inp.value).replace(',', '.').replace(/^[x×]/i, ''));
-      if (isFinite(v) && v > 0) apply(v); else inp.value = String(cur).replace('.', ',');
+      if (isFinite(v) && v > 0) apply(v); else inp.value = dec(cur);
     });
     inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); inp.blur(); } e.stopPropagation(); });
     const chk = h('input', { type: 'checkbox', id: 'speed-ripple' });
     chk.checked = ripple;
     chk.addEventListener('change', () => localStorage.setItem(RIPPLE_KEY, chk.checked ? '1' : '0'));
     const linked = store.linkedOf(clip.id).length;
-    return h('div', { class: 'insp-section', dataset: { section: 'speed' } }, h('h3', {}, 'Скорость'),
+    return h('div', { class: 'insp-section', dataset: { section: 'speed' } }, h('h3', {}, t('Скорость')),
       h('div', { class: 'presets' }, ...SPEED_PRESETS.map((s) => h('button', {
         class: `chip${Math.abs(cur - s) < 1e-6 ? ' on' : ''}`, dataset: { speed: String(s) }, onclick: () => apply(s),
       }, fmtSpeed(s)))),
       h('div', { class: 'row gap', style: { marginTop: '8px' } }, slider, val, h('label', { class: 'sec-wrap' }, h('span', {}, '×'), inp)),
-      h('label', { class: 'check-row', title: 'Выключено: клип меняет длину на месте (ускоренный оставит пустоту, замедленный наедет на следующий). Включено: всё правее сдвигается.' },
-        chk, h('span', {}, 'Сдвигать следующие клипы')),
-      h('p', { class: 'muted small' }, `${cur !== 1 ? `Длина на таймлайне ${fmtTime(tlLen(clip))} (из файла ${fmtTime(clip.out - clip.in)}). ` : ''}Тон звука сохраняется.`
-        + (linked ? ' Звук этого видео меняет скорость вместе с ним.' : '')));
+      h('label', { class: 'check-row', title: t('Выключено: клип меняет длину на месте (ускоренный оставит пустоту, замедленный наедет на следующий). Включено: всё правее сдвигается.') },
+        chk, h('span', {}, t('Сдвигать следующие клипы'))),
+      h('p', { class: 'muted small' }, (cur !== 1 ? `${t('Длина на таймлайне {len} (из файла {src}).', { len: fmtTime(tlLen(clip)), src: fmtTime(clip.out - clip.in) })} ` : '') + t('Тон звука сохраняется.')
+        + (linked ? ` ${t('Звук этого видео меняет скорость вместе с ним.')}` : '')));
   }
 
   const render = () => {
@@ -98,24 +102,24 @@ export function initInspector() {
     const srcMedia = m.derived ? store.media(m.derived.from) || m : m;
     const dur = tlLen(clip);
 
-    root.append(h('div', { class: 'panel-head' }, h('h2', {}, kind === 'video' ? 'Видеоклип' : 'Аудиоклип')));
+    root.append(h('div', { class: 'panel-head' }, h('h2', {}, kind === 'video' ? t('Видеоклип') : t('Аудиоклип'))));
     root.append(h('div', { class: 'insp-file', title: srcMedia.path },
       iconEl(kind === 'video' ? 'film' : 'music', 18), h('span', {}, store.clipName(clip)),
-      isReversed(clip) ? h('span', { class: 'tag', title: 'Играет задом наперёд' }, 'реверс') : null,
-      isFreeze(clip) ? h('span', { class: 'tag' }, 'стоп-кадр') : null));
-    if (store.busy[clip.id]) root.append(h('p', { class: 'muted small' }, `${store.busy[clip.id].label}… подождите`));
+      isReversed(clip) ? h('span', { class: 'tag', title: t('Играет задом наперёд') }, t('реверс')) : null,
+      isFreeze(clip) ? h('span', { class: 'tag' }, t('стоп-кадр')) : null));
+    if (store.busy[clip.id]) root.append(h('p', { class: 'muted small' }, t('{label}… подождите', { label: store.busy[clip.id].label })));
 
     // --- Звук ---
-    const sec = h('div', { class: 'insp-section', dataset: { section: 'audio' } }, h('h3', {}, 'Звук'));
+    const sec = h('div', { class: 'insp-section', dataset: { section: 'audio' } }, h('h3', {}, t('Звук')));
     if (!m.hasAudio) {
-      sec.append(h('p', { class: 'muted small' }, isFreeze(clip) ? 'У стоп-кадра нет звука.' : 'В этом файле нет звуковой дорожки.'));
+      sec.append(h('p', { class: 'muted small' }, isFreeze(clip) ? t('У стоп-кадра нет звука.') : t('В этом файле нет звуковой дорожки.')));
     } else if (kind === 'video' && clip.noAudio) {
       const partners = store.linkedOf(clip.id).filter((x) => x.kind === 'audio');
       sec.append(
         h('p', { class: 'muted small' }, partners.length
-          ? `Звук этого клипа — на аудиодорожке (${partners.map((x) => store.trackName(x.track.id)).join(', ')}): громкость и затухание — у аудиоклипа.`
-          : 'Звук этого клипа удалён с аудиодорожки.'),
-        h('button', { class: 'btn', onclick: () => store.restoreOwnAudio(clip.id) }, h('span', { html: icon('speaker', 17) }), 'Вернуть звук в видеоклип'));
+          ? t('Звук этого клипа — на аудиодорожке ({tracks}): громкость и затухание — у аудиоклипа.', { tracks: partners.map((x) => store.trackName(x.track.id)).join(', ') })
+          : t('Звук этого клипа удалён с аудиодорожки.')),
+        h('button', { class: 'btn', onclick: () => store.restoreOwnAudio(clip.id) }, h('span', { html: icon('speaker', 17) }), t('Вернуть звук в видеоклип')));
     } else {
       const pct = Math.round(clip.volume * 100);
       const { slider, val } = liveSlider({
@@ -125,26 +129,26 @@ export function initInspector() {
       });
       slider.addEventListener('dblclick', () => store.setClip(clip.id, { volume: 1 }));
       const muteBtn = h('button', { class: `btn toggle${clip.muted ? ' on' : ''}`, onclick: () => store.setClip(clip.id, { muted: !clip.muted }) },
-        h('span', { html: icon(clip.muted ? 'mute' : 'speaker', 17) }), clip.muted ? 'Звук выключен' : 'Выключить звук');
+        h('span', { html: icon(clip.muted ? 'mute' : 'speaker', 17) }), clip.muted ? t('Звук выключен') : t('Выключить звук'));
       sec.append(
-        h('div', { class: 'row between' }, h('label', {}, 'Громкость'), val),
+        h('div', { class: 'row between' }, h('label', {}, t('Громкость')), val),
         slider,
         h('div', { class: 'presets' },
           ...[0, 50, 100, 150, 200].map((p) => h('button', { class: `chip${pct === p ? ' on' : ''}`, onclick: () => store.setClip(clip.id, { volume: p / 100 }) }, `${p}%`))),
         muteBtn);
       if (kind === 'video') {
-        sec.append(h('button', { class: 'btn', onclick: () => store.detachAudio(clip.id) }, h('span', { html: icon('music', 17) }), 'Вынести звук на аудиодорожку'));
+        sec.append(h('button', { class: 'btn', onclick: () => store.detachAudio(clip.id) }, h('span', { html: icon('music', 17) }), t('Вынести звук на аудиодорожку')));
       } else {
         const tr = sel.track;
-        sec.append(h('p', { class: 'muted small' }, `Дорожка «${store.trackName(tr.id)}»: громкость ${Math.round((tr.volume ?? 1) * 100)}% (умножается на громкость клипа; ползунок — в заголовке дорожки).`));
-        if (clip.link) sec.append(h('button', { class: 'btn', onclick: () => store.unlink(clip.id) }, h('span', { html: icon('link', 17) }), 'Отвязать от видео'));
+        sec.append(h('p', { class: 'muted small' }, t('Дорожка «{name}»: громкость {pct}% (умножается на громкость клипа; ползунок — в заголовке дорожки).', { name: store.trackName(tr.id), pct: Math.round((tr.volume ?? 1) * 100) })));
+        if (clip.link) sec.append(h('button', { class: 'btn', onclick: () => store.unlink(clip.id) }, h('span', { html: icon('link', 17) }), t('Отвязать от видео')));
       }
     }
     root.append(sec);
 
     // --- Затухание ---
     const maxFade = Math.min(MAX_FADE, dur);
-    const fade = h('div', { class: 'insp-section', dataset: { section: 'fade' } }, h('h3', {}, 'Затухание'));
+    const fade = h('div', { class: 'insp-section', dataset: { section: 'fade' } }, h('h3', {}, t('Затухание')));
     const fadeRow = (label, key, other) => {
       const lim = () => Math.max(0, Math.min(maxFade, dur - (clip[other] || 0)));
       const { slider } = liveSlider({
@@ -155,26 +159,26 @@ export function initInspector() {
       return [h('div', { class: 'row between' }, h('label', {}, label), secInput(clip[key] || 0, maxFade, (v) => store.setClip(clip.id, { [key]: Math.min(v, lim()) }))), slider];
     };
     fade.append(
-      ...fadeRow('Постепенное возникновение', 'fadeIn', 'fadeOut'),
-      ...fadeRow('Постепенное исчезание', 'fadeOut', 'fadeIn'),
+      ...fadeRow(t('Постепенное возникновение'), 'fadeIn', 'fadeOut'),
+      ...fadeRow(t('Постепенное исчезание'), 'fadeOut', 'fadeIn'),
       h('p', { class: 'muted small' }, kind === 'video'
-        ? 'Картинка проявляется из цвета фона (обычно чёрного) и уходит в него, звук клипа — плавно. Можно тянуть кружки в углах выделенного клипа.'
-        : 'Звук плавно нарастает и затихает. Можно тянуть кружки в углах выделенного клипа.'));
+        ? t('Картинка проявляется из цвета фона (обычно чёрного) и уходит в него, звук клипа — плавно. Можно тянуть кружки в углах выделенного клипа.')
+        : t('Звук плавно нарастает и затихает. Можно тянуть кружки в углах выделенного клипа.')));
     root.append(fade);
 
     // --- Обрезка ---
-    const trim = h('div', { class: 'insp-section', dataset: { section: 'trim' } }, h('h3', {}, 'Обрезка'));
+    const trim = h('div', { class: 'insp-section', dataset: { section: 'trim' } }, h('h3', {}, t('Обрезка')));
     const info = [
-      ['Длительность', fmtTime(dur)],
-      ['На таймлайне', `${fmtTime(clip.start)} – ${fmtTime(clip.start + dur)}`],
+      [t('Длительность'), fmtTime(dur)],
+      [t('На таймлайне'), `${fmtTime(clip.start)} – ${fmtTime(clip.start + dur)}`],
     ];
-    if (!m.derived) info.push(['Из файла', `${fmtTime(clip.in)} – ${fmtTime(clip.out)}`]);
+    if (!m.derived) info.push([t('Из файла'), `${fmtTime(clip.in)} – ${fmtTime(clip.out)}`]);
     trim.append(h('dl', { class: 'kv' }, ...info.flatMap(([k, v]) => [h('dt', {}, k), h('dd', {}, v)])));
-    trim.append(h('p', { class: 'muted small' }, 'Тяните края клипа на таймлайне, чтобы обрезать. Клавиша S разрезает клип по курсору.'));
+    trim.append(h('p', { class: 'muted small' }, t('Тяните края клипа на таймлайне, чтобы обрезать. Клавиша {key} разрезает клип по курсору.', { key: keyHint('clip.split') })));
     trim.append(h('div', { class: 'row gap wrap' },
-      h('button', { class: 'btn ghost small', onclick: () => changeDuration(clip.id) }, h('span', { html: icon('clock', 15) }), 'Длительность…'),
+      h('button', { class: 'btn ghost small', onclick: () => changeDuration(clip.id) }, h('span', { html: icon('clock', 15) }), t('Длительность…')),
       h('button', { class: 'btn ghost small', disabled: m.derived || (clip.in === 0 && Math.abs(clip.out - m.duration) < 0.001),
-        onclick: () => store.setClip(clip.id, { in: 0, out: m.duration }) }, 'Исходная длина')));
+        onclick: () => store.setClip(clip.id, { in: 0, out: m.duration }) }, t('Исходная длина'))));
     root.append(trim);
 
     // --- Скорость (видео и аудио; у картинки и стоп-кадра скорости нет) ---
@@ -183,10 +187,10 @@ export function initInspector() {
     // --- Фильтры (видео): список — во вкладке «Фильтры», подгонка и кадрирование — над плеером ---
     if (kind === 'video') {
       const fxOn = clipEffects(clip);
-      root.append(h('div', { class: 'insp-section', dataset: { section: 'effects' } }, h('h3', {}, 'Фильтры'),
+      root.append(h('div', { class: 'insp-section', dataset: { section: 'effects' } }, h('h3', {}, t('Фильтры')),
         h('div', { class: 'row between' },
-          h('span', { class: 'muted small' }, fxOn.length ? fxOn.map((id) => (EFFECTS.find((e) => e.id === id) || { name: id }).name).join(', ') : 'Нет'),
-          h('button', { class: 'btn ghost small', onclick: () => store.emit('show-tab', 'effects') }, fxOn.length ? 'Изменить' : 'Добавить'))));
+          h('span', { class: 'muted small' }, fxOn.length ? fxOn.map((id) => (EFFECTS.find((e) => e.id === id) || { name: id }).name).join(', ') : t('Нет')),
+          h('button', { class: 'btn ghost small', onclick: () => store.emit('show-tab', 'effects') }, fxOn.length ? t('Изменить') : t('Добавить')))));
     }
     // --- Исходный файл ---
     root.append(fileInfo(srcMedia));
@@ -199,12 +203,12 @@ export function initInspector() {
     if (!j) return renderProject();
     const tr = j.b.transition;
     const mx = maxTransition(j.a, j.b);
-    root.append(h('div', { class: 'panel-head' }, h('h2', {}, 'Переход')));
+    root.append(h('div', { class: 'panel-head' }, h('h2', {}, t('Переход'))));
     root.append(h('p', { class: 'muted small' },
-      `Между «${store.clipName(j.a)}» и «${store.clipName(j.b)}» на ${fmtTime(j.seam)}. Переход идёт поровну до и после стыка — длина ролика не меняется.`));
+      t('Между «{a}» и «{b}» на {time}. Переход идёт поровну до и после стыка — длина ролика не меняется.', { a: store.clipName(j.a), b: store.clipName(j.b), time: fmtTime(j.seam) })));
 
     if (tr) {
-      const d = h('div', { class: 'insp-section', dataset: { section: 'transition' } }, h('h3', {}, 'Длительность'));
+      const d = h('div', { class: 'insp-section', dataset: { section: 'transition' } }, h('h3', {}, t('Длительность')));
       const { slider } = liveSlider({
         min: MIN_DURATION, max: Math.max(MIN_DURATION, Math.floor(mx * 10) / 10), step: 0.1, value: tr.duration, format: (v) => num(v),
         onLive: (v) => { const b = store.findClip(clipId).clip; if (b.transition) b.transition.duration = v; },
@@ -212,45 +216,46 @@ export function initInspector() {
       });
       d.append(h('div', { class: 'row between' }, h('label', {}, transitionById(tr.type).name),
         secInput(tr.duration, mx, (v) => store.setTransition(clipId, tr.type, Math.max(MIN_DURATION, v)))), slider,
-      h('button', { class: 'btn danger-ghost small', onclick: () => store.setTransition(clipId, null) }, h('span', { html: icon('trash', 15) }), 'Убрать переход'));
+      h('button', { class: 'btn danger-ghost small', onclick: () => store.setTransition(clipId, null) }, h('span', { html: icon('trash', 15) }), t('Убрать переход')));
       root.append(d);
     } else {
-      root.append(h('p', { class: 'muted small' }, 'Выберите переход — он сразу появится на стыке.'));
+      root.append(h('p', { class: 'muted small' }, t('Выберите переход — он сразу появится на стыке.')));
     }
 
     root.append(h('div', { class: 'insp-section', dataset: { section: tr ? 'list' : 'transition' } },
-      h('button', { class: 'btn ghost small', onclick: () => store.emit('show-tab', 'transitions') }, tr ? 'Сменить переход…' : 'Выбрать переход…')));    applyFocus();
+      h('button', { class: 'btn ghost small', onclick: () => store.emit('show-tab', 'transitions') }, tr ? t('Сменить переход…') : t('Выбрать переход…'))));
+    applyFocus();
   }
 
   function fileInfo(m) {
     const rows = [];
     if (m.hasVideo) {
-      rows.push(['Разрешение', `${m.width}×${m.height}`], ['Частота', `${Math.round(m.fps * 100) / 100} fps`],
-        ['Видеокодек', `${(m.vcodec || '').toUpperCase()}${m.pixFmt && /10/.test(m.pixFmt) ? ' 10 бит' : ''}`]);
-      if (m.vbitrate || m.bitrate) rows.push(['Битрейт', `${((m.vbitrate || m.bitrate) / 1e6).toFixed(1).replace('.', ',')} Мбит/с`]);
+      rows.push([t('Разрешение'), `${m.width}×${m.height}`], [t('Частота'), `${Math.round(m.fps * 100) / 100} fps`],
+        [t('Видеокодек'), `${(m.vcodec || '').toUpperCase()}${m.pixFmt && /10/.test(m.pixFmt) ? ` ${t('10 бит')}` : ''}`]);
+      if (m.vbitrate || m.bitrate) rows.push([t('Битрейт'), t('{n} Мбит/с', { n: numFixed((m.vbitrate || m.bitrate) / 1e6, 1) })]);
     }
-    if (m.hasAudio) rows.push(['Звук', `${(m.acodec || '').toUpperCase()}, ${Math.round((m.sampleRate || 0) / 1000)} кГц, ${m.channels === 1 ? 'моно' : m.channels === 2 ? 'стерео' : `${m.channels} кан.`}`]);
-    rows.push(['Длительность', fmtDur(m.duration)], ['Размер', fmtBytes(m.size)]);
-    return h('div', { class: 'insp-section' }, h('h3', {}, 'Исходный файл'),
+    if (m.hasAudio) rows.push([t('Звук'), `${(m.acodec || '').toUpperCase()}, ${t('{n} кГц', { n: Math.round((m.sampleRate || 0) / 1000) })}, ${m.channels === 1 ? t('моно') : m.channels === 2 ? t('стерео') : t('{n} кан.', { n: m.channels })}`]);
+    rows.push([t('Длительность'), fmtDur(m.duration)], [t('Размер'), fmtBytes(m.size)]);
+    return h('div', { class: 'insp-section' }, h('h3', {}, t('Исходный файл')),
       h('dl', { class: 'kv' }, ...rows.flatMap(([k, v]) => [h('dt', {}, k), h('dd', {}, v)])),
       h('p', { class: 'muted small path' }, m.path || ''));
   }
 
   function renderProject() {
     const f = store.sourceFormat();
-    const nClips = store.project.videoClips.length + store.project.audioTracks.reduce((s, t) => s + t.clips.length, 0);
+    const nClips = store.project.videoClips.length + store.project.audioTracks.reduce((s, tr) => s + tr.clips.length, 0);
     const files = Object.values(store.project.media).filter((m) => !m.hidden).length;
-    root.append(h('div', { class: 'panel-head' }, h('h2', {}, 'Проект')));
+    root.append(h('div', { class: 'panel-head' }, h('h2', {}, t('Проект'))));
     root.append(h('div', { class: 'insp-section' },
       h('dl', { class: 'kv' },
-        h('dt', {}, 'Формат'), h('dd', {}, f.fromClip ? `${f.width}×${f.height}, ${f.fps} fps` : 'по видео на таймлайне'),
-        h('dt', {}, 'Длительность'), h('dd', {}, fmtTime(store.duration())),
-        h('dt', {}, 'Клипов'), h('dd', {}, String(nClips)),
-        h('dt', {}, 'Переходов'), h('dd', {}, String(store.transitions().length)),
-        h('dt', {}, 'Файлов'), h('dd', {}, String(files))),
-      h('p', { class: 'muted small' }, 'Размер кадра берётся из самого крупного видео на таймлайне (с учётом формата кадра). При экспорте можно выбрать другой.')));
+        h('dt', {}, t('Формат')), h('dd', {}, f.fromClip ? `${f.width}×${f.height}, ${f.fps} fps` : t('по видео на таймлайне')),
+        h('dt', {}, t('Длительность')), h('dd', {}, fmtTime(store.duration())),
+        h('dt', {}, t('Клипов')), h('dd', {}, String(nClips)),
+        h('dt', {}, t('Переходов')), h('dd', {}, String(store.transitions().length)),
+        h('dt', {}, t('Файлов')), h('dd', {}, String(files))),
+      h('p', { class: 'muted small' }, t('Размер кадра берётся из самого крупного видео на таймлайне (с учётом формата кадра). При экспорте можно выбрать другой.'))));
 
-    root.append(h('p', { class: 'muted small' }, 'Формат кадра и фон — кнопки над плеером. Горячие клавиши — меню ☰ → «Горячие клавиши».'));
+    root.append(h('p', { class: 'muted small' }, t('Формат кадра и фон — кнопки над плеером. Горячие клавиши — меню ☰ → «Горячие клавиши».')));
   }
 
   // Прокрутить к нужному разделу и подсветить его

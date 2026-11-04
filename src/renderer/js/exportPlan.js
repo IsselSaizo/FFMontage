@@ -14,6 +14,7 @@
 import { ffEffects } from './effects.js';
 import { speedOf, atempoChain } from './clipTime.js';
 import { ffAudioFx } from './audioFx.js';
+import { t } from './i18n.js';
 
 export const QUALITY = {
   // Значение CQ: меньше — лучше качество и больше файл
@@ -232,7 +233,7 @@ export function buildExport(project, settings) {
 
   const ovEnd = (project.overlayClips || []).reduce((s, c) => (media[c.mediaId] ? Math.max(s, c.start + clipDuration(c)) : s), 0);
   const total = Math.max(videoEnd, audioEnd, ovEnd);
-  if (total <= 0.01) throw new Error('Таймлайн пуст — нечего экспортировать.');
+  if (total <= 0.01) throw new Error(t('Таймлайн пуст — нечего экспортировать.'));
 
   // Если звук длиннее видео — добиваем чёрным кадром
   if (total - videoEnd > 0.0005) {

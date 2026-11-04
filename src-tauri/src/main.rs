@@ -4,11 +4,13 @@
 //   ff-montage --engine <cmd>  — движок без окна (автотесты)
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod cache;
 mod cli;
 mod commands;
 mod control;
 mod export;
 mod ff;
+mod i18n;
 mod mcp;
 mod paths;
 mod procs;
@@ -51,6 +53,7 @@ fn run() {
     update::cleanup_old();
     let p = paths::get();
     paths::ensure_dirs();
+    i18n::set(&windows::boot_lang().0);
     std::thread::spawn(|| procs::sweep_leftovers(&paths::get().media_cache));
     // Временная папка окна первой настройки больше не нужна
     if !p.first_run {
@@ -82,6 +85,11 @@ fn run() {
             commands::setup_save,
             commands::setup_open,
             commands::setup_cancel,
+            commands::app_restart,
+            commands::settings_get,
+            commands::settings_set,
+            commands::cache_stats,
+            commands::cache_clear,
             commands::media_pick,
             commands::media_probe,
             commands::media_thumbs,
@@ -129,7 +137,7 @@ fn run() {
             Ok(())
         })
         .build(tauri::generate_context!())
-        .expect("FF Montage: не удалось запустить окно");
+        .expect(tr!("FF Montage: не удалось запустить окно", "FF Montage: cannot start the window"));
 
     app.run(|_app, event| {
         if let tauri::RunEvent::Exit = event {

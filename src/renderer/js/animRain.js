@@ -2,15 +2,16 @@
 // Одна и та же математика частиц — для холста-предпросмотра и для запекания в FFmpeg,
 // поэтому сохранённое видео совпадает с тем, что было видно в плеере.
 // Модуль без DOM.
+import { t } from './i18n.js';
 
 export const RAIN_PARAMS = [
-  { k: 'count', name: 'Количество', min: 1, max: 150, step: 1, def: 30, unit: '' },
-  { k: 'speed', name: 'Скорость падения', min: 0.1, max: 2, step: 0.05, def: 0.35, unit: 'экр/с' },
-  { k: 'size', name: 'Размер', min: 0.03, max: 0.4, step: 0.01, def: 0.1, unit: 'кадра', pct: true },
-  { k: 'spread', name: 'Разброс размера', min: 0, max: 0.8, step: 0.05, def: 0.3, unit: '', pct: true },
-  { k: 'rotation', name: 'Вращение', min: 0, max: 360, step: 5, def: 90, unit: '°/с' },
-  { k: 'wind', name: 'Ветер', min: -0.5, max: 0.5, step: 0.01, def: 0.05, unit: 'экр/с' },
-  { k: 'duration', name: 'Длительность', min: 1, max: 30, step: 0.5, def: 5, unit: 'с' },
+  { k: 'count', name: t('Количество'), min: 1, max: 150, step: 1, def: 30, unit: '' },
+  { k: 'speed', name: t('Скорость падения'), min: 0.1, max: 2, step: 0.05, def: 0.35, unit: t('экр/с') },
+  { k: 'size', name: t('Размер'), min: 0.03, max: 0.4, step: 0.01, def: 0.1, unit: t('кадра'), pct: true },
+  { k: 'spread', name: t('Разброс размера'), min: 0, max: 0.8, step: 0.05, def: 0.3, unit: '', pct: true },
+  { k: 'rotation', name: t('Вращение'), min: 0, max: 360, step: 5, def: 90, unit: t('°/с') },
+  { k: 'wind', name: t('Ветер'), min: -0.5, max: 0.5, step: 0.01, def: 0.05, unit: t('экр/с') },
+  { k: 'duration', name: t('Длительность'), min: 1, max: 30, step: 0.5, def: 5, unit: t('с') },
 ];
 
 export function rainDefaults() {

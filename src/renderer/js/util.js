@@ -1,4 +1,8 @@
 // Мелкие помощники для интерфейса
+import { t, num } from './i18n.js';
+import { withKey } from './keymap.js';
+
+export { t };
 
 export const $ = (sel, root = document) => root.querySelector(sel);
 export const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
@@ -12,6 +16,8 @@ export function h(tag, attrs = {}, ...children) {
     else if (k === 'html') el.innerHTML = v;
     else if (k.startsWith('on') && typeof v === 'function') el.addEventListener(k.slice(2).toLowerCase(), v);
     else if (k === 'dataset') Object.assign(el.dataset, v);
+    // tip: [текст, id действия] — подсказка с текущей клавишей действия, обновляется при смене клавиш
+    else if (k === 'tip' && Array.isArray(v)) { el.dataset.tip = v[0]; if (v[1]) el.dataset.tipAction = v[1]; el.title = v[1] ? withKey(v[0], v[1]) : v[0]; }
     else el.setAttribute(k, v === true ? '' : v);
   }
   for (const c of children.flat()) {
@@ -23,7 +29,7 @@ export function h(tag, attrs = {}, ...children) {
 
 export const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
 // Текст ошибки: Tauri отклоняет invoke строкой (не Error), JS-код бросает Error
-export const errText = (e) => String((e && e.message) || e || 'неизвестная ошибка');
+export const errText = (e) => String((e && e.message) || e || t('неизвестная ошибка'));
 export const uid = (p = 'id') => `${p}_${Math.random().toString(36).slice(2, 9)}${Date.now().toString(36).slice(-3)}`;
 
 // 75.5 -> "1:15.5"; with frames=false -> "1:15"
@@ -40,16 +46,16 @@ export function fmtTime(sec, { ms = true } = {}) {
 
 export function fmtDur(sec) {
   if (!isFinite(sec)) return '—';
-  if (sec < 60) return `${sec.toFixed(1).replace('.', ',')} с`;
+  if (sec < 60) return t('{s} с', { s: num(sec, 1) });
   const m = Math.floor(sec / 60); const s = Math.round(sec % 60);
-  return s ? `${m} мин ${s} с` : `${m} мин`;
+  return s ? t('{m} мин {s} с', { m, s }) : t('{m} мин', { m });
 }
 
 export function fmtBytes(b) {
   if (!b && b !== 0) return '—';
-  if (b < 1024 * 1024) return `${(b / 1024).toFixed(0)} КБ`;
-  if (b < 1024 ** 3) return `${(b / 1024 / 1024).toFixed(1).replace('.', ',')} МБ`;
-  return `${(b / 1024 ** 3).toFixed(2).replace('.', ',')} ГБ`;
+  if (b < 1024 * 1024) return t('{n} КБ', { n: (b / 1024).toFixed(0) });
+  if (b < 1024 ** 3) return t('{n} МБ', { n: num(b / 1024 / 1024, 1) });
+  return t('{n} ГБ', { n: num(b / 1024 ** 3, 2) });
 }
 
 export function debounce(fn, ms) {
@@ -88,7 +94,7 @@ export function toast(msg, kind = 'info', ms = 3500) {
 }
 
 // Простое модальное подтверждение
-export function confirmDialog(title, text, okText = 'OK', cancelText = 'Отмена', danger = false) {
+export function confirmDialog(title, text, okText = 'OK', cancelText = t('Отмена'), danger = false) {
   return new Promise((resolve) => {
     const close = (v) => { overlay.remove(); resolve(v); };
     const overlay = h('div', { class: 'modal-overlay' },
@@ -105,7 +111,7 @@ export function confirmDialog(title, text, okText = 'OK', cancelText = 'Отме
 }
 
 // Модальный ввод одного значения. Возвращает строку или null (отмена).
-export function promptDialog(title, label, value = '', { okText = 'Готово', hint = '', type = 'text', validate = null } = {}) {
+export function promptDialog(title, label, value = '', { okText = t('Готово'), hint = '', type = 'text', validate = null } = {}) {
   return new Promise((resolve) => {
     const input = h('input', { class: 'input', type, value: String(value), spellcheck: 'false' });
     const err = h('p', { class: 'setup-error' });
@@ -126,7 +132,7 @@ export function promptDialog(title, label, value = '', { okText = 'Готово'
         h('div', { class: 'modal-head' }, h('h2', {}, title)),
         h('div', { class: 'modal-body prompt' }, h('label', { class: 'muted' }, label), input, hint ? h('p', { class: 'muted small' }, hint) : null, err),
         h('div', { class: 'modal-foot' },
-          h('button', { class: 'btn ghost', onclick: () => close(null) }, 'Отмена'),
+          h('button', { class: 'btn ghost', onclick: () => close(null) }, t('Отмена')),
           h('button', { class: 'btn primary', onclick: ok }, okText))));
     overlay.addEventListener('mousedown', (e) => { if (e.target === overlay) close(null); });
     document.body.append(overlay);
@@ -206,6 +212,7 @@ const P = {
   aspect: '<rect x="3" y="6" width="12" height="12" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.7"/><rect x="11" y="3" width="10" height="16" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.7" opacity=".65"/>',
   palette: '<path d="M12 3a9 9 0 0 0 0 18c1.2 0 1.7-.8 1.7-1.6 0-1.2-1-1.4-1-2.4 0-.9.7-1.5 1.6-1.5H17a4 4 0 0 0 4-4c0-4.7-4-8.5-9-8.5z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><circle cx="7.5" cy="11" r="1.3" fill="currentColor"/><circle cx="10" cy="7" r="1.3" fill="currentColor"/><circle cx="14.5" cy="7" r="1.3" fill="currentColor"/>',
   speed: '<path d="M4.5 17a8 8 0 1 1 15 0" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><path d="M12 15l4-5" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/><circle cx="12" cy="15" r="1.4" fill="currentColor"/>',
+  gear: '<circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M12 2.8l1.6 2.3 2.7-.7.5 2.8 2.5 1.2-1 2.6 1 2.6-2.5 1.2-.5 2.8-2.7-.7L12 21.2l-1.6-2.3-2.7.7-.5-2.8-2.5-1.2 1-2.6-1-2.6 2.5-1.2.5-2.8 2.7.7z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>',
   keyboard: '<rect x="2.5" y="6" width="19" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M6 10h.5M9 10h.5M12 10h.5M15 10h.5M18 10h.5M6 13h.5M18 13h.5M8.5 14.5h7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>',
 };
 export function icon(name, size = 20) {

@@ -3,7 +3,7 @@
 //
 // Сервер сам ничего не монтирует: он передаёт вызовы инструментов в окно программы через локальный канал
 // (control.rs). Адрес канала и ключ — в <кэш>/app/mcp-endpoint.json. Если программа не запущена — запускает её.
-use crate::{control, paths};
+use crate::{control, paths, tr};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::io::Write;
@@ -39,8 +39,10 @@ struct App {
 fn read_endpoint() -> Result<Option<Value>, String> {
     let p = paths::get();
     if p.first_run {
-        return Err(format!("FF Montage is not set up yet ({} not found). First start FF Montage and choose the folders \
-            (сначала запустите FF Montage и выберите папки), then try again.", p.config_file.display()));
+        return Err(tr!("FF Montage is not set up yet ({} not found). First start FF Montage and choose the folders \
+            (сначала запустите FF Montage и выберите папки), then try again.",
+            "FF Montage is not set up yet ({} not found). First start FF Montage and choose the folders, then try again.",
+            p.config_file.display()));
     }
     let v = std::fs::read_to_string(control::endpoint_file()).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok());
     Ok(v.filter(|e| e["pipe"].is_string() && e["token"].is_string()))
@@ -252,6 +254,8 @@ fn out(v: &Value) {
 }
 
 pub fn main() {
+    // Язык сообщений об ошибках — как в программе
+    crate::i18n::set(&crate::windows::boot_lang().0);
     let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().expect("tokio");
     rt.block_on(async {
         let spec: Value = serde_json::from_str(TOOLS_JSON).expect("tools.json");

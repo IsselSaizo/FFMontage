@@ -1,15 +1,19 @@
 // Действия над клипами: общие для контекстного меню, горячих клавиш и инспектора.
 import { store, MIN_CLIP } from './store.js';
-import { toast, promptDialog, parseDuration, fmtTime, errText } from './util.js';
+import { toast, promptDialog, parseDuration, fmtTime, errText, t } from './util.js';
+import { getLang } from './i18n.js';
+import { keyHint } from './keymap.js';
 import { openMenu } from './contextMenu.js';
 import { toggleReverse, freezeFrameAt, isReversed, isFreeze } from './fx.js';
 import { speedOf, tlLen, clipEnd } from './clipTime.js';
-const inside = (c, t) => t > c.start + MIN_CLIP && t < clipEnd(c) - MIN_CLIP;
+const inside = (c, time) => time > c.start + MIN_CLIP && time < clipEnd(c) - MIN_CLIP;
+// Число как есть, но с десятичным разделителем языка (0.1 → «0,1» / «0.1»)
+const dec = (x) => (getLang() === 'ru' ? String(x).replace('.', ',') : String(x));
 
-export function splitClip(id, t = store.time) {
+export function splitClip(id, time = store.time) {
   const f = store.findClip(id);
-  if (!f || !inside(f.clip, t)) { toast('Поставьте курсор внутрь клипа, чтобы разрезать', 'info', 2200); return false; }
-  return store.splitAt(t, id) > 0;
+  if (!f || !inside(f.clip, time)) { toast(t('Поставьте курсор внутрь клипа, чтобы разрезать'), 'info', 2200); return false; }
+  return store.splitAt(time, id) > 0;
 }
 
 export function deleteClip(id, ripple = false) {
@@ -18,27 +22,27 @@ export function deleteClip(id, ripple = false) {
 }
 
 export function copyClip(id) {
-  if (store.copyClip(id)) toast('Клип скопирован', 'info', 1400);
+  if (store.copyClip(id)) toast(t('Клип скопирован'), 'info', 1400);
 }
 
 export function pasteClip(at = store.time, lane = null) {
-  if (!store.clipboard) { toast('Сначала скопируйте клип (Ctrl+C)', 'info', 2000); return; }
-  if (!store.paste(at, lane)) toast('Файл скопированного клипа убран из проекта', 'error');
+  if (!store.clipboard) { toast(t('Сначала скопируйте клип ({key})', { key: keyHint('clip.copy') }), 'info', 2000); return; }
+  if (!store.paste(at, lane)) toast(t('Файл скопированного клипа убран из проекта'), 'error');
 }
 
 export async function reverseClip(id) {
-  try { await toggleReverse(id); } catch (e) { toast(`Реверс не получился: ${errText(e)}`, 'error', 5000); }
+  try { await toggleReverse(id); } catch (e) { toast(t('Реверс не получился: {err}', { err: errText(e) }), 'error', 5000); }
 }
 
-export async function freezeFrame(t = store.time) {
-  try { await freezeFrameAt(t, 3); } catch (e) { toast(`Стоп-кадр: ${errText(e)}`, 'error', 4000); }
+export async function freezeFrame(time = store.time) {
+  try { await freezeFrameAt(time, 3); } catch (e) { toast(t('Стоп-кадр: {err}', { err: errText(e) }), 'error', 4000); }
 }
 
 export async function renameClip(id) {
   const f = store.findClip(id);
   if (!f) return;
-  const v = await promptDialog('Переименовать клип', 'Название на таймлайне', store.clipName(f.clip), {
-    okText: 'Переименовать', hint: 'Оставьте пустым, чтобы вернуть имя файла. Файл на диске не меняется.',
+  const v = await promptDialog(t('Переименовать клип'), t('Название на таймлайне'), store.clipName(f.clip), {
+    okText: t('Переименовать'), hint: t('Оставьте пустым, чтобы вернуть имя файла. Файл на диске не меняется.'),
   });
   if (v === null) return;
   store.mutate(() => {
@@ -54,20 +58,20 @@ export async function changeDuration(id) {
   const m = store.media(f.clip.mediaId);
   const max = (m ? m.duration - f.clip.in : f.clip.out - f.clip.in) / speedOf(f.clip);
   const cur = tlLen(f.clip);
-  const v = await promptDialog('Изменить длительность', 'Длительность в секундах (или мин:сек)', String(Math.round(cur * 100) / 100).replace('.', ','), {
-    okText: 'Применить',
-    hint: `Можно от ${String(MIN_CLIP).replace('.', ',')} до ${fmtTime(max)} — дальше в файле нет кадров. Видео справа сдвинется, если не хватит места.`,
+  const v = await promptDialog(t('Изменить длительность'), t('Длительность в секундах (или мин:сек)'), dec(Math.round(cur * 100) / 100), {
+    okText: t('Применить'),
+    hint: t('Можно от {min} до {max} — дальше в файле нет кадров. Видео справа сдвинется, если не хватит места.', { min: dec(MIN_CLIP), max: fmtTime(max) }),
     validate: (s) => {
       const d = parseDuration(s);
-      if (!isFinite(d)) return 'Введите число, например 5 или 1:30';
-      if (d < MIN_CLIP) return 'Слишком коротко';
+      if (!isFinite(d)) return t('Введите число, например 5 или 1:30');
+      if (d < MIN_CLIP) return t('Слишком коротко');
       return null;
     },
   });
   if (v === null) return;
   const d = parseDuration(v);
   const got = store.setClipDuration(id, d);
-  if (got !== false && got < d - 0.01) toast(`В файле хватило кадров только на ${fmtTime(got)}`, 'info', 3000);
+  if (got !== false && got < d - 0.01) toast(t('В файле хватило кадров только на {time}', { time: fmtTime(got) }), 'info', 3000);
 }
 
 export function toggleMute(id) {
@@ -92,30 +96,30 @@ export function openClipMenu(id, x, y, clickTime = null) {
   const busy = !!store.busy[id];
   const hasSound = video ? m.hasAudio : true;
   openMenu(x, y, [
-    { id: 'duplicate', label: 'Дублировать', icon: 'duplicate', key: 'Ctrl+D', onClick: () => store.duplicateClip(id) },
-    { id: 'copy', label: 'Копировать', icon: 'copy', key: 'Ctrl+C', onClick: () => copyClip(id) },
-    { id: 'paste', label: 'Вставить', icon: 'paste', key: 'Ctrl+V', disabled: !store.clipboard, onClick: () => pasteClip(store.time, video ? 'video' : f.track.id) },
-    { id: 'delete', label: 'Удалить', icon: 'trash', key: 'Del', onClick: () => deleteClip(id) },
-    { id: 'ripple-delete', label: 'Удалить и сдвинуть', icon: 'gapclose', key: 'Shift+Del', onClick: () => deleteClip(id, true) },
+    { id: 'duplicate', label: t('Дублировать'), icon: 'duplicate', key: keyHint('clip.duplicate'), onClick: () => store.duplicateClip(id) },
+    { id: 'copy', label: t('Копировать'), icon: 'copy', key: keyHint('clip.copy'), onClick: () => copyClip(id) },
+    { id: 'paste', label: t('Вставить'), icon: 'paste', key: keyHint('clip.paste'), disabled: !store.clipboard, onClick: () => pasteClip(store.time, video ? 'video' : f.track.id) },
+    { id: 'delete', label: t('Удалить'), icon: 'trash', key: keyHint('clip.delete'), onClick: () => deleteClip(id) },
+    { id: 'ripple-delete', label: t('Удалить и сдвинуть'), icon: 'gapclose', key: keyHint('clip.rippleDelete'), onClick: () => deleteClip(id, true) },
     'sep',
-    { id: 'split', label: 'Разделить', icon: 'split', key: 'S', disabled: at === null, onClick: () => splitClip(id, at) },
-    video ? { id: 'freeze', label: 'Создать стоп-кадр', icon: 'freeze', key: 'F', disabled: busy || isFreeze(c), onClick: () => freezeFrame(freezeAt) } : null,
-    { id: 'duration', label: 'Изменить длительность', icon: 'clock', onClick: () => changeDuration(id) },
-    { id: 'rename', label: 'Переименовать', icon: 'rename', onClick: () => renameClip(id) },
-    { id: 'reverse', label: rev ? 'Убрать отзеркаливание' : 'Отзеркалить (задом наперёд)', icon: 'reverse', key: 'R', disabled: busy || isFreeze(c), onClick: () => reverseClip(id) },
+    { id: 'split', label: t('Разделить'), icon: 'split', key: keyHint('clip.split'), disabled: at === null, onClick: () => splitClip(id, at) },
+    video ? { id: 'freeze', label: t('Создать стоп-кадр'), icon: 'freeze', key: keyHint('clip.freeze'), disabled: busy || isFreeze(c), onClick: () => freezeFrame(freezeAt) } : null,
+    { id: 'duration', label: t('Изменить длительность'), icon: 'clock', onClick: () => changeDuration(id) },
+    { id: 'rename', label: t('Переименовать'), icon: 'rename', onClick: () => renameClip(id) },
+    { id: 'reverse', label: rev ? t('Убрать отзеркаливание') : t('Отзеркалить (задом наперёд)'), icon: 'reverse', key: keyHint('clip.reverse'), disabled: busy || isFreeze(c), onClick: () => reverseClip(id) },
     'sep',
-    hasSound ? { id: 'mute', label: c.muted ? 'Включить звук' : 'Выключить звук', icon: c.muted ? 'speaker' : 'mute', onClick: () => toggleMute(id) } : null,
-    { id: 'fade', label: 'Затухание и появление…', icon: 'fade', onClick: () => { store.select({ kind: f.kind, id }); focusInspector('fade'); } },
-    { id: 'more', label: 'Дополнительные варианты', icon: 'more', onClick: () => { store.select({ kind: f.kind, id }); focusInspector(); } },
+    hasSound ? { id: 'mute', label: c.muted ? t('Включить звук') : t('Выключить звук'), icon: c.muted ? 'speaker' : 'mute', onClick: () => toggleMute(id) } : null,
+    { id: 'fade', label: t('Затухание и появление…'), icon: 'fade', onClick: () => { store.select({ kind: f.kind, id }); focusInspector('fade'); } },
+    { id: 'more', label: t('Дополнительные варианты'), icon: 'more', onClick: () => { store.select({ kind: f.kind, id }); focusInspector(); } },
   ]);
 }
 
 // Меню пустого места дорожки
-export function openLaneMenu(lane, x, y, t) {
-  const gap = store.gaps(lane).find(([a, b]) => t >= a && t <= b);
+export function openLaneMenu(lane, x, y, time) {
+  const gap = store.gaps(lane).find(([a, b]) => time >= a && time <= b);
   openMenu(x, y, [
-    { id: 'paste', label: 'Вставить сюда', icon: 'paste', key: 'Ctrl+V', disabled: !store.clipboard, onClick: () => pasteClip(t, lane) },
-    gap ? { id: 'close-gap', label: 'Удалить пустоту', icon: 'gapclose', onClick: () => store.closeGap(lane, t) } : null,
-    store.gaps(lane).length ? { id: 'close-all-gaps', label: 'Убрать все пустоты на дорожке', icon: 'gapclose', onClick: () => store.closeAllGaps(lane) } : null,
+    { id: 'paste', label: t('Вставить сюда'), icon: 'paste', key: keyHint('clip.paste'), disabled: !store.clipboard, onClick: () => pasteClip(time, lane) },
+    gap ? { id: 'close-gap', label: t('Удалить пустоту'), icon: 'gapclose', onClick: () => store.closeGap(lane, time) } : null,
+    store.gaps(lane).length ? { id: 'close-all-gaps', label: t('Убрать все пустоты на дорожке'), icon: 'gapclose', onClick: () => store.closeAllGaps(lane) } : null,
   ]);
 }

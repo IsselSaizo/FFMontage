@@ -3,7 +3,7 @@
 name: CI
 on:
   push:
-    branches: [main]
+    branches: [main, next]
   pull_request:
   workflow_dispatch:
 
@@ -29,6 +29,8 @@ jobs:
       - name: FFmpeg
         shell: pwsh
         run: ./tools/fetch-ffmpeg.ps1
+      - name: Перевод интерфейса (i18n)
+        run: node tests/i18n-check.js
       - name: Сборка
         working-directory: src-tauri
         run: cargo build --release --locked
@@ -37,10 +39,12 @@ jobs:
       - name: Автотест интерфейса
         shell: pwsh
         run: |
-          foreach ($t in 'ui-selftest3', 'ui-selftest4', 'ui-selftest5', 'ui-selftest6') {
+          foreach ($t in 'ui-selftest3', 'ui-selftest4', 'ui-selftest5', 'ui-selftest6', 'ui-selftest11') {
             ./tests/run-ui.ps1 $t -TimeoutSec 300 | Tee-Object -Variable out
             if ($out -match 'FAIL|ERROR|TIMEOUT') { exit 1 }
           }
+          ./tests/run-ui.ps1 ui-selftest11 -Lang en -TimeoutSec 300 | Tee-Object -Variable out
+          if ($out -match 'FAIL|ERROR|TIMEOUT') { exit 1 }
       - name: Тест ИИ-ассистента (MCP)
         run: node tests/mcp-test.js
       - name: Журналы

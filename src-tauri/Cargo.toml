@@ -28,7 +28,7 @@ libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
 webview2-com = "0.39"
-windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_UI_Shell", "Win32_System_Com", "Win32_System_Com_StructuredStorage"] }
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_UI_Shell", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_Globalization", "Win32_UI_Input_KeyboardAndMouse"] }
 
 [features]
 default = ["custom-protocol"]

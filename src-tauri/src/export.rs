@@ -1,6 +1,6 @@
 // Запуск экспорта. Команду FFmpeg собирает окно (src/renderer/js/exportPlan.js),
 // здесь — запуск, прогресс, отмена, журнал и замена файла по готовности.
-use crate::{ff, paths};
+use crate::{ff, paths, tr};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::path::PathBuf;
@@ -21,6 +21,8 @@ pub struct Plan {
 static RUNNING: Mutex<Option<tokio::sync::oneshot::Sender<()>>> = Mutex::new(None);
 static CANCELLED: AtomicBool = AtomicBool::new(false);
 
+pub fn busy() -> bool { RUNNING.lock().unwrap().is_some() }
+
 pub fn cancel() -> bool {
     if let Some(tx) = RUNNING.lock().unwrap().take() {
         CANCELLED.store(true, Ordering::SeqCst);
@@ -37,7 +39,7 @@ pub async fn run(plan: Plan, on_progress: impl Fn(Value) + Send + Sync) -> Resul
     {
         let mut g = RUNNING.lock().unwrap();
         if g.is_some() {
-            return Err(err("Экспорт уже идёт.".into(), false));
+            return Err(err(tr!("Экспорт уже идёт.", "An export is already running.").into(), false));
         }
         *g = Some(tx);
     }
@@ -72,7 +74,7 @@ pub async fn run(plan: Plan, on_progress: impl Fn(Value) + Send + Sync) -> Resul
 
     let started = Instant::now();
     let _part_guard = crate::procs::part(&part);
-    let mut child = ff::command(&bin.ffmpeg).args(&args).spawn().map_err(|e| err(format!("Не удалось запустить FFmpeg: {e}"), false))?;
+    let mut child = ff::command(&bin.ffmpeg).args(&args).spawn().map_err(|e| err(tr!("Не удалось запустить FFmpeg: {}", "Cannot start FFmpeg: {}", e), false))?;
     let _tracked = crate::procs::track(&child);
     let mut so = child.stdout.take().unwrap();
     let mut se = child.stderr.take().unwrap();
@@ -134,18 +136,18 @@ pub async fn run(plan: Plan, on_progress: impl Fn(Value) + Send + Sync) -> Resul
         let _ = child.kill().await;
         let _ = child.wait().await;
         let _ = std::fs::remove_file(&part);
-        return Err(err("Экспорт отменён.".into(), true));
+        return Err(err(tr!("Экспорт отменён.", "Export cancelled.").into(), true));
     };
     if CANCELLED.load(Ordering::SeqCst) {
         let _ = std::fs::remove_file(&part);
-        return Err(err("Экспорт отменён.".into(), true));
+        return Err(err(tr!("Экспорт отменён.", "Export cancelled.").into(), true));
     }
     let st = st.map_err(|e| err(e.to_string(), false))?;
     if !st.success() {
         let _ = std::fs::remove_file(&part);
         let lines: Vec<&str> = tail.trim().lines().filter(|l| !l.trim().is_empty()).collect();
         let last = lines[lines.len().saturating_sub(6)..].join("\n");
-        return Err(err(format!("FFmpeg завершился с ошибкой (код {}).\n{last}", st.code().unwrap_or(-1)), false));
+        return Err(err(tr!("FFmpeg завершился с ошибкой (код {}).\n{}", "FFmpeg failed (code {}).\n{}", st.code().unwrap_or(-1), last), false));
     }
     let _ = std::fs::remove_file(&output);
     std::fs::rename(&part, &output).map_err(|e| err(e.to_string(), false))?;

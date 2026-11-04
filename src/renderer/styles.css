@@ -647,3 +647,50 @@ body[data-mode="audio"] .tl-row.video { opacity: .55; }
   overflow: hidden; cursor: grab; display: flex; align-items: center; padding: 0 6px; font-size: 11px; color: #1c1606; font-weight: 600; white-space: nowrap; }
 .ov-clip.selected { outline: 2px solid #fff; outline-offset: -1px; }
 .ov-name { overflow: hidden; text-overflow: ellipsis; }
+/* ---------- Окно настроек ---------- */
+.modal.settings { width: 940px; height: min(680px, calc(100vh - 60px)); display: flex; flex-direction: column; overflow: hidden; }
+.set-wrap { flex: 1; min-height: 0; display: grid; grid-template-columns: 200px 1fr; border-top: 1px solid var(--line); }
+.set-nav { display: flex; flex-direction: column; gap: 2px; padding: 10px 8px; border-right: 1px solid var(--line); background: var(--panel-2); overflow: auto; }
+.set-tab { display: flex; align-items: center; gap: 9px; padding: 8px 10px; border: 0; border-radius: 8px; background: transparent; color: var(--text-2); text-align: left; cursor: pointer; }
+.set-tab:hover { background: var(--panel-3); color: var(--text); }
+.set-tab.on { background: var(--accent-soft); color: var(--text); }
+.set-tab span { display: inline-flex; }
+.set-body { overflow: auto; padding: 4px 22px 18px; display: flex; flex-direction: column; gap: 12px; }
+.set-title { margin: 12px 0 2px; font-size: 16px; font-weight: 600; }
+.set-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.set-label { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.set-label.grow { flex: 1; }
+.set-actions { margin-top: 6px; flex-wrap: wrap; }
+.set-hints { margin-top: 8px; }
+.set-hints ul { margin: 6px 0 0; padding-left: 18px; line-height: 1.6; }
+.hk-head { display: flex; gap: 12px; align-items: flex-end; }
+.hk-head select { min-width: 220px; }
+.hk-conf { color: #ffb3bb; margin: 0; }
+.hk-conf:empty { display: none; }
+.hk-list { display: flex; flex-direction: column; }
+.hk-cat { margin: 12px 0 4px; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-3); }
+.hk-row { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(200px, 1.3fr) 64px; align-items: center; gap: 10px; padding: 5px 8px; border-radius: 7px; }
+.hk-row:hover { background: var(--panel-2); }
+.hk-row.recording { background: var(--accent-soft); }
+.hk-keys { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.hk-key { display: inline-flex; align-items: center; gap: 2px; background: var(--panel-3); border: 1px solid var(--line-2); border-radius: 6px; padding: 1px 2px 1px 7px; }
+.hk-key kbd { background: none; border: 0; padding: 0; font-size: 12px; }
+.hk-key.conflict { border-color: var(--danger); background: rgba(255,92,108,.14); }
+.hk-x { display: inline-flex; padding: 3px; border: 0; border-radius: 4px; background: transparent; color: var(--text-3); opacity: .6; cursor: pointer; }
+.hk-x:hover { opacity: 1; color: var(--text); background: var(--panel-2); }
+.hk-wait { font-size: 12px; color: var(--accent); }
+.hk-tools { display: flex; justify-content: flex-end; gap: 2px; }
+.icon-btn.small { width: 26px; height: 26px; }
+.cache-box { display: flex; flex-direction: column; gap: 4px; }
+.cache-row { display: grid; grid-template-columns: 22px 1fr auto; align-items: center; gap: 10px; padding: 8px; border-radius: 8px; cursor: pointer; }
+.cache-row:hover { background: var(--panel-2); }
+.cache-row.fixed { cursor: default; opacity: .8; }
+.cache-row input { accent-color: var(--accent); width: 15px; height: 15px; margin: 0; }
+.cache-size { font-variant-numeric: tabular-nums; color: var(--text-2); }
+.about-head { display: flex; align-items: center; gap: 12px; margin-bottom: 4px; }
+.about-row { display: grid; grid-template-columns: 140px 1fr; gap: 10px; font-size: 12.5px; }
+.about-row .sel { user-select: text; word-break: break-all; }
+textarea.input.mono { font-family: Consolas, "Cascadia Mono", monospace; font-size: 12px; resize: vertical; }
+.lang-choice { display: flex; gap: 10px; margin-top: 12px; }
+.lang-choice .btn { flex: 1; padding: 12px; font-size: 15px; }
+.lang-row .chip { min-width: 96px; justify-content: center; }.folders-form { display: flex; flex-direction: column; gap: 16px; }

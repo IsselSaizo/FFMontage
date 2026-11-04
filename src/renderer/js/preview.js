@@ -9,6 +9,7 @@ import { applyTransition, resetLayer } from './transitions.js';
 import { cssEffects } from './effects.js';
 import { speedOf, tlLen, clipEnd, srcAt, tlAt } from './clipTime.js';
 import { activeFx, fxParam } from './audioFx.js';
+import { t } from './i18n.js';
 
 const EPS = 0.004;
 // crop { l, t, r, b } — доли кадра, срезанные с каждой стороны
@@ -449,14 +450,14 @@ export class Preview {
     let text = '';
     if (!store.project.videoClips.length && !store.audioEnd()) {
       text = Object.keys(store.project.media).length
-        ? 'Перетащите видео на таймлайн внизу'
-        : 'Импортируйте видео, чтобы начать';
+        ? t('Перетащите видео на таймлайн внизу')
+        : t('Импортируйте видео, чтобы начать');
     } else if (L) {
       const c = L[L.master].clip;
       const rt = store.runtime[c.mediaId] || {};
-      if (rt.missing) text = 'Файл не найден';
-      else if (!playUrl(c.mediaId)) text = rt.status === 'rebuild' ? 'Восстановление эффекта…' : `Подготовка файла… ${Math.round((rt.progress || 0) * 100)}%`;
-      else if (this.master && this.master.el.failed) text = 'Этот файл не воспроизводится в предпросмотре';
+      if (rt.missing) text = t('Файл не найден');
+      else if (!playUrl(c.mediaId)) text = rt.status === 'rebuild' ? t('Восстановление эффекта…') : t('Подготовка файла… {p}%', { p: Math.round((rt.progress || 0) * 100) });
+      else if (this.master && this.master.el.failed) text = t('Этот файл не воспроизводится в предпросмотре');
     }
     this.msg.textContent = text;
     this.msg.classList.toggle('on', !!text);
@@ -602,9 +603,9 @@ function monitorControl(preview) {
   const slider = h('input', { type: 'range', min: '0', max: '100', class: 'monitor-slider', id: 'monitor-vol' });
   const upd = () => {
     b.innerHTML = icon(muted() || vol() === 0 ? 'mute' : 'speaker', 20);
-    b.title = muted() ? 'Включить звук предпросмотра' : 'Выключить звук предпросмотра (на экспорт не влияет)';
+    b.title = muted() ? t('Включить звук предпросмотра') : t('Выключить звук предпросмотра (на экспорт не влияет)');
     slider.value = String(Math.round(vol() * 100));
-    slider.title = `Громкость предпросмотра ${slider.value}% — только для прослушивания, на готовое видео не влияет`;
+    slider.title = t('Громкость предпросмотра {v}% — только для прослушивания, на готовое видео не влияет', { v: slider.value });
   };
   b.addEventListener('click', () => preview.setMonitor(vol(), !muted()));
   slider.addEventListener('input', () => preview.setMonitor(Number(slider.value) / 100, false));
@@ -616,26 +617,26 @@ function monitorControl(preview) {
 // Панель управления под плеером
 export function initTransport(preview) {
   const bar = $('#transport');
-  const btn = (name, title, fn, cls = '') => {
-    const b = h('button', { class: `icon-btn ${cls}`, title, onclick: fn });
+  const btn = (name, tip, fn, cls = '') => {
+    const b = h('button', { class: `icon-btn ${cls}`, tip, onclick: fn });
     b.innerHTML = icon(name, cls.includes('big') ? 26 : 20);
     return b;
   };
   const fpsStep = () => 1 / (store.sourceFormat().fps || 30);
-  const playBtn = btn('play', 'Воспроизвести / пауза (Пробел)', () => preview.toggle(), 'big play');
+  const playBtn = btn('play', [t('Воспроизвести / пауза'), 'play.toggle'], () => preview.toggle(), 'big play');
   const cur = h('span', { class: 'tc cur' }, '0:00.00');
   const tot = h('span', { class: 'tc tot' }, '/ 0:00.00');
   bar.append(
     h('div', { class: 'tr-left' }, cur, tot),
     h('div', { class: 'tr-center' },
-      btn('start', 'В начало (Home)', () => store.setTime(0)),
-      btn('back5', 'Назад на 5 с (J)', () => store.setTime(store.time - 5)),
+      btn('start', [t('В начало'), 'play.start'], () => store.setTime(0)),
+      btn('back5', [t('Назад на 5 с'), 'play.back5'], () => store.setTime(store.time - 5)),
       playBtn,
-      btn('fwd5', 'Вперёд на 5 с (L)', () => store.setTime(store.time + 5)),
-      btn('end', 'В конец (End)', () => store.setTime(store.duration()))),
+      btn('fwd5', [t('Вперёд на 5 с'), 'play.fwd5'], () => store.setTime(store.time + 5)),
+      btn('end', [t('В конец'), 'play.end'], () => store.setTime(store.duration()))),
     h('div', { class: 'tr-right' },
       monitorControl(preview),
-      btn('fullscreen', 'Во весь экран (Shift+F)', () => preview.fullscreen())),
+      btn('fullscreen', [t('Во весь экран'), 'view.fullscreen'], () => preview.fullscreen())),
   );
   const upd = () => {
     cur.textContent = fmtTime(store.time);

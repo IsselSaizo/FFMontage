@@ -1,5 +1,5 @@
 // Работа с FFmpeg: поиск бинарников, анализ файлов, миниатюры, волна звука, прокси, эффекты, проверка кодеков.
-use crate::paths;
+use crate::{paths, tr};
 use serde_json::{json, Value};
 use sha1::{Digest, Sha1};
 use std::collections::HashMap;
@@ -109,7 +109,7 @@ fn fail_message(prog: &Path, code: Option<i32>, stderr: &str) -> String {
     let name = prog.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
     let tail: Vec<&str> = stderr.trim().lines().collect();
     let last = tail[tail.len().saturating_sub(3)..].join(" | ");
-    format!("{name} завершился с кодом {}: {last}", code.map(|c| c.to_string()).unwrap_or_else(|| "?".into()))
+    tr!("{} завершился с кодом {}: {}", "{} exited with code {}: {}", name, code.map(|c| c.to_string()).unwrap_or_else(|| "?".into()), last)
 }
 
 pub struct Output {
@@ -119,7 +119,7 @@ pub struct Output {
 
 /// Запуск с захватом вывода. on_chunk — потоковая обработка stdout (тогда stdout в результате пуст).
 pub async fn run_with<F: FnMut(&[u8]) + Send>(prog: &Path, args: &[String], mut on_chunk: Option<F>, timeout: Option<Duration>) -> Res<Output> {
-    let mut child = command(prog).args(args).spawn().map_err(|e| format!("Не удалось запустить {}: {e}", prog.display()))?;
+    let mut child = command(prog).args(args).spawn().map_err(|e| tr!("Не удалось запустить {}: {}", "Cannot start {}: {}", prog.display(), e))?;
     let _tracked = crate::procs::track(&child);
     let mut so = child.stdout.take().unwrap();
     let mut se = child.stderr.take().unwrap();
@@ -161,7 +161,7 @@ pub async fn run_with<F: FnMut(&[u8]) + Send>(prog: &Path, args: &[String], mut 
     let (out, err, st) = match timeout {
         Some(t) => match tokio::time::timeout(t, work).await {
             Ok(r) => r,
-            Err(_) => return Err(format!("{} не ответил за {} с", prog.display(), t.as_secs())),
+            Err(_) => return Err(tr!("{} не ответил за {} с", "{} did not respond in {} s", prog.display(), t.as_secs())),
         },
         None => work.await,
     };
@@ -346,7 +346,7 @@ impl Info<'_> {
     pub fn key(&self) -> Res<String> {
         let k = self.0["key"].as_str().unwrap_or_default();
         if k.is_empty() || !k.chars().all(|c| c.is_ascii_alphanumeric()) {
-            return Err("Неверный ключ кэша".into());
+            return Err(tr!("Неверный ключ кэша", "Invalid cache key").into());
         }
         Ok(k.to_string())
     }
@@ -678,7 +678,7 @@ pub async fn freeze(info: &Value, at: f64, enc: &Value) -> Res<PathBuf> {
         if std::fs::metadata(&png).map(|m| m.len() > 0).unwrap_or(false) { break; }
     }
     if !png.exists() {
-        return Err("Не удалось взять кадр из файла".into());
+        return Err(tr!("Не удалось взять кадр из файла", "Cannot grab a frame from the file").into());
     }
     let tmp = dir.join(format!("{base}.part.mp4"));
     let _part = crate::procs::part(&tmp);
@@ -702,7 +702,7 @@ pub async fn frame_jpeg(file: &Path, t: f64, width: f64) -> Res<Vec<u8>> {
             if !o.stdout.is_empty() { return Ok(o.stdout); }
         }
     }
-    Err("Не удалось получить кадр".into())
+    Err(tr!("Не удалось получить кадр", "Cannot get the frame").into())
 }
 
 /// Поиск тишины: [{ start, end }] в секундах файла
@@ -797,10 +797,10 @@ pub async fn version_info(bin: &Bin) -> Option<(String, u32)> {
 pub async fn check_dir(dir: &str) -> Value {
     let bin = if dir.is_empty() { search_binaries(None) } else { bin_in(Path::new(dir)) };
     let Some(bin) = bin else {
-        return json!({ "ok": false, "error": if dir.is_empty() { "FFmpeg не найден" } else { "В этой папке нет ffmpeg и ffprobe" } });
+        return json!({ "ok": false, "error": if dir.is_empty() { tr!("FFmpeg не найден", "FFmpeg not found") } else { tr!("В этой папке нет ffmpeg и ffprobe", "This folder has no ffmpeg and ffprobe") } });
     };
     match version_info(&bin).await {
-        None => json!({ "ok": false, "error": "ffmpeg найден, но не запускается", "path": s(&bin.ffmpeg) }),
+        None => json!({ "ok": false, "error": tr!("ffmpeg найден, но не запускается", "ffmpeg was found but does not start"), "path": s(&bin.ffmpeg) }),
         Some((line, major)) => json!({ "ok": true, "path": s(&bin.ffmpeg), "dir": bin.dir.as_deref().map(s), "version": line, "major": major }),
     }
 }

@@ -1,5 +1,5 @@
 // Окна программы: главное и окно настроек папок (первый запуск).
-use crate::{control, paths, selftest};
+use crate::{control, paths, selftest, tr};
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::webview::{PageLoadEvent, PageLoadPayload};
 use tauri::{AppHandle, Manager, Webview, WebviewUrl, WebviewWindowBuilder};
@@ -13,9 +13,30 @@ fn start_log(name: &str) {
     let _ = std::fs::write(p.logs.join(format!("{name}.log")), format!("--- {now} (unix) ---\n"));
 }
 
+/// Язык интерфейса при запуске: (язык, выбран ли пользователем). Не выбран — язык системы
+/// (в автотестах — русский, чтобы проверки не зависели от машины).
+pub fn boot_lang() -> (String, bool) {
+    let s = paths::load_settings();
+    match s["lang"].as_str() {
+        Some(l @ ("ru" | "en")) => (l.to_string(), true),
+        _ if std::env::var("FFM_SELFTEST").map(|v| !v.is_empty()).unwrap_or(false) => ("ru".into(), false),
+        _ => (crate::i18n::system_lang().to_string(), false),
+    }
+}
+
+/// Скрипт до загрузки страницы: язык нужен модулям окна синхронно, ещё до первой строки интерфейса
+fn boot_script() -> String {
+    let (lang, chosen) = boot_lang();
+    let selftest = std::env::var("FFM_SELFTEST").map(|v| !v.is_empty()).unwrap_or(false);
+    format!("window.__FFM_BOOT = {};", serde_json::json!({
+        "lang": lang, "langChosen": chosen, "systemLang": crate::i18n::system_lang(), "selftest": selftest,
+    }))
+}
+
 pub fn open_main(app: &AppHandle) {
     start_log("renderer");
     let b = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
+        .initialization_script(boot_script())
         .title("FF Montage")
         .inner_size(1500.0, 900.0)
         .min_inner_size(1100.0, 680.0)
@@ -29,12 +50,15 @@ pub fn open_main(app: &AppHandle) {
     }
     if gst_audio_sink_missing() {
         use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
-        app.dialog().message(format!("Не установлен GStreamer good (autoaudiosink). Без него окно падает, как только в предпросмотре появляется звук.\n\n{GST_HINT}"))
-            .title("FF Montage — не хватает пакета").kind(MessageDialogKind::Warning).show(|_| {});
+        app.dialog().message(tr!("Не установлен GStreamer good (autoaudiosink). Без него окно падает, как только в предпросмотре появляется звук.\n\n{}", "GStreamer good (autoaudiosink) is not installed. Without it the window crashes as soon as sound appears in the preview.\n\n{}", gst_hint()))
+            .title(tr!("FF Montage — не хватает пакета", "FF Montage — missing package")).kind(MessageDialogKind::Warning).show(|_| {});
     }
 }
 
-const GST_HINT: &str = "Установите: sudo apt install gstreamer1.0-plugins-good (Ubuntu/Debian), sudo dnf install gstreamer1-plugins-good (Fedora), sudo pacman -S gst-plugins-good (Arch) и перезапустите программу.";
+fn gst_hint() -> &'static str {
+    tr!("Установите: sudo apt install gstreamer1.0-plugins-good (Ubuntu/Debian), sudo dnf install gstreamer1-plugins-good (Fedora), sudo pacman -S gst-plugins-good (Arch) и перезапустите программу.",
+        "Install it: sudo apt install gstreamer1.0-plugins-good (Ubuntu/Debian), sudo dnf install gstreamer1-plugins-good (Fedora), sudo pacman -S gst-plugins-good (Arch), then restart the program.")
+}
 
 /// Linux: WebKitGTK выводит звук через autoaudiosink (gst-plugins-good). Ищем плагин рядом с базовыми плагинами GStreamer;
 /// если не нашли и базовых — путь нестандартный, молчим, чтобы не пугать зря.
@@ -59,15 +83,15 @@ pub fn gst_audio_sink_missing() -> bool { false }
 /// Возвращает true, если окно стоит перезагрузить — не чаще раза в 30 с, чтобы не крутиться, если оно падает сразу при загрузке.
 fn on_web_crash(reason: &str) -> bool {
     static LAST: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
-    let hint = if gst_audio_sink_missing() { format!(" Похоже, не хватает GStreamer good. {GST_HINT}") } else { String::new() };
-    let msg = format!("Окно FF Montage упало ({reason}).{hint}");
+    let hint = if gst_audio_sink_missing() { tr!(" Похоже, не хватает GStreamer good. {}", " GStreamer good seems to be missing. {}", gst_hint()) } else { String::new() };
+    let msg = tr!("Окно FF Montage упало ({}).{}", "The FF Montage window crashed ({}).{}", reason, hint);
     eprintln!("{msg}");
     use std::io::Write;
     if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(paths::get().logs.join("renderer.log")) {
         let _ = writeln!(f, "[crash] {msg}");
     }
     control::set_ready(false);
-    control::fail_all(&format!("{msg} Окно перезагружается — повторите команду."));
+    control::fail_all(&tr!("{} Окно перезагружается — повторите команду.", "{} The window is reloading — repeat the command.", msg));
     let mut last = LAST.lock().unwrap();
     let reload = last.is_none_or(|t| t.elapsed() > std::time::Duration::from_secs(30));
     *last = Some(std::time::Instant::now());
@@ -121,7 +145,8 @@ pub fn open_setup(app: &AppHandle) {
     start_log("setup");
     let first = paths::get().first_run;
     let make = || WebviewWindowBuilder::new(app, "setup", WebviewUrl::App("setup.html".into()))
-        .title(if first { "FF Montage — первый запуск" } else { "FF Montage — настройки папок" })
+        .initialization_script(boot_script())
+        .title(if first { tr!("FF Montage — первый запуск", "FF Montage — first run") } else { tr!("FF Montage — настройки папок", "FF Montage — folders") })
         .inner_size(680.0, 720.0)
         .resizable(false)
         .minimizable(false)
@@ -151,7 +176,7 @@ pub fn on_page_load(webview: &Webview, payload: &PageLoadPayload<'_>) {
         PageLoadEvent::Started => {
             if label == "main" {
                 control::set_ready(false);
-                control::fail_all("Окно FF Montage перезагрузилось — повторите команду.");
+                control::fail_all(tr!("Окно FF Montage перезагрузилось — повторите команду.", "The FF Montage window reloaded — repeat the command."));
             }
         }
         PageLoadEvent::Finished => {

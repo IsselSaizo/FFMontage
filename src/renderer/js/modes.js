@@ -1,12 +1,12 @@
 // Вкладки сверху: Видео · Аудио · Анимации. Режим — атрибут body[data-mode], раскладку меняет CSS,
 // а модули режимов (аудиостойка, анимации) подписываются на событие 'mode'.
 import { store } from './store.js';
-import { h } from './util.js';
+import { h, t } from './util.js';
 
 export const MODES = [
-  { id: 'video', name: 'Видео', title: 'Монтаж' },
-  { id: 'audio', name: 'Аудио', title: 'Звук: эффекты клипов и дорожек' },
-  { id: 'anim', name: 'Анимации', title: 'Лёгкие анимации по пресетам' },
+  { id: 'video', name: t('Видео'), title: t('Монтаж') },
+  { id: 'audio', name: t('Аудио'), title: t('Звук: эффекты клипов и дорожек') },
+  { id: 'anim', name: t('Анимации'), title: t('Лёгкие анимации по пресетам') },
 ];
 const KEY = 'ffm.mode';
 let mode = 'video';

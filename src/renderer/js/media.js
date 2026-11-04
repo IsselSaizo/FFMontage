@@ -2,6 +2,7 @@
 import { store } from './store.js';
 import { h, $, fmtTime, toast, iconEl, confirmDialog, fmtBytes, errText } from './util.js';
 import { rebuildDerived } from './fx.js';
+import { t } from './i18n.js';
 
 const api = window.api;
 
@@ -92,7 +93,7 @@ function startProxy(mediaId) {
   const m = store.media(mediaId);
   store.setRuntime(mediaId, { forceProxy: !m.needsProxy, status: 'proxy', progress: 0 });
   return api.proxy(m).then((url) => store.setRuntime(mediaId, { proxyUrl: url, status: 'ready' }))
-    .catch((e) => { store.setRuntime(mediaId, { status: 'error', error: errText(e) }); toast(`Не удалось подготовить ${m.name}`, 'error'); });
+    .catch((e) => { store.setRuntime(mediaId, { status: 'error', error: errText(e) }); toast(t('Не удалось подготовить {name}', { name: m.name }), 'error'); });
 }
 
 // Сколько звуковых потоков в файле (записи NVIDIA/OBS: игра, микрофон…)
@@ -162,13 +163,13 @@ export async function importPaths(paths) {
   for (const p of paths) {
     try {
       const info = normalizeInfo(await api.probe(p));
-      if (!info.hasVideo && !info.hasAudio) { toast(`${info.name}: нет видео и звука`, 'error'); continue; }
-      if (!(info.duration > 0)) { toast(`${info.name}: не удалось определить длительность`, 'error'); continue; }
+      if (!info.hasVideo && !info.hasAudio) { toast(t('{name}: нет видео и звука', { name: info.name }), 'error'); continue; }
+      if (!(info.duration > 0)) { toast(t('{name}: не удалось определить длительность', { name: info.name }), 'error'); continue; }
       const id = store.addMedia(info);
       ids.push(id);
       prepare(id);
     } catch (e) {
-      toast(`Не удалось открыть файл: ${p.split(/[\\/]/).pop()}`, 'error', 5000);
+      toast(t('Не удалось открыть файл: {name}', { name: p.split(/[\\/]/).pop() }), 'error', 5000);
       console.error(e);
     }
   }
@@ -226,9 +227,9 @@ export function initMediaPanel({ addToTimeline }) {
   onAddToTimeline = addToTimeline;
   const panel = $('#media-panel');
   panel.append(
-    h('div', { class: 'panel-head' }, h('h2', {}, 'Ваши медиа')),
+    h('div', { class: 'panel-head' }, h('h2', {}, t('Ваши медиа'))),
     h('button', { class: 'btn primary wide', id: 'btn-import', onclick: () => pickAndImport() },
-      iconEl('upload', 18), 'Импорт медиа'),
+      iconEl('upload', 18), t('Импорт медиа')),
     h('div', { class: 'media-grid', id: 'media-grid' }),
   );
   store.on('project', renderGrid);
@@ -244,8 +245,8 @@ function renderGrid() {
   if (!items.length) {
     grid.append(h('div', { class: 'media-empty' },
       iconEl('media', 40),
-      h('p', {}, 'Перетащите сюда видео и музыку'),
-      h('p', { class: 'muted small' }, 'или нажмите «Импорт медиа». Записи NVIDIA (H.264, HEVC, AV1) открываются как есть.')));
+      h('p', {}, t('Перетащите сюда видео и музыку')),
+      h('p', { class: 'muted small' }, t('или нажмите «Импорт медиа». Записи NVIDIA (H.264, HEVC, AV1) открываются как есть.'))));
     return;
   }
   for (const m of items) grid.append(card(m));
@@ -264,22 +265,22 @@ function card(m) {
   } else {
     thumb.append(h('div', { class: 'spinner' }));
   }
-  thumb.append(h('span', { class: 'badge dur' }, m.isImage && !m.isAnimation ? 'фото' : m.isAnimation ? `GIF ${fmtTime(m.duration, { ms: false })}` : fmtTime(m.duration, { ms: false })));
-  if (used) thumb.append(h('span', { class: 'badge used', title: 'Используется на таймлайне' }, `${used}×`));
+  thumb.append(h('span', { class: 'badge dur' }, m.isImage && !m.isAnimation ? t('фото') : m.isAnimation ? `GIF ${fmtTime(m.duration, { ms: false })}` : fmtTime(m.duration, { ms: false })));
+  if (used) thumb.append(h('span', { class: 'badge used', title: t('Используется на таймлайне') }, `${used}×`));
   if (rt.status === 'proxy') {
     thumb.append(h('div', { class: 'media-progress' },
       h('div', { class: 'bar', style: { width: `${Math.round((rt.progress || 0) * 100)}%` } }),
-      h('span', {}, `Подготовка ${Math.round((rt.progress || 0) * 100)}%`)));
+      h('span', {}, t('Подготовка {p}%', { p: Math.round((rt.progress || 0) * 100) }))));
   }
-  if (rt.missing) thumb.append(h('div', { class: 'media-missing' }, iconEl('warning', 18), 'Файл не найден'));
+  if (rt.missing) thumb.append(h('div', { class: 'media-missing' }, iconEl('warning', 18), t('Файл не найден')));
 
-  const add = h('button', { class: 'icon-btn add', title: 'Добавить на таймлайн', onclick: (e) => { e.stopPropagation(); onAddToTimeline(m.id); } });
+  const add = h('button', { class: 'icon-btn add', title: t('Добавить на таймлайн'), onclick: (e) => { e.stopPropagation(); onAddToTimeline(m.id); } });
   add.innerHTML = iconEl('plus', 18).innerHTML;
   const del = h('button', {
-    class: 'icon-btn del', title: 'Убрать из проекта',
+    class: 'icon-btn del', title: t('Убрать из проекта'),
     onclick: async (e) => {
       e.stopPropagation();
-      if (used && !(await confirmDialog('Убрать файл из проекта?', `Файл используется на таймлайне (${used}×). Клипы с ним тоже будут удалены. Сам файл на диске не трогается.`, 'Убрать', 'Отмена', true))) return;
+      if (used && !(await confirmDialog(t('Убрать файл из проекта?'), t('Файл используется на таймлайне ({n}×). Клипы с ним тоже будут удалены. Сам файл на диске не трогается.', { n: used }), t('Убрать'), t('Отмена'), true))) return;
       store.removeMedia(m.id);
     },
   });

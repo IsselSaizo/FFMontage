@@ -2,11 +2,14 @@
 // FFmpeg делает файл в кэш, он добавляется в проект как скрытое «производное» медиа (derived),
 // а клип переключается на него. Так предпросмотр и экспорт работают с ним как с обычным видео.
 import { store, placeVideo, MIN_CLIP } from './store.js';
-import { uid, clamp, toast } from './util.js';
+import { uid, clamp, toast, t } from './util.js';
 import { prepareMedia } from './media.js';
 import { srcAt, tlAt, clipEnd } from './clipTime.js';
+import { getLang } from './i18n.js';
 
 const api = window.api;
+// Число как есть, но с десятичным разделителем языка (3 → «3», 2.5 → «2,5» / «2.5»)
+const dec = (x) => (getLang() === 'ru' ? String(x).replace('.', ',') : String(x));
 
 // Добавить (или найти уже добавленное) производное медиа
 function ensureDerived(info, derived) {
@@ -26,10 +29,10 @@ function ensureDerived(info, derived) {
 // Пересоздать файл производного медиа (если кэш очистили). Возвращает свежие сведения о файле.
 export async function rebuildDerived(m) {
   const src = store.media(m.derived.from);
-  if (!src) throw new Error('исходный файл убран из проекта');
+  if (!src) throw new Error(t('исходный файл убран из проекта'));
   if (m.derived.kind === 'reverse') return api.fxReverse(src, m.derived.in, m.derived.out);
   if (m.derived.kind === 'freeze') return api.fxFreeze(src, m.derived.at);
-  throw new Error('неизвестный эффект');
+  throw new Error(t('неизвестный эффект'));
 }
 
 export function isReversed(clip) {
@@ -44,25 +47,25 @@ export function isFreeze(clip) {
 // «Отзеркалить»: проиграть фрагмент задом наперёд. Повторный вызов возвращает обычное направление.
 export async function toggleReverse(clipId) {
   const f = store.findClip(clipId);
-  if (!f) throw new Error('Клип не найден');
+  if (!f) throw new Error(t('Клип не найден'));
   const c = f.clip;
   const m = store.media(c.mediaId);
-  if (!m) throw new Error('Файл клипа не найден');
-  if (store.busy[clipId]) throw new Error('Клип уже обрабатывается');
+  if (!m) throw new Error(t('Файл клипа не найден'));
+  if (store.busy[clipId]) throw new Error(t('Клип уже обрабатывается'));
 
   // Уже развёрнут — возвращаем исходный файл с тем же фрагментом
   if (m.derived && m.derived.kind === 'reverse') {
     const { from, out: b } = m.derived;
     store.setClip(clipId, { mediaId: from, in: b - c.out, out: b - c.in });
-    toast('Обычное направление воспроизведения', 'info', 1800);
+    toast(t('Обычное направление воспроизведения'), 'info', 1800);
     return { reversed: false };
   }
-  if (m.derived) throw new Error('Для стоп-кадра реверс не нужен');
+  if (m.derived) throw new Error(t('Для стоп-кадра реверс не нужен'));
 
   const a = c.in; const b = c.out;
-  store.setBusy(clipId, { label: 'Реверс', progress: 0 });
+  store.setBusy(clipId, { label: t('Реверс'), progress: 0 });
   const off = api.onFxProgress((p) => {
-    if (p.key === `reverse:${m.key}:${a.toFixed(3)}:${b.toFixed(3)}`) store.setBusy(clipId, { label: 'Реверс', progress: p.fraction });
+    if (p.key === `reverse:${m.key}:${a.toFixed(3)}:${b.toFixed(3)}`) store.setBusy(clipId, { label: t('Реверс'), progress: p.fraction });
   });
   try {
     const info = await api.fxReverse(m, a, b);
@@ -74,7 +77,7 @@ export async function toggleReverse(clipId) {
       // Развёрнутый файл — со своим развёрнутым звуком: связанный звук на дорожках больше не нужен
       if (cc.link && f.kind === 'video') {
         const L = cc.link;
-        for (const t of p.audioTracks) t.clips = t.clips.filter((x) => x.link !== L);
+        for (const trk of p.audioTracks) trk.clips = trk.clips.filter((x) => x.link !== L);
         delete cc.link; delete cc.noAudio;
       }
       // Если клип успели подрезать — переводим его границы в координаты развёрнутого файла
@@ -85,7 +88,7 @@ export async function toggleReverse(clipId) {
       cc.out = clamp(b - x, cc.in + MIN_CLIP, total);
     });
     prepareMedia(store.findClip(clipId).clip.mediaId);
-    toast('Фрагмент развёрнут: играет задом наперёд', 'success', 2200);
+    toast(t('Фрагмент развёрнут: играет задом наперёд'), 'success', 2200);
     return { reversed: true };
   } finally {
     off();
@@ -93,17 +96,17 @@ export async function toggleReverse(clipId) {
   }
 }
 
-// Стоп-кадр в момент t на основной дорожке: клип разрезается, вставляется неподвижный кадр длиной dur,
+// Стоп-кадр в момент time на основной дорожке: клип разрезается, вставляется неподвижный кадр длиной dur,
 // всё, что правее, сдвигается.
-export async function freezeFrameAt(t = store.time, dur = 3) {
-  const seg = store.videoLayout().find((s) => t >= s.start - 1e-6 && t < s.end - 1e-6)
-    || store.videoLayout().find((s) => Math.abs(t - s.end) < 0.02);
-  if (!seg) throw new Error('Поставьте курсор на видеоклип');
+export async function freezeFrameAt(time = store.time, dur = 3) {
+  const seg = store.videoLayout().find((s) => time >= s.start - 1e-6 && time < s.end - 1e-6)
+    || store.videoLayout().find((s) => Math.abs(time - s.end) < 0.02);
+  if (!seg) throw new Error(t('Поставьте курсор на видеоклип'));
   const c = seg.clip;
   const m = store.media(c.mediaId);
-  if (!m || !m.hasVideo) throw new Error('В клипе нет видео');
-  const local = clamp(srcAt(c, t), c.in, c.out - 0.001);
-  store.setBusy(c.id, { label: 'Стоп-кадр', progress: 0.5 });
+  if (!m || !m.hasVideo) throw new Error(t('В клипе нет видео'));
+  const local = clamp(srcAt(c, time), c.in, c.out - 0.001);
+  store.setBusy(c.id, { label: t('Стоп-кадр'), progress: 0.5 });
   try {
     const info = await api.fxFreeze(m, local);
     const fdur = clamp(dur, MIN_CLIP, (info.duration || 20) - 0.05);
@@ -120,7 +123,7 @@ export async function freezeFrameAt(t = store.time, dur = 3) {
         cc.out = local; cc.fadeOut = 0;
         p.videoClips.push(right);
       }
-      const fz = { id: uid('clp'), mediaId: id, in: 0, out: fdur, start: at, volume: 1, muted: false, fadeIn: 0, fadeOut: 0, name: 'Стоп-кадр' };
+      const fz = { id: uid('clp'), mediaId: id, in: 0, out: fdur, start: at, volume: 1, muted: false, fadeIn: 0, fadeOut: 0, name: t('Стоп-кадр') };
       const insertAt = at - cc.start < MIN_CLIP ? cc.start : (clipEnd(cc) - at < MIN_CLIP ? clipEnd(cc) : at);
       placeVideo(p, fz, insertAt, 'insert');
       newId = fz.id;
@@ -129,7 +132,7 @@ export async function freezeFrameAt(t = store.time, dur = 3) {
       prepareMedia(store.findClip(newId).clip.mediaId);
       store.select({ kind: 'video', id: newId });
     }
-    toast(`Стоп-кадр ${String(fdur).replace('.', ',')} с добавлен`, 'success', 2000);
+    toast(t('Стоп-кадр {n} с добавлен', { n: dec(fdur) }), 'success', 2000);
     return newId;
   } finally {
     store.setBusy(c.id, null);

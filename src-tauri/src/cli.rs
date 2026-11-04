@@ -2,7 +2,7 @@
 //   ff-montage --engine <команда>   (параметры — JSON в stdin, ответ — JSON в stdout)
 // Команды: probe {file} | thumbs {info} | peaks {info} | proxy {info} | reverse {info,a,b} | freeze {info,at}
 //          silence {file,threshold,min} | frame {file,t,width} | encoders | version | export {plan} | paths
-use crate::{commands, export, ff, paths};
+use crate::{commands, export, ff, paths, tr};
 use serde_json::{json, Value};
 use std::io::{Read, Write};
 use std::path::PathBuf;
@@ -39,7 +39,7 @@ pub fn main(cmd: &str) {
                 let fr = *last.lock().unwrap();
                 r.map(|mut v| { v["lastProgress"] = json!(fr); v }).map_err(|e| e["message"].as_str().unwrap_or("").to_string())
             }
-            other => Err(format!("неизвестная команда: {other}")),
+            other => Err(tr!("неизвестная команда: {}", "unknown command: {}", other)),
         }
     });
     let out = match r { Ok(v) => json!({ "ok": true, "result": v }), Err(e) => json!({ "ok": false, "error": e }) };

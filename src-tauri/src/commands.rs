@@ -1,5 +1,5 @@
 // Команды, которые вызывает окно (window.api в src/renderer/js/api.js).
-use crate::{control, export, ff, paths, protocol, windows};
+use crate::{cache, control, export, ff, i18n, paths, protocol, tr, windows};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
@@ -54,7 +54,7 @@ pub fn setup_info(app: AppHandle) -> Value {
 #[tauri::command]
 pub async fn setup_pick_folder(window: WebviewWindow, current: Option<String>) -> Option<String> {
     let dir = current.filter(|c| !c.is_empty()).map(PathBuf::from).unwrap_or_else(|| paths::get().app_dir.clone());
-    let d = window.dialog().file().set_title("Выберите папку").set_parent(&window).set_directory(dir);
+    let d = window.dialog().file().set_title(tr!("Выберите папку", "Choose a folder")).set_parent(&window).set_directory(dir);
     tauri::async_runtime::spawn_blocking(move || d.blocking_pick_folder()).await.ok().flatten().and_then(|f| f.into_path().ok()).map(|p| s(&p))
 }
 
@@ -74,29 +74,37 @@ pub struct SetupCfg {
     #[serde(default, rename = "outputDir")] output_dir: String,
     #[serde(default, rename = "projectsDir")] projects_dir: String,
     #[serde(default, rename = "ffmpegDir")] ffmpeg_dir: String,
+    /// Язык, выбранный в окне первого запуска
+    #[serde(default)] lang: Option<String>,
+    /// false — только сохранить (окно настроек сообщит о перезапуске само)
+    #[serde(default)] restart: Option<bool>,
 }
 
 #[tauri::command]
 pub fn setup_save(app: AppHandle, cfg: SetupCfg) -> Value {
     let p = paths::get();
-    let mut clean = paths::Config::default();
+    let mut clean = paths::Config { settings: paths::load_settings(), ..Default::default() };
     for (k, v) in [("cache", &cfg.cache_dir), ("output", &cfg.output_dir), ("projects", &cfg.projects_dir)] {
         let v = v.trim();
-        if v.is_empty() { return json!({ "ok": false, "error": "Укажите все папки." }); }
+        if v.is_empty() { return json!({ "ok": false, "error": tr!("Укажите все папки.", "Please fill in all folders.") }); }
         let abs = paths::absolute(Path::new(v), &p.app_dir);
         let test = abs.join(".ffm-write-test");
         if let Err(e) = std::fs::create_dir_all(&abs).and_then(|_| std::fs::write(&test, b"ok")).and_then(|_| std::fs::remove_file(&test)) {
-            return json!({ "ok": false, "error": format!("Не удалось создать папку или нет прав на запись:\n{}\n{e}", abs.display()) });
+            return json!({ "ok": false, "error": tr!("Не удалось создать папку или нет прав на запись:\n{}\n{}", "Cannot create the folder or it is not writable:\n{}\n{}", abs.display(), e) });
         }
         let v = s(&abs);
         match k { "cache" => clean.cache_dir = v, "output" => clean.output_dir = v, _ => clean.projects_dir = v }
     }
     clean.ffmpeg_dir = cfg.ffmpeg_dir.trim().to_string();
+    if let Some(l) = cfg.lang.as_deref().filter(|l| *l == "ru" || *l == "en") {
+        clean.settings["lang"] = json!(l);
+        i18n::set(l);
+    }
     if let Err(e) = paths::save_config(&clean) {
-        return json!({ "ok": false, "error": format!("Не удалось записать {}:\n{e}", p.config_file.display()) });
+        return json!({ "ok": false, "error": tr!("Не удалось записать {}:\n{}", "Cannot write {}:\n{}", p.config_file.display(), e) });
     }
     // Новые пути применяются после перезапуска
-    if std::env::var("FFM_SELFTEST").map(|v| v.is_empty()).unwrap_or(true) {
+    if cfg.restart != Some(false) && std::env::var("FFM_SELFTEST").map(|v| v.is_empty()).unwrap_or(true) {
         let a = app.clone();
         std::thread::spawn(move || {
             std::thread::sleep(std::time::Duration::from_millis(150));
@@ -108,6 +116,55 @@ pub fn setup_save(app: AppHandle, cfg: SetupCfg) -> Value {
 
 #[tauri::command]
 pub fn setup_open(app: AppHandle) -> bool { windows::open_setup(&app); true }
+
+/// Перезапуск программы (новые папки начинают действовать только после него)
+#[tauri::command]
+pub fn app_restart(app: AppHandle) -> bool {
+    if std::env::var("FFM_SELFTEST").map(|v| !v.is_empty()).unwrap_or(false) { return false; }
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        if let Ok(exe) = std::env::current_exe() { let _ = crate::update::relaunch(&app, &exe); }
+    });
+    true
+}
+
+// ---------------------------------------------------------------------------
+// Настройки интерфейса (config.json → "settings"): язык, хоткеи, …
+// ---------------------------------------------------------------------------
+#[tauri::command]
+pub fn settings_get() -> Value {
+    json!({ "settings": paths::load_settings(), "lang": i18n::lang(), "systemLang": i18n::system_lang() })
+}
+
+/// Меняет ключи верхнего уровня (null — удалить ключ) и возвращает все настройки
+#[tauri::command]
+pub fn settings_set(patch: Value) -> R<Value> {
+    let p = paths::get();
+    let mut cfg = paths::load_config(&p.config_file)
+        .ok_or_else(|| tr!("Файл настроек не найден: {}", "Settings file not found: {}", p.config_file.display()))?;
+    if !cfg.settings.is_object() { cfg.settings = json!({}); }
+    if let (Some(obj), Some(dst)) = (patch.as_object(), cfg.settings.as_object_mut()) {
+        for (k, v) in obj {
+            if v.is_null() { dst.remove(k); } else { dst.insert(k.clone(), v.clone()); }
+        }
+    }
+    if let Some(l) = cfg.settings["lang"].as_str() { i18n::set(l); }
+    paths::save_config(&cfg).map_err(|e| e.to_string())?;
+    Ok(cfg.settings)
+}
+
+/// Размеры кэша по категориям (байты)
+#[tauri::command]
+pub async fn cache_stats() -> Value {
+    tauri::async_runtime::spawn_blocking(cache::stats).await.unwrap_or(Value::Null)
+}
+
+/// Очистка кэша: cats — ["media", "temp", "logs"]; keep — пути исходных файлов открытого проекта (их кэш не трогаем)
+#[tauri::command]
+pub async fn cache_clear(cats: Vec<String>, keep: Vec<String>) -> R<Value> {
+    if export::busy() { return Err(tr!("Идёт экспорт — очистите кэш после него.", "Export is running — clear the cache after it finishes.").into()); }
+    tauri::async_runtime::spawn_blocking(move || cache::clear(&cats, &keep)).await.map_err(|e| e.to_string())
+}
 
 #[tauri::command]
 pub fn setup_cancel(app: AppHandle) -> bool {
@@ -121,10 +178,10 @@ pub fn setup_cancel(app: AppHandle) -> bool {
 #[tauri::command]
 pub async fn media_pick(window: WebviewWindow) -> Vec<String> {
     let all: Vec<&str> = [VIDEO_EXT, AUDIO_EXT, ff::IMAGE_EXT].concat();
-    let d = window.dialog().file().set_title("Импорт медиа").set_parent(&window)
-        .add_filter("Видео, аудио и картинки", &all)
-        .add_filter("Видео", VIDEO_EXT).add_filter("Аудио", AUDIO_EXT).add_filter("Картинки и GIF", ff::IMAGE_EXT)
-        .add_filter("Все файлы", &["*"]);
+    let d = window.dialog().file().set_title(tr!("Импорт медиа", "Import media")).set_parent(&window)
+        .add_filter(tr!("Видео, аудио и картинки", "Video, audio and images"), &all)
+        .add_filter(tr!("Видео", "Video"), VIDEO_EXT).add_filter(tr!("Аудио", "Audio"), AUDIO_EXT).add_filter(tr!("Картинки и GIF", "Images and GIF"), ff::IMAGE_EXT)
+        .add_filter(tr!("Все файлы", "All files"), &["*"]);
     tauri::async_runtime::spawn_blocking(move || d.blocking_pick_files()).await.ok().flatten()
         .map(|v| v.into_iter().filter_map(|f| f.into_path().ok()).map(|p| s(&p)).collect()).unwrap_or_default()
 }
@@ -215,9 +272,9 @@ pub async fn fx_silence(file: String, threshold_db: Option<f64>, min_dur: Option
 // ---------------------------------------------------------------------------
 #[tauri::command]
 pub async fn export_pick(window: WebviewWindow, suggested: Option<String>) -> Option<String> {
-    let d = window.dialog().file().set_title("Куда сохранить видео").set_parent(&window)
-        .set_directory(&paths::get().output_dir).set_file_name(suggested.unwrap_or_else(|| "Видео.mp4".into()))
-        .add_filter("Видео MP4", &["mp4"]);
+    let d = window.dialog().file().set_title(tr!("Куда сохранить видео", "Save video as")).set_parent(&window)
+        .set_directory(&paths::get().output_dir).set_file_name(suggested.unwrap_or_else(|| tr!("Видео.mp4", "Video.mp4").into()))
+        .add_filter(tr!("Видео MP4", "MP4 video"), &["mp4"]);
     tauri::async_runtime::spawn_blocking(move || d.blocking_save_file()).await.ok().flatten().and_then(|f| f.into_path().ok()).map(|p| s(&p))
 }
 
@@ -230,7 +287,7 @@ pub fn safe_name(base: &str, fallback: &str) -> String {
 #[tauri::command]
 pub fn export_default_path(base: Option<String>) -> String {
     let dir = &paths::get().output_dir;
-    let safe = safe_name(&base.unwrap_or_default(), "Видео");
+    let safe = safe_name(&base.unwrap_or_default(), tr!("Видео", "Video"));
     let mut p = dir.join(format!("{safe}.mp4"));
     let mut i = 2;
     while p.exists() { p = dir.join(format!("{safe} ({i}).mp4")); i += 1; }
@@ -293,9 +350,9 @@ pub async fn project_save(window: WebviewWindow, args: SaveArgs) -> R<Option<Str
         None => {
             let dir = paths::get().projects_dir.clone();
             let _ = std::fs::create_dir_all(&dir);
-            let name = format!("{}.ffproj", safe_name(&args.suggested.unwrap_or_default(), "Проект"));
-            let d = window.dialog().file().set_title("Сохранить проект").set_parent(&window).set_directory(dir).set_file_name(name)
-                .add_filter("Проект FF Montage", &["ffproj"]);
+            let name = format!("{}.ffproj", safe_name(&args.suggested.unwrap_or_default(), tr!("Проект", "Project")));
+            let d = window.dialog().file().set_title(tr!("Сохранить проект", "Save project")).set_parent(&window).set_directory(dir).set_file_name(name)
+                .add_filter(tr!("Проект FF Montage", "FF Montage project"), &["ffproj"]);
             match tauri::async_runtime::spawn_blocking(move || d.blocking_save_file()).await.ok().flatten().and_then(|f| f.into_path().ok()) {
                 Some(p) => p,
                 None => return Ok(None),
@@ -311,7 +368,7 @@ pub async fn project_save(window: WebviewWindow, args: SaveArgs) -> R<Option<Str
 pub async fn project_open(window: WebviewWindow) -> R<Value> {
     let dir = paths::get().projects_dir.clone();
     let _ = std::fs::create_dir_all(&dir);
-    let d = window.dialog().file().set_title("Открыть проект").set_parent(&window).set_directory(dir).add_filter("Проект FF Montage", &["ffproj"]);
+    let d = window.dialog().file().set_title(tr!("Открыть проект", "Open project")).set_parent(&window).set_directory(dir).add_filter(tr!("Проект FF Montage", "FF Montage project"), &["ffproj"]);
     let Some(p) = tauri::async_runtime::spawn_blocking(move || d.blocking_pick_file()).await.ok().flatten().and_then(|f| f.into_path().ok()) else {
         return Ok(Value::Null);
     };

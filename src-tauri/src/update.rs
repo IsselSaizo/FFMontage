@@ -2,7 +2,7 @@
 //  • Папка программы — git-клон: git fetch → сколько новых коммитов → git pull --ff-only →
 //    если изменились исходники и есть Rust (cargo) — пересборка и перезапуск.
 //  • Готовая сборка (ZIP с GitHub): последний релиз GitHub → скачать архив → заменить программу → перезапуск.
-use crate::{ff, paths};
+use crate::{ff, paths, tr};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -26,10 +26,10 @@ fn which(name: &str) -> Option<PathBuf> {
 }
 
 async fn git(args: &[&str]) -> Result<String, String> {
-    let g = which("git").ok_or("Git не найден")?;
+    let g = which("git").ok_or(tr!("Git не найден", "Git not found"))?;
     let mut c = ff::command(&g);
     c.args(args).current_dir(&paths::get().app_dir).env("GIT_TERMINAL_PROMPT", "0");
-    let out = tokio::time::timeout(Duration::from_secs(120), c.output()).await.map_err(|_| "git: нет ответа за 2 мин".to_string())?
+    let out = tokio::time::timeout(Duration::from_secs(120), c.output()).await.map_err(|_| tr!("git: нет ответа за 2 мин", "git: no response in 2 min").to_string())?
         .map_err(|e| e.to_string())?;
     if out.status.success() {
         Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
@@ -45,13 +45,13 @@ fn version_tuple(v: &str) -> Vec<u64> {
 }
 
 async fn latest_release() -> Result<Value, String> {
-    let curl = which("curl").ok_or("curl не найден")?;
+    let curl = which("curl").ok_or(tr!("curl не найден", "curl not found"))?;
     let mut c = ff::command(&curl);
     c.args(["-sL", "--max-time", "30", "-H", "Accept: application/vnd.github+json", "-H", "User-Agent: FF-Montage",
         &format!("https://api.github.com/repos/{REPO}/releases/latest")]);
     let out = c.output().await.map_err(|e| e.to_string())?;
-    let v: Value = serde_json::from_slice(&out.stdout).map_err(|_| "GitHub не ответил".to_string())?;
-    if v["tag_name"].is_null() { return Err(v["message"].as_str().unwrap_or("Релизов пока нет").to_string()); }
+    let v: Value = serde_json::from_slice(&out.stdout).map_err(|_| tr!("GitHub не ответил", "GitHub did not respond").to_string())?;
+    if v["tag_name"].is_null() { return Err(v["message"].as_str().unwrap_or(tr!("Релизов пока нет", "No releases yet")).to_string()); }
     Ok(v)
 }
 
@@ -100,7 +100,7 @@ pub fn relaunch(app: &AppHandle, exe: &Path) -> Result<(), String> {
     let mut c = std::process::Command::new(exe);
     // Новая копия подождёт, пока эта закроется (иначе сработает защита от второго экземпляра)
     c.current_dir(&paths::get().app_dir).env("FFM_RELAUNCH", "1");
-    c.spawn().map_err(|e| format!("Не удалось запустить новую версию: {e}"))?;
+    c.spawn().map_err(|e| tr!("Не удалось запустить новую версию: {}", "Cannot start the new version: {}", e))?;
     app.exit(0);
     Ok(())
 }
@@ -109,7 +109,7 @@ pub fn relaunch(app: &AppHandle, exe: &Path) -> Result<(), String> {
 fn move_running_exe(exe: &Path) -> Result<PathBuf, String> {
     let old = exe.with_extension("old.exe");
     let _ = std::fs::remove_file(&old);
-    std::fs::rename(exe, &old).map_err(|e| format!("Не удалось освободить файл программы: {e}"))?;
+    std::fs::rename(exe, &old).map_err(|e| tr!("Не удалось освободить файл программы: {}", "Cannot free the program file: {}", e))?;
     Ok(old)
 }
 
@@ -129,17 +129,17 @@ pub async fn update_apply(app: AppHandle) -> Result<Value, String> {
         let pulled = git(&["pull", "--ff-only"]).await?;
         emit(&app, &pulled);
         let after = git(&["rev-parse", "HEAD"]).await?;
-        if before == after { return Ok(json!({ "updated": false, "message": "Уже последняя версия." })); }
+        if before == after { return Ok(json!({ "updated": false, "message": tr!("Уже последняя версия.", "Already the latest version.") })); }
         let changed = git(&["diff", "--name-only", &before, &after]).await.unwrap_or_default();
         let needs_build = changed.lines().any(|f| f.starts_with("src-tauri/") || f.starts_with("src/renderer/") || f.starts_with("mcp/"));
         if !needs_build {
-            return Ok(json!({ "updated": true, "rebuilt": false, "message": "Обновлено. Изменения не затрагивают программу — перезапуск не нужен." }));
+            return Ok(json!({ "updated": true, "rebuilt": false, "message": tr!("Обновлено. Изменения не затрагивают программу — перезапуск не нужен.", "Updated. The changes do not affect the program — no restart needed.") }));
         }
         let Some(cargo) = which("cargo") else {
             return Ok(json!({ "updated": true, "rebuilt": false, "needsBuild": true,
-                "message": "Исходники обновлены. Чтобы применить, запустите setup.cmd (пересборка) или скачайте готовую сборку из Releases." }));
+                "message": tr!("Исходники обновлены. Чтобы применить, запустите setup.cmd (пересборка) или скачайте готовую сборку из Releases.", "Sources updated. To apply, run setup.cmd (rebuild) or download a ready build from Releases.") }));
         };
-        emit(&app, "Пересборка (cargo build --release)… первый раз это несколько минут");
+        emit(&app, tr!("Пересборка (cargo build --release)… первый раз это несколько минут", "Rebuilding (cargo build --release)… the first time takes a few minutes"));
         let built = paths::get().app_dir.join("src-tauri").join("target").join("release").join(format!("ff-montage{}", if cfg!(windows) { ".exe" } else { "" }));
         let same = paths::normalize(&built).to_string_lossy().to_lowercase() == paths::normalize(&exe).to_string_lossy().to_lowercase();
         // Запущенный файл нельзя перезаписать, но можно переименовать
@@ -151,47 +151,47 @@ pub async fn update_apply(app: AppHandle) -> Result<Value, String> {
         if !ok {
             if let Some(o) = &old { let _ = std::fs::rename(o, &exe); }
             let err = match out { Ok(o) => String::from_utf8_lossy(&o.stderr).lines().rev().take(12).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n"), Err(e) => e };
-            return Err(format!("Сборка не удалась:\n{err}"));
+            return Err(tr!("Сборка не удалась:\n{}", "Build failed:\n{}", err));
         }
         if !same {
             // «FF Montage.exe» в папке программы — копия сборки
             let o = move_running_exe(&exe)?;
             if let Err(e) = std::fs::copy(&built, &exe) {
                 let _ = std::fs::rename(&o, &exe);
-                return Err(format!("Не удалось заменить программу: {e}"));
+                return Err(tr!("Не удалось заменить программу: {}", "Cannot replace the program: {}", e));
             }
         }
-        emit(&app, "Готово, перезапуск…");
+        emit(&app, tr!("Готово, перезапуск…", "Done, restarting…"));
         relaunch(&app, &exe)?;
         return Ok(json!({ "updated": true, "rebuilt": true }));
     }
     // Готовая сборка: скачать архив релиза
     let rel = latest_release().await?;
-    let (name, url) = platform_asset(&rel).ok_or("В релизе нет архива для этой системы")?;
+    let (name, url) = platform_asset(&rel).ok_or(tr!("В релизе нет архива для этой системы", "The release has no archive for this system"))?;
     let tmp = paths::get().temp.join("update");
     let _ = std::fs::remove_dir_all(&tmp);
     std::fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
     let archive = tmp.join(&name);
-    emit(&app, &format!("Скачиваю {name}…"));
-    let curl = which("curl").ok_or("curl не найден")?;
+    emit(&app, &tr!("Скачиваю {}…", "Downloading {}…", name));
+    let curl = which("curl").ok_or(tr!("curl не найден", "curl not found"))?;
     let st = ff::command(&curl).args(["-sL", "--fail", "-o", &s(&archive), &url]).output().await.map_err(|e| e.to_string())?;
-    if !st.status.success() { return Err("Не удалось скачать обновление".into()); }
-    emit(&app, "Распаковываю…");
+    if !st.status.success() { return Err(tr!("Не удалось скачать обновление", "Cannot download the update").into()); }
+    emit(&app, tr!("Распаковываю…", "Unpacking…"));
     let x = tmp.join("x");
     std::fs::create_dir_all(&x).map_err(|e| e.to_string())?;
-    let tar = which("tar").ok_or("tar не найден")?;
+    let tar = which("tar").ok_or(tr!("tar не найден", "tar not found"))?;
     let st = ff::command(&tar).args(["-xf", &s(&archive), "-C", &s(&x)]).output().await.map_err(|e| e.to_string())?;
-    if !st.status.success() { return Err(format!("Не удалось распаковать: {}", String::from_utf8_lossy(&st.stderr))); }
+    if !st.status.success() { return Err(tr!("Не удалось распаковать: {}", "Cannot unpack: {}", String::from_utf8_lossy(&st.stderr))); }
     let exe_name = exe.file_name().map(|n| n.to_os_string()).unwrap_or_default();
-    let found = find_file(&x, &exe_name).ok_or("В архиве нет программы")?;
+    let found = find_file(&x, &exe_name).ok_or(tr!("В архиве нет программы", "The archive does not contain the program"))?;
     let src_dir = found.parent().unwrap().to_path_buf();
     let dst_dir = exe.parent().unwrap().to_path_buf();
     let old = move_running_exe(&exe)?;
     if let Err(e) = copy_tree(&src_dir, &dst_dir) {
         let _ = std::fs::rename(&old, &exe);
-        return Err(format!("Не удалось установить обновление: {e}"));
+        return Err(tr!("Не удалось установить обновление: {}", "Cannot install the update: {}", e));
     }
-    emit(&app, "Готово, перезапуск…");
+    emit(&app, tr!("Готово, перезапуск…", "Done, restarting…"));
     relaunch(&app, &exe)?;
     Ok(json!({ "updated": true }))
 }

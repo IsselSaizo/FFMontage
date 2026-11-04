@@ -106,4 +106,10 @@ window.api = {
   saveSetup: (cfg) => invoke('setup_save', { cfg }),
   openSettings: () => invoke('setup_open'),
   cancelSetup: () => invoke('setup_cancel'),
+  restart: () => invoke('app_restart'),
+  // Настройки интерфейса (config.json → settings) и кэш
+  settingsGet: () => invoke('settings_get'),
+  settingsSet: (patch) => invoke('settings_set', { patch }),
+  cacheStats: () => invoke('cache_stats'),
+  cacheClear: (cats, keep) => invoke('cache_clear', { cats, keep }),
 };

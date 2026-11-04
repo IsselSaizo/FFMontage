@@ -1,6 +1,9 @@
 // Точка входа интерфейса: собирает панели, горячие клавиши, сохранение проекта.
 import { store, emptyProject } from './store.js';
 import { $, h, icon, toast, confirmDialog, debounce, errText } from './util.js';
+import { t } from './i18n.js';
+import { bindAction, dispatchKey, keyHint, onKeymapChange } from './keymap.js';
+import { initSettings, openSettings, maybeAskLanguage, getSetting } from './settings.js';
 import { initMediaPanel, importPaths, pickAndImport, restoreMedia } from './media.js';
 import { Preview, initTransport } from './preview.js';
 import { Timeline } from './timeline.js';
@@ -19,7 +22,7 @@ import { closePopover, popoverOpen } from './popover.js';
 
 // Мост для ИИ-ассистента грузим отдельно: если с ним что-то не так, редактор всё равно запустится
 const mcpReady = import('./mcpBridge.js').catch((e) => { console.error('mcpBridge', e); return null; });
-const showMcpDialog = async () => { const m = await mcpReady; if (m) m.showMcpDialog(); else toast('Модуль ИИ-ассистента не загрузился', 'error'); };
+const showMcpDialog = async () => { const m = await mcpReady; if (m) m.showMcpDialog(); else toast(t('Модуль ИИ-ассистента не загрузился'), 'error'); };
 
 const api = window.api;
 let preview; let timeline; let transport;
@@ -29,42 +32,45 @@ let preview; let timeline; let transport;
 // ---------------------------------------------------------------------------
 function initTopbar() {
   const bar = $('#topbar');
-  const nameInput = h('input', { class: 'project-name', value: store.project.name, spellcheck: 'false', title: 'Название проекта' });
+  const nameInput = h('input', { class: 'project-name', value: store.project.name, spellcheck: 'false', title: t('Название проекта') });
   nameInput.addEventListener('change', () => {
-    const v = nameInput.value.trim() || 'Мой ролик';
+    const v = nameInput.value.trim() || t('Мой ролик');
     store.mutate((p) => { p.name = v; });
   });
   nameInput.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === 'Escape') nameInput.blur(); });
   store.on('project', () => { if (document.activeElement !== nameInput) nameInput.value = store.project.name; updateTitle(); });
 
-  const menuBtn = h('button', { class: 'icon-btn', title: 'Меню', html: icon('menu', 20) });
+  const menuBtn = h('button', { class: 'icon-btn', title: t('Меню'), html: icon('menu', 20) });
   const menu = h('div', { class: 'dropdown' },
-    item('Новый проект', 'Ctrl+N', newProject),
-    item('Открыть проект…', 'Ctrl+O', openProject),
-    item('Сохранить', 'Ctrl+S', () => saveProject(false)),
-    item('Сохранить как…', 'Ctrl+Shift+S', () => saveProject(true)),
+    item(t('Новый проект'), 'project.new', newProject),
+    item(t('Открыть проект…'), 'project.open', openProject),
+    item(t('Сохранить'), 'project.save', () => saveProject(false)),
+    item(t('Сохранить как…'), 'project.saveAs', () => saveProject(true)),
     h('div', { class: 'dd-sep' }),
-    item('Импорт медиа…', 'Ctrl+I', () => pickAndImport()),
-    item('Открыть папку экспорта', '', async () => api.openPath((await api.info()).outputDir)),
-    item('Настройки папок…', '', () => api.openSettings()),
-    item('ИИ-ассистент (MCP)…', '', () => showMcpDialog()),
+    item(t('Импорт медиа…'), 'media.import', () => pickAndImport()),
+    item(t('Открыть папку экспорта'), '', async () => api.openPath((await api.info()).outputDir)),
     h('div', { class: 'dd-sep' }),
-    item('Горячие клавиши', '', () => showHotkeys()),
-    item('Проверить обновления…', '', () => checkUpdates()),
-    item('О программе', '', about));
-  function item(label, key, fn) {
-    return h('button', { class: 'dd-item', onclick: () => { menu.classList.remove('open'); fn(); } }, h('span', {}, label), h('kbd', {}, key));
+    item(t('Настройки…'), 'app.settings', () => openSettings()),
+    item(t('Горячие клавиши'), '', () => openSettings('hotkeys')),
+    item(t('ИИ-ассистент (MCP)…'), '', () => showMcpDialog()),
+    h('div', { class: 'dd-sep' }),
+    item(t('Проверить обновления…'), '', () => checkUpdates()),
+    item(t('О программе'), '', () => openSettings('about')));
+  function item(label, action, fn) {
+    const k = h('kbd', { dataset: { action } }, action ? keyHint(action) : '');
+    return h('button', { class: 'dd-item', onclick: () => { menu.classList.remove('open'); fn(); } }, h('span', {}, label), k);
   }
+  onKeymapChange(() => { for (const k of menu.querySelectorAll('kbd[data-action]')) k.textContent = k.dataset.action ? keyHint(k.dataset.action) : ''; });
   menuBtn.addEventListener('click', (e) => { e.stopPropagation(); menu.classList.toggle('open'); });
   document.addEventListener('click', (e) => { if (!menu.contains(e.target)) menu.classList.remove('open'); });
 
   const saved = h('span', { class: 'save-state', id: 'save-state', 'data-tauri-drag-region': '' });
   // Рамка окна своя: перетаскивание за пустое место панели, двойной щелчок — развернуть
-  const maxBtn = h('button', { title: 'Развернуть', onclick: () => api.winToggleMaximize() });
+  const maxBtn = h('button', { title: t('Развернуть'), onclick: () => api.winToggleMaximize() });
   const updMax = async () => {
     const m = await api.winIsMaximized().catch(() => false);
     maxBtn.innerHTML = icon(m ? 'wrestore' : 'wmax', 11);
-    maxBtn.title = m ? 'Свернуть в окно' : 'Развернуть';
+    maxBtn.title = m ? t('Свернуть в окно') : t('Развернуть');
   };
   updMax();
   api.onWinResize(updMax);
@@ -78,11 +84,12 @@ function initTopbar() {
     h('div', { class: 'tb-drag', 'data-tauri-drag-region': '' }),
     h('div', { class: 'tb-center' }, modeTabs()),
     h('div', { class: 'tb-right' },
-      h('button', { class: 'btn primary export-btn', onclick: () => openExport() }, h('span', { html: icon('export', 18) }), 'Экспорт'),
+      h('button', { class: 'icon-btn', id: 'settings-btn', tip: [t('Настройки'), 'app.settings'], html: icon('gear', 19), onclick: () => openSettings() }),
+      h('button', { class: 'btn primary export-btn', tip: [t('Экспорт'), 'export.open'], onclick: () => openExport() }, h('span', { html: icon('export', 18) }), t('Экспорт')),
       h('div', { class: 'win-ctl' },
-        h('button', { title: 'Свернуть', html: icon('wmin', 11), onclick: () => api.winMinimize() }),
+        h('button', { title: t('Свернуть'), html: icon('wmin', 11), onclick: () => api.winMinimize() }),
         maxBtn,
-        h('button', { class: 'close', title: 'Закрыть', html: icon('wclose', 11), onclick: () => api.winClose() }))));
+        h('button', { class: 'close', title: t('Закрыть'), html: icon('wclose', 11), onclick: () => api.winClose() }))));
 }
 
 // ---------------------------------------------------------------------------
@@ -90,24 +97,24 @@ function initTopbar() {
 // ---------------------------------------------------------------------------
 async function checkUpdates() {
   const overlay = h('div', { class: 'modal-overlay' });
-  const body = h('div', { class: 'modal-body' }, h('p', { class: 'muted' }, 'Проверяю…'));
+  const body = h('div', { class: 'modal-body' }, h('p', { class: 'muted' }, t('Проверяю…')));
   const foot = h('div', { class: 'modal-foot' });
   const close = () => overlay.remove();
   overlay.append(h('div', { class: 'modal small', style: { width: '560px' } },
-    h('div', { class: 'modal-head' }, h('h2', {}, 'Обновления'), h('button', { class: 'icon-btn', html: icon('close', 18), onclick: close })),
+    h('div', { class: 'modal-head' }, h('h2', {}, t('Обновления')), h('button', { class: 'icon-btn', html: icon('close', 18), onclick: close })),
     body, foot));
   document.body.append(overlay);
-  const closeBtn = h('button', { class: 'btn ghost', onclick: close }, 'Закрыть');
+  const closeBtn = h('button', { class: 'btn ghost', onclick: close }, t('Закрыть'));
   let r;
   try { r = await api.updateCheck(); } catch (e) {
     body.innerHTML = '';
-    body.append(h('p', {}, 'Не удалось проверить обновления.'), h('pre', { class: 'error-box' }, String(e)));
+    body.append(h('p', {}, t('Не удалось проверить обновления.')), h('pre', { class: 'error-box' }, String(e)));
     foot.append(closeBtn);
     return;
   }
   body.innerHTML = '';
   const logBox = h('div', { class: 'update-log', style: { display: 'none' } });
-  const apply = h('button', { class: 'btn primary' }, h('span', { html: icon('refresh', 17) }), 'Обновить');
+  const apply = h('button', { class: 'btn primary' }, h('span', { html: icon('refresh', 17) }), t('Обновить'));
   apply.addEventListener('click', async () => {
     apply.disabled = true; closeBtn.disabled = true;
     logBox.style.display = '';
@@ -115,28 +122,28 @@ async function checkUpdates() {
     if (store.dirty) await saveProject(false).catch(() => {});
     try {
       const res = await api.updateApply();
-      logBox.textContent += `${res.message || 'Готово.'}\n`;
+      logBox.textContent += `${res.message || t('Готово.')}\n`;
     } catch (e) {
-      logBox.textContent += `Ошибка: ${e}\n`;
+      logBox.textContent += `${t('Ошибка: {e}', { e })}\n`;
     }
     off(); closeBtn.disabled = false;
   });
   if (r.mode === 'git') {
     body.append(
-      h('p', {}, `Версия ${r.current} · git-клон, ветка ${r.branch} (${r.head})`),
+      h('p', {}, t('Версия {v} · git-клон, ветка {branch} ({head})', { v: r.current, branch: r.branch, head: r.head })),
       r.behind
-        ? h('p', {}, `Доступно новых изменений: ${r.behind}`)
-        : h('p', { class: 'muted' }, 'У вас последняя версия.'),
+        ? h('p', {}, t('Доступно новых изменений: {n}', { n: r.behind }))
+        : h('p', { class: 'muted' }, t('У вас последняя версия.')),
       r.commits && r.commits.length ? h('pre', { class: 'update-log' }, r.commits.join('\n')) : null,
-      r.ahead ? h('p', { class: 'muted small' }, `Локальных коммитов, которых нет на GitHub: ${r.ahead}`) : null,
-      r.dirty ? h('p', { class: 'muted small' }, 'Есть изменённые файлы — git pull может отказаться обновлять. Сохраните или откатите их.') : null,
-      r.behind && !r.cargo ? h('p', { class: 'muted small' }, 'Rust (cargo) не найден: исходники обновятся, но программу нужно будет пересобрать или скачать готовую сборку.') : null,
+      r.ahead ? h('p', { class: 'muted small' }, t('Локальных коммитов, которых нет на GitHub: {n}', { n: r.ahead })) : null,
+      r.dirty ? h('p', { class: 'muted small' }, t('Есть изменённые файлы — git pull может отказаться обновлять. Сохраните или откатите их.')) : null,
+      r.behind && !r.cargo ? h('p', { class: 'muted small' }, t('Rust (cargo) не найден: исходники обновятся, но программу нужно будет пересобрать или скачать готовую сборку.')) : null,
       logBox);
   } else {
     body.append(
-      h('p', {}, `Установлена версия ${r.current}. Последний релиз: ${r.latest || '—'}`),
-      r.available ? h('p', {}, `Будет скачан ${r.asset.name}. Настройки и проекты не затрагиваются.`)
-        : h('p', { class: 'muted' }, r.newer ? 'Для этой системы в релизе нет готовой сборки.' : 'У вас последняя версия.'),
+      h('p', {}, t('Установлена версия {v}. Последний релиз: {latest}', { v: r.current, latest: r.latest || '—' })),
+      r.available ? h('p', {}, t('Будет скачан {name}. Настройки и проекты не затрагиваются.', { name: r.asset.name }))
+        : h('p', { class: 'muted' }, r.newer ? t('Для этой системы в релизе нет готовой сборки.') : t('У вас последняя версия.')),
       r.notes ? h('pre', { class: 'update-log' }, r.notes) : null,
       logBox);
   }
@@ -145,10 +152,10 @@ async function checkUpdates() {
 }
 
 function updateTitle() {
-  const name = store.project.name || 'Мой ролик';
+  const name = store.project.name || t('Мой ролик');
   api.setTitle(`${name}${store.dirty ? ' •' : ''} — FF Montage`);
   const s = $('#save-state');
-  if (s) s.textContent = store.filePath ? (store.dirty ? 'Есть несохранённые изменения' : 'Сохранено') : 'Автосохранение';
+  if (s) s.textContent = store.filePath ? (store.dirty ? t('Есть несохранённые изменения') : t('Сохранено')) : t('Автосохранение');
 }
 
 // ---------------------------------------------------------------------------
@@ -156,13 +163,13 @@ function updateTitle() {
 // ---------------------------------------------------------------------------
 async function saveProject(as) {
   const p = await api.saveProject({ filePath: as ? null : store.filePath, text: store.serialize(), suggested: store.project.name });
-  if (p) { store.filePath = p; store.dirty = false; updateTitle(); autosave(); toast('Проект сохранён', 'success', 2000); }
+  if (p) { store.filePath = p; store.dirty = false; updateTitle(); autosave(); toast(t('Проект сохранён'), 'success', 2000); }
 }
 
 async function loadFromText(text, filePath) {
   const j = JSON.parse(text);
   const project = j.project || j;
-  if (!project.videoClips || !project.audioTracks) throw new Error('Это не проект FF Montage');
+  if (!project.videoClips || !project.audioTracks) throw new Error(t('Это не проект FF Montage'));
   store.load(project, filePath);
   await restoreMedia();
   timeline.autoFit = true; timeline.fit();
@@ -170,29 +177,31 @@ async function loadFromText(text, filePath) {
 }
 
 async function openProject() {
-  if (store.dirty && store.filePath && !(await confirmDialog('Открыть другой проект?', 'Несохранённые изменения текущего проекта будут потеряны (автосохранение тоже перезапишется).', 'Открыть'))) return;
+  if (store.dirty && store.filePath && !(await confirmDialog(t('Открыть другой проект?'), t('Несохранённые изменения текущего проекта будут потеряны (автосохранение тоже перезапишется).'), t('Открыть')))) return;
   const r = await api.openProject();
   if (!r) return;
-  try { await loadFromText(r.text, r.filePath); toast('Проект открыт', 'success', 2000); } catch (e) { toast(`Не удалось открыть проект: ${errText(e)}`, 'error', 5000); }
+  try { await loadFromText(r.text, r.filePath); toast(t('Проект открыт'), 'success', 2000); } catch (e) { toast(t('Не удалось открыть проект: {e}', { e: errText(e) }), 'error', 5000); }
 }
 
 async function newProject() {
   const hasContent = store.duration() > 0 || Object.keys(store.project.media).length;
-  if (hasContent && !(await confirmDialog('Новый проект?', store.filePath && !store.dirty
-    ? 'Текущий проект сохранён, его можно будет открыть снова.'
-    : 'Текущий проект не сохранён в файл и будет закрыт. Сохраните его (Ctrl+S), если он ещё нужен.', 'Создать', 'Отмена', !store.filePath || store.dirty))) return;
+  if (hasContent && !(await confirmDialog(t('Новый проект?'), store.filePath && !store.dirty
+    ? t('Текущий проект сохранён, его можно будет открыть снова.')
+    : t('Текущий проект не сохранён в файл и будет закрыт. Сохраните его ({key}), если он ещё нужен.', { key: keyHint('project.save') }), t('Создать'), t('Отмена'), !store.filePath || store.dirty))) return;
   store.load(emptyProject(), null);
   store.runtime = {};
   timeline.autoFit = true; timeline.fit();
   updateTitle();
 }
 
-const autosave = debounce(() => {
-  api.autosaveWrite(JSON.stringify({ filePath: store.filePath, dirty: store.dirty, data: store.serialize() })).catch(() => {});
-}, 1200);
+const autosaveText = () => JSON.stringify({ filePath: store.filePath, dirty: store.dirty, data: store.serialize() });
+const autosave = debounce(() => { api.autosaveWrite(autosaveText()).catch(() => {}); }, 1200);
 
 async function restoreAutosave() {
   try {
+    // После перезагрузки окна (смена языка) проект восстанавливаем всегда; при обычном запуске — по настройке
+    const reloaded = !!sessionStorage.getItem('ffm.reloadState');
+    if (!reloaded && getSetting('restoreSession', true) === false) return;
     const raw = await api.autosaveRead();
     if (!raw) return;
     const a = JSON.parse(raw);
@@ -204,110 +213,93 @@ async function restoreAutosave() {
   }
 }
 
-// Заглушки режимов «Аудио» и «Анимации», пока их модули не подключены
-function initModePlaceholders() {
-  const ph = (sel, title, text) => { const el = $(sel); if (el && !el.childElementCount) el.append(h('div', { class: 'mode-placeholder' }, h('h2', {}, title), h('p', {}, text))); };
+// Перезагрузка окна (смена языка): проект — в автосохранение, вид и история отмен — в sessionStorage
+async function reloadUi() {
+  try { await api.autosaveWrite(autosaveText()); } catch (e) { console.warn('autosave before reload', e); }
+  const state = {
+    time: store.time,
+    pps: timeline.pps, autoFit: timeline.autoFit,
+    undo: store.undoStack.slice(-50), redo: store.redoStack.slice(-50),
+  };
+  try { sessionStorage.setItem('ffm.reloadState', JSON.stringify(state)); } catch {
+    try { sessionStorage.setItem('ffm.reloadState', JSON.stringify({ ...state, undo: [], redo: [] })); } catch { /* ignore */ }
+  }
+  location.reload();
 }
 
-// Справка: горячие клавиши (раньше — таблица в правой панели)
-const HOTKEYS = [
-  ['Пробел', 'Пуск / пауза'], ['S', 'Разрезать клип'], ['Alt+S', 'Разрезать всё под курсором'], ['B / A', 'Лезвие / выделение'],
-  ['Delete', 'Удалить клип'], ['Shift+Delete', 'Удалить и сдвинуть'], ['Ctrl+C / Ctrl+V', 'Копировать / вставить'], ['Ctrl+D', 'Дублировать клип'],
-  ['F', 'Стоп-кадр'], ['R', 'Отзеркалить (реверс)'], ['Ctrl+Z / Ctrl+Y', 'Отменить / повторить'], ['← →', 'На кадр (с Shift — на 1 с)'],
-  ['Home / End', 'В начало / конец'], ['Ctrl + колесо', 'Масштаб таймлайна'], ['Alt при перетаскивании', 'Без магнита и без наложения'],
-  ['Shift+F', 'Плеер во весь экран'], ['Ctrl+S', 'Сохранить проект'], ['Ctrl+E', 'Экспорт'], ['Ctrl+I', 'Импорт медиа'],
-];
-const HINTS = ['Правая кнопка мыши на клипе — меню действий.', '«+» на стыке клипов — переход.', 'Корзина на пустом месте дорожки убирает пустоту.'];
-function showHotkeys() {
-  const overlay = h('div', { class: 'modal-overlay' });
-  const close = () => overlay.remove();
-  overlay.append(h('div', { class: 'modal small', style: { width: '640px' } },
-    h('div', { class: 'modal-head' }, h('h2', {}, 'Горячие клавиши'), h('button', { class: 'icon-btn', html: icon('close', 18), onclick: close })),
-    h('div', { class: 'modal-body' },
-      h('div', { class: 'keys-list' }, ...HOTKEYS.map(([k, v]) => h('dl', { class: 'kv keys' }, h('dt', {}, h('kbd', {}, k)), h('dd', {}, v)))),
-      h('h3', {}, 'Подсказки'),
-      h('ul', { class: 'muted small' }, ...HINTS.map((x) => h('li', {}, x))))));
-  overlay.addEventListener('mousedown', (e) => { if (e.target === overlay) close(); });
-  document.body.append(overlay);
-}
-
-function about() {
-  api.info().then((i) => {
-    const overlay = h('div', { class: 'modal-overlay' },
-      h('div', { class: 'modal small' },
-        h('div', { class: 'modal-head' }, h('h2', {}, 'FF Montage'), h('button', { class: 'icon-btn', html: icon('close', 18), onclick: () => overlay.remove() })),
-        h('div', { class: 'modal-body' },
-          h('p', {}, `Версия ${i.version} · Tauri ${i.tauri} · WebView ${i.webview}`),
-          h('p', { class: 'muted small' }, i.ffmpegVersion || 'FFmpeg не найден!'),
-          h('p', { class: 'muted small' }, `FFmpeg: ${i.ffmpeg}`),
-          h('p', { class: 'muted small' }, `Кэш: ${i.cacheDir}`),
-          h('p', { class: 'muted small' }, `Экспорт: ${i.outputDir}`),
-          h('p', { class: 'muted small' }, `Проекты: ${i.projectsDir}`),
-          h('p', { class: 'muted small' }, `Настройки: ${i.configFile}`))));
-    overlay.addEventListener('mousedown', (e) => { if (e.target === overlay) overlay.remove(); });
-    document.body.append(overlay);
-  });
+function restoreUiState() {
+  let s = null;
+  try { s = JSON.parse(sessionStorage.getItem('ffm.reloadState') || 'null'); sessionStorage.removeItem('ffm.reloadState'); } catch { /* ignore */ }
+  if (!s) return;
+  if (Array.isArray(s.undo)) store.undoStack = s.undo;
+  if (Array.isArray(s.redo)) store.redoStack = s.redo;
+  if (!s.autoFit && s.pps) { timeline.autoFit = false; timeline.setZoom(s.pps); }
+  if (isFinite(s.time)) store.setTime(s.time);
 }
 
 // ---------------------------------------------------------------------------
-// Клавиатура
+// Клавиатура: действия из реестра (keymap.js); клавиши настраиваются в «Настройки → Горячие клавиши»
 // ---------------------------------------------------------------------------
 function initKeys() {
+  const clipSel = () => (store.selection && store.selection.kind !== 'transition' ? store.selection.id : null);
+  const step = () => 1 / (store.sourceFormat().fps || 30);
+  const bind = {
+    'project.new': () => newProject(),
+    'project.open': () => openProject(),
+    'project.save': () => saveProject(false),
+    'project.saveAs': () => saveProject(true),
+    'media.import': () => pickAndImport(),
+    'export.open': () => openExport(),
+    'app.settings': () => openSettings(),
+    'edit.undo': () => store.undo(),
+    'edit.redo': () => store.redo(),
+    'clip.copy': () => { if (clipSel()) copyClip(clipSel()); },
+    'clip.paste': () => pasteClip(store.time),
+    'clip.duplicate': () => { if (clipSel()) store.duplicateClip(clipSel()); },
+    'clip.delete': () => timeline.deleteAction(false),
+    'clip.rippleDelete': () => timeline.deleteAction(true),
+    'clip.split': () => timeline.splitAction(),
+    'clip.splitAll': () => timeline.splitAllAction(),
+    'clip.freeze': () => freezeFrame(store.time),
+    'clip.reverse': () => { if (clipSel()) reverseClip(clipSel()); },
+    'tool.select': () => timeline.setTool('select'),
+    'tool.blade': () => timeline.setTool(timeline.tool === 'blade' ? 'select' : 'blade'),
+    'timeline.magnet': () => timeline.toggleMagnet(),
+    'play.toggle': () => preview.toggle(),
+    'play.frameBack': () => store.setTime(store.time - step()),
+    'play.frameFwd': () => store.setTime(store.time + step()),
+    'play.secBack': () => store.setTime(store.time - 1),
+    'play.secFwd': () => store.setTime(store.time + 1),
+    'play.back5': () => store.setTime(store.time - 5),
+    'play.fwd5': () => store.setTime(store.time + 5),
+    'play.start': () => store.setTime(0),
+    'play.end': () => store.setTime(store.duration()),
+    'view.fullscreen': () => preview.fullscreen(),
+    'view.zoomIn': () => timeline.setZoom(timeline.pps * 1.4, null, true),
+    'view.zoomOut': () => timeline.setZoom(timeline.pps / 1.4, null, true),
+    'view.zoomFit': () => { timeline.autoFit = true; timeline.fit(); },
+  };
+  for (const [id, fn] of Object.entries(bind)) bindAction(id, fn);
+
   document.addEventListener('keydown', (e) => {
     const tag = (e.target.tagName || '').toLowerCase();
     const typing = (tag === 'input' && !['range', 'checkbox', 'button'].includes(e.target.type)) || tag === 'textarea' || tag === 'select';
     if (document.querySelector('.modal-overlay')) return;
     if (menuOpen()) { if (e.key !== 'Escape' && !e.key.startsWith('Arrow')) closeMenu(); else return; }
     if (popoverOpen() && e.key !== 'Escape') closePopover();
-    const ctrl = e.ctrlKey || e.metaKey;
-    const k = e.key.toLowerCase();
-    const code = e.code;
-
-    if (ctrl && code === 'KeyS') { e.preventDefault(); saveProject(e.shiftKey); return; }
-    if (ctrl && code === 'KeyO') { e.preventDefault(); openProject(); return; }
-    if (ctrl && code === 'KeyN') { e.preventDefault(); newProject(); return; }
-    if (ctrl && code === 'KeyE') { e.preventDefault(); openExport(); return; }
-    if (ctrl && code === 'KeyI') { e.preventDefault(); pickAndImport(); return; }
     if (e.key === 'F12') { api.devtools(); return; }
+    if (dispatchKey(e, typing)) return;
     if (typing) return;
-
-    if (ctrl && code === 'KeyZ' && !e.shiftKey) { e.preventDefault(); store.undo(); return; }
-    if (ctrl && (code === 'KeyY' || (code === 'KeyZ' && e.shiftKey))) { e.preventDefault(); store.redo(); return; }
-    const clipSel = store.selection && store.selection.kind !== 'transition' ? store.selection.id : null;
-    if (ctrl && code === 'KeyD') { e.preventDefault(); if (clipSel) store.duplicateClip(clipSel); return; }
-    if (ctrl && code === 'KeyC') { e.preventDefault(); if (clipSel) copyClip(clipSel); return; }
-    if (ctrl && code === 'KeyV') { e.preventDefault(); pasteClip(store.time); return; }
-    if (ctrl && (code === 'Digit0' || code === 'Numpad0')) { e.preventDefault(); timeline.autoFit = true; timeline.fit(); return; }
-    if (ctrl && (k === '=' || k === '+' || code === 'NumpadAdd')) { e.preventDefault(); timeline.setZoom(timeline.pps * 1.4, null, true); return; }
-    if (ctrl && (k === '-' || code === 'NumpadSubtract')) { e.preventDefault(); timeline.setZoom(timeline.pps / 1.4, null, true); return; }
-    if (ctrl) return;
-
-    const step = 1 / (store.sourceFormat().fps || 30);
-    switch (code) {
-      case 'Space': e.preventDefault(); preview.toggle(); break;
-      case 'KeyK': preview.toggle(); break;
-      // S — разрезать выделенный клип (или видео под курсором); Alt+S — всё под курсором: видео и звук
-      case 'KeyS': e.preventDefault(); if (e.altKey) timeline.splitAllAction(); else timeline.splitAction(); break;
-      case 'KeyB': timeline.setTool(timeline.tool === 'blade' ? 'select' : 'blade'); break;
-      case 'KeyA': timeline.setTool('select'); break;
-      case 'Delete': case 'Backspace': timeline.deleteAction(e.shiftKey); break;
-      case 'KeyR': if (clipSel) reverseClip(clipSel); break;
-      case 'ArrowLeft': e.preventDefault(); store.setTime(store.time - (e.shiftKey ? 1 : step)); break;
-      case 'ArrowRight': e.preventDefault(); store.setTime(store.time + (e.shiftKey ? 1 : step)); break;
-      case 'KeyJ': store.setTime(store.time - 5); break;
-      case 'KeyL': store.setTime(store.time + 5); break;
-      case 'Home': store.setTime(0); break;
-      case 'End': store.setTime(store.duration()); break;
-      case 'KeyF': if (e.shiftKey) preview.fullscreen(); else freezeFrame(store.time); break;
-      case 'Escape': if (timeline.tool === 'blade') timeline.setTool('select'); else store.select(null); break;
-      default: break;
-    }
+    // Esc не переназначается: выйти из лезвия или снять выделение
+    if (e.key === 'Escape' && !e.ctrlKey && !e.altKey) { if (timeline.tool === 'blade') timeline.setTool('select'); else store.select(null); return; }
+    // Не отдаём WebView его собственные сочетания (Ctrl+S «сохранить страницу» и т.п.)
+    if ((e.ctrlKey || e.metaKey) && ['KeyS', 'KeyO', 'KeyN', 'KeyP', 'KeyF', 'KeyG', 'KeyU', 'KeyR'].includes(e.code)) e.preventDefault();
   });
 }
 
 // Файлы из Проводника, брошенные на окно (не на таймлайн) — просто импорт
 function initWindowDrop() {
-  const shade = h('div', { class: 'drop-shade' }, h('div', {}, h('span', { html: icon('upload', 40) }), h('p', {}, 'Отпустите, чтобы импортировать')));
+  const shade = h('div', { class: 'drop-shade' }, h('div', {}, h('span', { html: icon('upload', 40) }), h('p', {}, t('Отпустите, чтобы импортировать'))));
   document.body.append(shade);
   // Над таймлайном — маркер места вставки, в остальной части окна — затемнение «импорт»
   api.onFileDrop(async ({ type, paths, x, y }) => {
@@ -321,7 +313,7 @@ function initWindowDrop() {
     if (!paths.length) return;
     if (await timeline.dropAt(x, y, { paths })) return;
     const ids = await importPaths(paths);
-    if (ids.length) toast(`Импортировано файлов: ${ids.length}`, 'success', 2000);
+    if (ids.length) toast(t('Импортировано файлов: {n}', { n: ids.length }), 'success', 2000);
   });
 }
 
@@ -329,6 +321,7 @@ function initWindowDrop() {
 // Запуск
 // ---------------------------------------------------------------------------
 async function main() {
+  await initSettings({ reload: reloadUi, checkUpdates, showMcp: showMcpDialog, beforeRestart: () => api.autosaveWrite(autosaveText()) });
   initTopbar();
   timeline = new Timeline($('#timeline'));
   initEpisodes($('#timeline'));
@@ -338,7 +331,6 @@ async function main() {
   const crop = initCropMode(preview);
   initAudioRack();
   const anim = initAnim(preview);
-  initModePlaceholders();
   initModes();
   initMediaPanel({ addToTimeline: (id) => timeline.addMedia(id) });
   initInspector({ onSplit: () => timeline.splitAction(), onDelete: () => timeline.deleteAction() });
@@ -349,8 +341,9 @@ async function main() {
   store.on('project', () => { autosave(); updateTitle(); });
   initResizers();
   await restoreAutosave();
+  restoreUiState();
   updateTitle();
-  window.__ffm = { store, preview, timeline, importPaths, openExport, browser, crop, anim };
+  window.__ffm = { store, preview, timeline, importPaths, openExport, browser, crop, anim, openSettings, reloadUi };
   const bridge = await mcpReady;
   if (bridge) bridge.initMcpBridge({
     loadProjectText: (text, filePath) => loadFromText(text, filePath),
@@ -368,15 +361,17 @@ async function main() {
     },
   });
   document.body.classList.add('ready');
+  maybeAskLanguage();
   const info = await api.info();
   if (info.ffmpegMissing || !info.ffmpegVersion) {
-    toast('FFmpeg не найден — без него не будет миниатюр и экспорта. Укажите папку: меню ☰ → «Настройки папок».', 'error', 15000);
+    toast(t('FFmpeg не найден — без него не будет миниатюр и экспорта. Укажите папку: меню ☰ → «Настройки» → «Папки».'), 'error', 15000);
   }
 }
 
 // Перетаскиваемая граница между плеером и таймлайном
 function initResizers() {
   const grip = $('#tl-resizer');
+  grip.title = t('Потяните, чтобы изменить высоту таймлайна');
   const app = $('#app');
   const saved = Number(localStorage.getItem('ffm.tlHeight'));
   if (saved) app.style.setProperty('--tl-h', `${saved}px`);
@@ -398,4 +393,4 @@ function initResizers() {
   });
 }
 
-main().catch((e) => { console.error(e); toast(`Ошибка запуска: ${errText(e)}`, 'error', 10000); });
+main().catch((e) => { console.error(e); toast(t('Ошибка запуска: {e}', { e: errText(e) }), 'error', 10000); });

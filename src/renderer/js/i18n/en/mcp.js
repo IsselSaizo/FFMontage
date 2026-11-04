@@ -1,0 +1,61 @@
+// Английские строки: mcpBridge.js
+export default {
+  // Уведомления о действиях ассистента
+  'ИИ: {msg}': 'AI: {msg}',
+  'Видео': 'Video',
+  'Проект': 'Project',
+  'экспорт видео → {file}': 'exporting video → {file}',
+  'ИИ: экспорт завершён — {file}': 'AI: export finished — {file}',
+  'ИИ: экспорт отменён': 'AI: export cancelled',
+  'ИИ: ошибка экспорта': 'AI: export error',
+  'импорт файлов ({n})': 'importing files ({n})',
+  'добавлен клип «{name}»': 'clip “{name}” added',
+  'изменён клип': 'clip changed',
+  'разрез на {t} с': 'split at {t} s',
+  'клип удалён со сдвигом': 'clip deleted (ripple)',
+  'клип удалён': 'clip deleted',
+  'обычное направление клипа': 'clip back to normal direction',
+  'реверс клипа': 'clip reversed',
+  'стоп-кадр на {t} с': 'freeze frame at {t} s',
+  'переход убран': 'transition removed',
+  'переход «{name}»': 'transition “{name}”',
+  'пустота убрана': 'gap closed',
+  'убрано пустот: {n}': 'gaps closed: {n}',
+  'отмена': 'undo',
+  'повтор': 'redo',
+  'новый проект': 'new project',
+  'открывается проект {file}': 'opening project {file}',
+  'проект сохранён: {file}': 'project saved: {file}',
+
+  // Окно «ИИ-ассистент (MCP)»
+  'Скопировано': 'Copied',
+  'Не удалось': 'Failed',
+  'Не удалось скопировать — выделите текст и нажмите Ctrl+C': 'Could not copy — select the text and press Ctrl+C',
+  'Скопировать': 'Copy',
+  'ИИ-ассистент недоступен: {err}': 'AI assistant is unavailable: {err}',
+  '● Канал управления включён — ассистент сможет подключиться к этому окну.': '● The control channel is on — the assistant can connect to this window.',
+  '● Канал управления не запущен — перезапустите FF Montage.': '● The control channel is not running — restart FF Montage.',
+  'Импортируй все видео из папки D:\\Записи\\Отпуск и собери из них ролик по порядку, между клипами — растворение.':
+    'Import all videos from D:\\Videos\\Vacation and put them together in order, with a dissolve between clips.',
+  'Найди паузы длиннее секунды в клипе с интервью и вырежи их.': 'Find pauses longer than a second in the interview clip and cut them out.',
+  'Положи музыку C:\\Music\\track.mp3 на всю длину ролика, громкость 40 %, затухание в конце 3 секунды.':
+    'Add the music C:\\Music\\track.mp3 for the whole length of the video, volume 40%, with a 3-second fade-out at the end.',
+  'Покажи, что на 1:20, и сделай там стоп-кадр на 2 секунды.': 'Show me what is at 1:20 and add a 2-second freeze frame there.',
+  'Сохрани проект и экспортируй в 1080p H.264.': 'Save the project and export it as 1080p H.264.',
+  'ИИ-ассистент (MCP)': 'AI assistant (MCP)',
+  'Закрыть': 'Close',
+  'MCP (Model Context Protocol) — открытый стандарт, по которому ИИ-ассистенты подключают внешние программы. Подключите FF Montage к Claude Desktop, Cursor, VS Code или Claude Code — и ассистент сможет по вашей просьбе импортировать файлы, резать и переставлять клипы, ставить переходы, «смотреть» кадры, искать паузы и экспортировать ролик.':
+    'MCP (Model Context Protocol) is an open standard that lets AI assistants connect to external programs. Connect FF Montage to Claude Desktop, Cursor, VS Code or Claude Code, and the assistant will be able, at your request, to import files, cut and rearrange clips, add transitions, “look at” frames, find pauses and export the video.',
+  'Claude Desktop, Cursor и другие клиенты': 'Claude Desktop, Cursor and other clients',
+  'Claude Desktop: Settings → Developer → Edit Config (файл claude_desktop_config.json). Cursor: файл ~/.cursor/mcp.json (или .cursor/mcp.json в папке проекта). Если в файле уже есть "mcpServers" — добавьте внутрь только блок "ff-montage". После правки перезапустите клиент.':
+    'Claude Desktop: Settings → Developer → Edit Config (the claude_desktop_config.json file). Cursor: the ~/.cursor/mcp.json file (or .cursor/mcp.json in the project folder). If the file already has "mcpServers", add only the "ff-montage" block inside it. Restart the client after editing.',
+  'Claude Code (командная строка)': 'Claude Code (command line)',
+  'Сервер: {cmd} --mcp': 'Server: {cmd} --mcp',
+  'Если FF Montage закрыт, ассистент запустит программу сам.': 'If FF Montage is closed, the assistant will start it by itself.',
+  'Что можно попросить': 'What you can ask',
+  '«{text}»': '“{text}”',
+  'Важно. ': 'Important. ',
+  'Ассистент меняет открытый проект: добавляет и удаляет клипы, может открыть другой проект или запустить экспорт. Каждое его действие видно на таймлайне и отмечается уведомлением «ИИ: …»; любую правку можно отменить Ctrl+Z. Несохранённый проект ассистент без явного разрешения не закроет. Команды принимаются только с этого компьютера и только с секретным ключом, который лежит в папке кэша программы.':
+    'The assistant changes the open project: it adds and deletes clips and can open another project or start an export. Every action it takes is visible on the timeline and is marked with an “AI: …” notification; any edit can be undone with Ctrl+Z. The assistant will not close an unsaved project without explicit permission. Commands are accepted only from this computer and only with the secret key stored in the program’s cache folder.',
+  'Готово': 'Done',
+};

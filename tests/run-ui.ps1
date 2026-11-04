@@ -1,7 +1,8 @@
-﻿# Запуск автотеста интерфейса в отдельной папке кэша (ваш проект и автосохранение не трогаются).
+# Запуск автотеста интерфейса в отдельной папке кэша (ваш проект и автосохранение не трогаются).
 #   powershell -ExecutionPolicy Bypass -File tests\run-ui.ps1 ui-selftest3
 # Нужны тестовые файлы: сначала node tests\engine-test.js
-param([string]$Test = 'ui-selftest3', [int]$TimeoutSec = 240, [switch]$KeepAutosave)
+#   -Lang en — интерфейс на английском (settings.lang в тестовом config.json)
+param([string]$Test = 'ui-selftest3', [int]$TimeoutSec = 240, [switch]$KeepAutosave, [string]$Lang = '')
 $ErrorActionPreference = 'Stop'
 $App = Split-Path -Parent $PSScriptRoot
 # Всё — в .test-cache проекта: кэш пользователя из config.json не трогаем
@@ -12,7 +13,9 @@ foreach ($f in 'a_av1_1440p60.mp4', 'b_h264_1080p30.mp4', 'c_music.mp3', 'd_old.
   $p = Join-Path $src $f
   if (Test-Path $p) { Copy-Item $p "$T\cache\tmp\engine-test\" -Force }
 }
-$json = @{ version = 1; cacheDir = "$T\cache"; outputDir = "$T\out"; projectsDir = "$T\proj"; ffmpegDir = '' } | ConvertTo-Json
+$cfg = @{ version = 1; cacheDir = "$T\cache"; outputDir = "$T\out"; projectsDir = "$T\proj"; ffmpegDir = '' }
+if ($Lang) { $cfg.settings = @{ lang = $Lang } }
+$json = $cfg | ConvertTo-Json
 [System.IO.File]::WriteAllText("$T\config.json", $json, (New-Object System.Text.UTF8Encoding $false))
 if (-not $KeepAutosave) { Remove-Item "$T\cache\app\autosave.ffproj" -ErrorAction SilentlyContinue }
 Remove-Item "$T\$Test.json" -ErrorAction SilentlyContinue

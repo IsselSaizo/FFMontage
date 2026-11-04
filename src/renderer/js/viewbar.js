@@ -2,19 +2,19 @@
 //   Клип:   кадрирование (режим в плеере) · подгонка (вписать / заполнить / растянуть)
 //   Проект: формат кадра · фон
 import { store, ASPECTS } from './store.js';
-import { h, $, icon, toast } from './util.js';
+import { h, $, icon, toast, t } from './util.js';
 import { attachPopover } from './popover.js';
 
 const ASPECT_LIST = [
-  ['auto', 'Как у видео'], ['16:9', '16:9 — горизонтальное'], ['9:16', '9:16 — вертикальное'],
-  ['1:1', '1:1 — квадрат'], ['4:3', '4:3'], ['3:4', '3:4'],
+  ['auto', t('Как у видео')], ['16:9', t('16:9 — горизонтальное')], ['9:16', t('9:16 — вертикальное')],
+  ['1:1', t('1:1 — квадрат')], ['4:3', '4:3'], ['3:4', '3:4'],
 ];
 const FITS = [
-  ['contain', 'Вписать', 'Весь кадр виден, по краям — поля цвета фона'],
-  ['cover', 'Заполнить', 'Без полей, лишнее по краям обрезается'],
-  ['stretch', 'Растянуть', 'На весь кадр без сохранения пропорций'],
+  ['contain', t('Вписать'), t('Весь кадр виден, по краям — поля цвета фона')],
+  ['cover', t('Заполнить'), t('Без полей, лишнее по краям обрезается')],
+  ['stretch', t('Растянуть'), t('На весь кадр без сохранения пропорций')],
 ];
-const BG_SWATCHES = [['#000000', 'Чёрный'], ['#ffffff', 'Белый'], ['#1f1f24', 'Тёмно-серый'], ['#808080', 'Серый'], ['#00b140', 'Зелёный (хромакей)'], ['#0047bb', 'Синий (хромакей)']];
+const BG_SWATCHES = [['#000000', t('Чёрный')], ['#ffffff', t('Белый')], ['#1f1f24', t('Тёмно-серый')], ['#808080', t('Серый')], ['#00b140', t('Зелёный (хромакей)')], ['#0047bb', t('Синий (хромакей)')]];
 
 // Маленькая картинка пропорций для кнопки формата
 function aspectShape(id) {
@@ -37,20 +37,20 @@ export function initViewbar() {
   const ib = (name, title, cls = '') => h('button', { class: `vb-btn ${cls}`.trim(), title, 'aria-label': title, html: icon(name, 18) });
 
   // --- Клип ---
-  const cropBtn = ib('crop', 'Кадрирование: обрезать края клипа (щелчок — режим в плеере)', 'vb-crop');
+  const cropBtn = ib('crop', t('Кадрирование: обрезать края клипа (щелчок — режим в плеере)'), 'vb-crop');
   cropBtn.addEventListener('click', () => {
     const c = selectedVideo();
     if (!c) return;
     store.emit('crop-mode', c.id);
   });
 
-  const fitBtn = ib('fitframe', 'Подгонка клипа под формат кадра', 'vb-fit');
+  const fitBtn = ib('fitframe', t('Подгонка клипа под формат кадра'), 'vb-fit');
   const fitPop = attachPopover(fitBtn, () => {
     const c = selectedVideo();
-    if (!c) return h('p', { class: 'muted small' }, 'Выберите видеоклип на таймлайне.');
+    if (!c) return h('p', { class: 'muted small' }, t('Выберите видеоклип на таймлайне.'));
     const cur = c.fit || 'contain';
     return h('div', { class: 'pop-body' },
-      h('div', { class: 'pop-title' }, 'Подгонка клипа'),
+      h('div', { class: 'pop-title' }, t('Подгонка клипа')),
       ...FITS.map(([id, name, hint]) => h('button', {
         class: `pop-option${cur === id ? ' on' : ''}`, dataset: { fit: id },
         onclick: () => store.setFit([c.id], id),
@@ -60,45 +60,45 @@ export function initViewbar() {
         class: 'btn ghost small wide-left', dataset: { act: 'fit-all' },
         onclick: () => {
           store.setFit(store.project.videoClips.map((x) => x.id), cur);
-          toast(`Подгонка «${FITS.find((f) => f[0] === cur)[1]}» — для всех видеоклипов`, 'success', 2200);
+          toast(t('Подгонка «{name}» — для всех видеоклипов', { name: FITS.find((f) => f[0] === cur)[1] }), 'success', 2200);
         },
-      }, 'Применить ко всем видеоклипам'));
+      }, t('Применить ко всем видеоклипам')));
   }, { align: 'left' });
 
   // --- Проект ---
-  const aspectBtn = ib('aspect', 'Формат кадра проекта', 'vb-aspect');
+  const aspectBtn = ib('aspect', t('Формат кадра проекта'), 'vb-aspect');
   const aspectPop = attachPopover(aspectBtn, () => {
     const asp = store.project.aspect || 'auto';
     const f = store.sourceFormat();
     return h('div', { class: 'pop-body' },
-      h('div', { class: 'pop-title' }, 'Формат кадра'),
+      h('div', { class: 'pop-title' }, t('Формат кадра')),
       h('div', { class: 'asp-grid' }, ...ASPECT_LIST.map(([id, name]) => h('button', {
         class: `asp-tile${asp === id ? ' on' : ''}`, dataset: { aspect: id }, title: name,
         onclick: () => store.setProjectProps({ aspect: id }),
-      }, aspectShape(id), h('span', {}, id === 'auto' ? 'Как у видео' : id)))),
-      h('p', { class: 'muted small' }, f.fromClip ? `Сейчас: ${f.width}×${f.height}, ${f.fps} fps` : 'Размер возьмётся из видео на таймлайне.'));
+      }, aspectShape(id), h('span', {}, id === 'auto' ? t('Как у видео') : id)))),
+      h('p', { class: 'muted small' }, f.fromClip ? t('Сейчас: {w}×{h}, {fps} fps', { w: f.width, h: f.height, fps: f.fps }) : t('Размер возьмётся из видео на таймлайне.')));
   });
 
   const bgDot = h('span', { class: 'vb-dot' });
-  const bgBtn = ib('palette', 'Фон кадра: поля, пустоты, затухания', 'vb-bg');
+  const bgBtn = ib('palette', t('Фон кадра: поля, пустоты, затухания'), 'vb-bg');
   bgBtn.append(bgDot);
   const bgPop = attachPopover(bgBtn, () => {
     const bgc = store.background();
-    const color = h('input', { type: 'color', value: bgc, class: 'color-input', id: 'bg-color', title: 'Свой цвет' });
+    const color = h('input', { type: 'color', value: bgc, class: 'color-input', id: 'bg-color', title: t('Свой цвет') });
     color.addEventListener('change', () => store.setProjectProps({ background: color.value === '#000000' ? null : color.value }));
     return h('div', { class: 'pop-body' },
-      h('div', { class: 'pop-title' }, 'Фон'),
+      h('div', { class: 'pop-title' }, t('Фон')),
       h('div', { class: 'row gap' }, color,
         h('div', { class: 'presets' }, ...BG_SWATCHES.map(([c, n]) => h('button', {
           class: `swatch${bgc === c ? ' on' : ''}`, title: n, style: { background: c }, dataset: { bg: c },
           onclick: () => store.setProjectProps({ background: c === '#000000' ? null : c }),
         })))),
-      h('p', { class: 'muted small' }, 'Виден по краям вписанных клипов, в пустотах между клипами и при затухании.'));
+      h('p', { class: 'muted small' }, t('Виден по краям вписанных клипов, в пустотах между клипами и при затухании.')));
   }, { align: 'right' });
 
   const info = h('span', { class: 'vb-info' });
   root.append(
-    h('div', { class: 'vb-side' }, h('span', { class: 'vb-title' }, 'Предпросмотр')),
+    h('div', { class: 'vb-side' }, h('span', { class: 'vb-title' }, t('Предпросмотр'))),
     h('div', { class: 'vb-tools' },
       h('div', { class: 'vb-group', title: '' }, cropBtn, fitBtn),
       h('div', { class: 'vb-sep' }),
@@ -111,8 +111,8 @@ export function initViewbar() {
       b.disabled = !c;
       b.classList.toggle('needs-clip', !c);
     }
-    cropBtn.title = c ? 'Кадрирование: обрезать края клипа' : 'Кадрирование — выберите видеоклип';
-    fitBtn.title = c ? 'Подгонка клипа под формат кадра' : 'Подгонка — выберите видеоклип';
+    cropBtn.title = c ? t('Кадрирование: обрезать края клипа') : t('Кадрирование — выберите видеоклип');
+    fitBtn.title = c ? t('Подгонка клипа под формат кадра') : t('Подгонка — выберите видеоклип');
     fitBtn.classList.toggle('active', !!c && !!c.fit);
     cropBtn.classList.toggle('active', !!c && !!c.crop);
     bgDot.style.background = store.background();

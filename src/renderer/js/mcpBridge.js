@@ -8,6 +8,7 @@ import { toggleReverse, freezeFrameAt, isReversed, isFreeze } from './fx.js';
 import { TRANSITIONS, MIN_DURATION as TR_MIN, MAX_DURATION as TR_MAX } from './transitions.js';
 import { h, icon, toast, uid, errText } from './util.js';
 import { speedOf, tlLen, clipEnd, srcAt, tlAt, MIN_SPEED, MAX_SPEED } from './clipTime.js';
+import { t } from './i18n.js';
 
 const api = window.api;
 
@@ -88,7 +89,7 @@ function audioTrackArg(id) {
 const cleanErr = errText;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-function ai(msg) { toast(`ИИ: ${msg}`, 'info', 2200); }
+function ai(msg) { toast(t('ИИ: {msg}', { msg }), 'info', 2200); }
 
 // ---------------------------------------------------------------------------
 // Описание проекта для ассистента
@@ -246,7 +247,7 @@ async function exportVideo(args) {
     if (!isAbs(output)) fail('"path" must be an absolute path.');
     if (!/\.mp4$/i.test(output)) output += '.mp4';
   } else {
-    output = await api.defaultExportPath(store.project.name || 'Видео');
+    output = await api.defaultExportPath(store.project.name || t('Видео'));
   }
   if (!encoders) encoders = await api.encoders();
   const c = CODECS[codec];
@@ -262,18 +263,18 @@ async function exportVideo(args) {
     if (exp.state !== 'running') return;
     Object.assign(exp, { fraction: p.fraction, time: p.time, duration: p.duration, eta: p.eta, speed: p.speed, size: p.size });
   });
-  ai(`экспорт видео → ${fileName(output)}`);
+  ai(t('экспорт видео → {file}', { file: fileName(output) }));
   api.startExport(JSON.parse(JSON.stringify(store.project)), settings).then((r) => {
     off();
     if (r && r.ok) {
       finishExport({ state: 'done', output: r.output, size: r.size, duration: r.duration, elapsed: r.elapsed });
-      toast(`ИИ: экспорт завершён — ${fileName(r.output)}`, 'success', 4000);
+      toast(t('ИИ: экспорт завершён — {file}', { file: fileName(r.output) }), 'success', 4000);
     } else if (r && r.cancelled) {
       finishExport({ state: 'cancelled' });
-      toast('ИИ: экспорт отменён', 'info');
+      toast(t('ИИ: экспорт отменён'), 'info');
     } else {
       finishExport({ state: 'error', error: (r && r.error) || 'Unknown export error' });
-      toast('ИИ: ошибка экспорта', 'error', 4000);
+      toast(t('ИИ: ошибка экспорта'), 'error', 4000);
     }
   }).catch((e) => { off(); finishExport({ state: 'error', error: cleanErr(e) }); });
   return { started: true, ...exportStatus(), hint: 'Poll export_status (use wait: 60) until state is "done".' };
@@ -315,7 +316,7 @@ const TOOLS = {
     const failed = [];
     const exist = [];
     for (const p of paths) { if (await api.exists(p)) exist.push(p); else failed.push({ path: p, reason: 'file not found' }); }
-    ai(`импорт файлов (${exist.length})`);
+    ai(t('импорт файлов ({n})', { n: exist.length }));
     if (exist.length) await importPaths(exist);
     const norm = (p) => String(p).replace(/\//g, '\\').toLowerCase();
     const imported = [];
@@ -348,7 +349,7 @@ const TOOLS = {
       clip = store.addAudioClip(m.id, start === undefined ? 0 : start, tid || null, { extra: { in: sin, out: sout } });
     }
     if (!clip) fail('Could not add the clip.');
-    ai(`добавлен клип «${m.name}»`);
+    ai(t('добавлен клип «{name}»', { name: m.name }));
     const d = describeById(clip.id);
     const out = { clip: d };
     if (start !== undefined && Math.abs(d.start - start) > EPS) out.note = `The requested place was occupied; the clip was placed at ${d.start} s.`;
@@ -440,7 +441,7 @@ const TOOLS = {
     });
     if (crop) store.setCrop([c.id], crop);
     if (speed !== undefined && Math.abs(speed - speedOf(c)) > 1e-6) store.setSpeed(c.id, speed, { ripple: !!shiftFollowing });
-    ai('изменён клип');
+    ai(t('изменён клип'));
     const d = describeById(c.id);
     const out = { clip: d };
     if (start !== undefined && Math.abs(d.start - start) > EPS) out.note = `The requested place was occupied; the clip is at ${d.start} s.`;
@@ -452,29 +453,29 @@ const TOOLS = {
   },
 
   split_clip(args) {
-    const t = numArg(args, 'time', { min: 0, required: true });
+    const at = numArg(args, 'time', { min: 0, required: true });
     const cid = strArg(args, 'clip_id');
     let target;
     if (cid) {
       const f = clipArg(cid);
       target = f.clip;
-      if (!(t > f.clip.start + MIN_CLIP - 1e-6 && t < end(f.clip) - MIN_CLIP + 1e-6)) {
-        fail(`Time ${t} s is not inside clip ${cid} (${r3(f.clip.start)}–${r3(end(f.clip))} s) or is closer than ${MIN_CLIP} s to its edge.`);
+      if (!(at > f.clip.start + MIN_CLIP - 1e-6 && at < end(f.clip) - MIN_CLIP + 1e-6)) {
+        fail(`Time ${at} s is not inside clip ${cid} (${r3(f.clip.start)}–${r3(end(f.clip))} s) or is closer than ${MIN_CLIP} s to its edge.`);
       }
     } else {
-      const seg = store.videoLayout().find((s) => t > s.start + MIN_CLIP && t < s.end - MIN_CLIP);
-      if (!seg) fail(`No video clip under ${t} s (or the time is too close to a clip edge). Pass clip_id to split an audio clip.`);
+      const seg = store.videoLayout().find((s) => at > s.start + MIN_CLIP && at < s.end - MIN_CLIP);
+      if (!seg) fail(`No video clip under ${at} s (or the time is too close to a clip edge). Pass clip_id to split an audio clip.`);
       target = seg.clip;
     }
     const before = new Set(store.project.videoClips.map((c) => c.id));
     for (const tr of store.project.audioTracks) for (const c of tr.clips) before.add(c.id);
-    const n = store.splitAt(t, target.id);
+    const n = store.splitAt(at, target.id);
     if (!n) fail('Nothing was split (the cut is too close to the clip edge).');
     // Связанный звук режется вместе с видео — правую половину ищем на дорожке самого клипа
     const tf = store.findClip(target.id);
     const pool = tf?.kind === 'video' ? store.project.videoClips : (tf?.track?.clips || []);
     const right = pool.find((c) => !before.has(c.id));
-    ai(`разрез на ${r3(t)} с`);
+    ai(t('разрез на {t} с', { t: r3(at) }));
     return { left: describeById(target.id), right: right ? describeById(right.id) : null };
   },
 
@@ -483,7 +484,7 @@ const TOOLS = {
     if (store.busy[f.clip.id]) fail('The clip is being processed, try again later.');
     const ripple = !!boolArg(args, 'ripple');
     store.deleteClip(f.clip.id, { ripple });
-    ai(ripple ? 'клип удалён со сдвигом' : 'клип удалён');
+    ai(ripple ? t('клип удалён со сдвигом') : t('клип удалён'));
     return { deleted: f.clip.id, ripple, duration: r3(store.duration()) };
   },
 
@@ -491,7 +492,7 @@ const TOOLS = {
     const f = clipArg(args.clip_id);
     if (f.kind !== 'video') fail('Reverse works for video clips only.');
     if (isFreeze(f.clip)) fail('A freeze frame does not need reversing.');
-    ai(isReversed(f.clip) ? 'обычное направление клипа' : 'реверс клипа');
+    ai(isReversed(f.clip) ? t('обычное направление клипа') : t('реверс клипа'));
     try {
       const r = await toggleReverse(f.clip.id);
       return { reversed: !!(r && r.reversed), clip: describeById(f.clip.id) };
@@ -499,12 +500,12 @@ const TOOLS = {
   },
 
   async freeze_frame(args) {
-    const t = numArg(args, 'time', { min: 0, def: store.time });
+    const at = numArg(args, 'time', { min: 0, def: store.time });
     const d = numArg(args, 'duration', { min: MIN_CLIP, max: 60, def: 3 });
-    if (t > store.videoEnd() + 0.02) fail(`Time ${t} s is after the end of the video track (${r3(store.videoEnd())} s).`);
-    ai(`стоп-кадр на ${r3(t)} с`);
+    if (at > store.videoEnd() + 0.02) fail(`Time ${at} s is after the end of the video track (${r3(store.videoEnd())} s).`);
+    ai(t('стоп-кадр на {t} с', { t: r3(at) }));
     let id;
-    try { id = await freezeFrameAt(t, d); } catch (e) { fail(cleanErr(e)); }
+    try { id = await freezeFrameAt(at, d); } catch (e) { fail(cleanErr(e)); }
     if (!id) fail('The freeze frame could not be inserted.');
     const clip = describeById(id);
     const out = { clip };
@@ -520,7 +521,7 @@ const TOOLS = {
     if (!type) fail(`"type" is required: one of ${ids.join(', ')} or "none".`);
     if (type === 'none') {
       store.setTransition(f.clip.id, null);
-      ai('переход убран');
+      ai(t('переход убран'));
       return { removed: true, clip_id: f.clip.id };
     }
     const j = store.junctionBefore(f.clip.id);
@@ -535,7 +536,7 @@ const TOOLS = {
     store.setTransition(f.clip.id, type, dur ?? null);
     const b = store.project.videoClips.find((c) => c.id === f.clip.id);
     if (!b || !b.transition) fail(`The clips are too short for a transition (each must be at least ${TR_MIN} s).`);
-    ai(`переход «${(TRANSITIONS.find((t) => t.id === type) || {}).name || type}»`);
+    ai(t('переход «{name}»', { name: (TRANSITIONS.find((x) => x.id === type) || {}).name || type }));
     const out = { transition: { from_clip: j.a.id, to_clip: b.id, type: b.transition.type, duration: r3(b.transition.duration), at: r3(b.start) } };
     if (dur !== undefined && Math.abs(b.transition.duration - dur) > EPS) out.note = `Duration limited to ${r3(b.transition.duration)} s by the clip lengths.`;
     return out;
@@ -546,27 +547,27 @@ const TOOLS = {
     if (lane !== 'video' && !store.project.audioTracks.find((t) => t.id === lane)) {
       fail(`"track" must be "video" or an audio track id (${store.project.audioTracks.map((t) => t.id).join(', ')}).`);
     }
-    const t = numArg(args, 'time', { min: 0 });
-    if (t !== undefined) {
-      const shift = store.closeGap(lane, t);
-      if (!shift) fail(`No gap at ${t} s on this track. Gaps: ${JSON.stringify(gapsR(store.gaps(lane)))}`);
-      ai('пустота убрана');
+    const at = numArg(args, 'time', { min: 0 });
+    if (at !== undefined) {
+      const shift = store.closeGap(lane, at);
+      if (!shift) fail(`No gap at ${at} s on this track. Gaps: ${JSON.stringify(gapsR(store.gaps(lane)))}`);
+      ai(t('пустота убрана'));
       return { closed: 1, shift: r3(shift), gaps_left: gapsR(store.gaps(lane)), duration: r3(store.duration()) };
     }
     const n = store.closeAllGaps(lane);
-    if (n) ai(`убрано пустот: ${n}`);
+    if (n) ai(t('убрано пустот: {n}', { n }));
     return { closed: n, gaps_left: gapsR(store.gaps(lane)), duration: r3(store.duration()) };
   },
 
   undo() {
     const ok = store.undo();
-    if (ok) ai('отмена');
+    if (ok) ai(t('отмена'));
     return { done: ok, ...(ok ? {} : { note: 'Nothing to undo.' }), can_undo: store.undoStack.length > 0, can_redo: store.redoStack.length > 0 };
   },
 
   redo() {
     const ok = store.redo();
-    if (ok) ai('повтор');
+    if (ok) ai(t('повтор'));
     return { done: ok, ...(ok ? {} : { note: 'Nothing to redo.' }), can_undo: store.undoStack.length > 0, can_redo: store.redoStack.length > 0 };
   },
 
@@ -580,7 +581,7 @@ const TOOLS = {
   async new_project(args) {
     const name = strArg(args, 'name', { max: 200 });
     unsavedGuard(!!boolArg(args, 'force'));
-    ai('новый проект');
+    ai(t('новый проект'));
     await needHooks('newProject')(name && name.trim() ? name.trim() : undefined);
     if (name && name.trim() && store.project.name !== name.trim()) { store.project.name = name.trim(); store.emit('project'); }
     return projectSummary();
@@ -592,7 +593,7 @@ const TOOLS = {
     unsavedGuard(!!boolArg(args, 'force'));
     let r;
     try { r = await api.readProject(p); } catch (e) { fail(`Cannot read ${p}: ${cleanErr(e)}`); }
-    ai(`открывается проект ${fileName(p)}`);
+    ai(t('открывается проект {file}', { file: fileName(p) }));
     try { await needHooks('loadProjectText')(r.text, r.filePath); } catch (e) { if (e instanceof ToolError) throw e; fail(`Not a valid FF Montage project: ${cleanErr(e)}`); }
     const missing = Object.values(store.project.media).filter((m) => !m.hidden && (store.runtime[m.id] || {}).missing).map((m) => m.path);
     return { ...projectSummary(), ...(missing.length ? { missing_files: missing } : {}) };
@@ -607,7 +608,7 @@ const TOOLS = {
       p = store.filePath;
     } else {
       const info = await api.info();
-      const safe = String(store.project.name || 'Проект').replace(/[\\/:*?"<>|]+/g, '_').trim() || 'Проект';
+      const safe = String(store.project.name || t('Проект')).replace(/[\\/:*?"<>|]+/g, '_').trim() || t('Проект');
       const base = `${info.projectsDir}${info.sep}${safe}`;
       p = `${base}.ffproj`;
       for (let i = 2; await api.exists(p); i++) p = `${base} (${i}).ffproj`;
@@ -615,7 +616,7 @@ const TOOLS = {
     let saved;
     try { saved = await needHooks('saveProject')(p); } catch (e) { if (e instanceof ToolError) throw e; fail(`Save failed: ${cleanErr(e)}`); }
     if (!saved) fail('The project was not saved.');
-    ai(`проект сохранён: ${fileName(saved)}`);
+    ai(t('проект сохранён: {file}', { file: fileName(saved) }));
     return { path: saved };
   },
 
@@ -756,14 +757,14 @@ async function copyText(text, btn) {
   }
   if (btn) {
     const old = btn.textContent;
-    btn.textContent = ok ? 'Скопировано' : 'Не удалось';
+    btn.textContent = ok ? t('Скопировано') : t('Не удалось');
     setTimeout(() => { btn.textContent = old; }, 1500);
   }
-  if (!ok) toast('Не удалось скопировать — выделите текст и нажмите Ctrl+C', 'error');
+  if (!ok) toast(t('Не удалось скопировать — выделите текст и нажмите Ctrl+C'), 'error');
 }
 
 function codeBlock(text, wrap = false) {
-  const btn = h('button', { class: 'btn ghost small', onclick: () => copyText(text, btn) }, 'Скопировать');
+  const btn = h('button', { class: 'btn ghost small', onclick: () => copyText(text, btn) }, t('Скопировать'));
   return h('div', { style: { position: 'relative', margin: '6px 0 14px' } },
     h('pre', {
       style: {
@@ -781,58 +782,51 @@ const section = (title) => h('h3', { style: { margin: '16px 0 4px', fontSize: '1
 export async function showMcpDialog() {
   if (document.getElementById('mcp-dialog')) return;
   let info;
-  try { info = await api.mcpInfo(); } catch (e) { toast(`ИИ-ассистент недоступен: ${cleanErr(e)}`, 'error', 5000); return; }
+  try { info = await api.mcpInfo(); } catch (e) { toast(t('ИИ-ассистент недоступен: {err}', { err: cleanErr(e) }), 'error', 5000); return; }
 
   const overlay = h('div', { class: 'modal-overlay', id: 'mcp-dialog' });
   const close = () => { overlay.remove(); document.removeEventListener('keydown', onKey, true); };
   const onKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); } };
 
   const status = info.running
-    ? h('p', { class: 'small', style: { color: '#7ee2a8' } }, '● Канал управления включён — ассистент сможет подключиться к этому окну.')
-    : h('p', { class: 'small', style: { color: '#ff9aa4' } }, '● Канал управления не запущен — перезапустите FF Montage.');
+    ? h('p', { class: 'small', style: { color: '#7ee2a8' } }, t('● Канал управления включён — ассистент сможет подключиться к этому окну.'))
+    : h('p', { class: 'small', style: { color: '#ff9aa4' } }, t('● Канал управления не запущен — перезапустите FF Montage.'));
 
   const examples = [
-    'Импортируй все видео из папки D:\\Записи\\Отпуск и собери из них ролик по порядку, между клипами — растворение.',
-    'Найди паузы длиннее секунды в клипе с интервью и вырежи их.',
-    'Положи музыку C:\\Music\\track.mp3 на всю длину ролика, громкость 40 %, затухание в конце 3 секунды.',
-    'Покажи, что на 1:20, и сделай там стоп-кадр на 2 секунды.',
-    'Сохрани проект и экспортируй в 1080p H.264.',
+    t('Импортируй все видео из папки D:\\Записи\\Отпуск и собери из них ролик по порядку, между клипами — растворение.'),
+    t('Найди паузы длиннее секунды в клипе с интервью и вырежи их.'),
+    t('Положи музыку C:\\Music\\track.mp3 на всю длину ролика, громкость 40 %, затухание в конце 3 секунды.'),
+    t('Покажи, что на 1:20, и сделай там стоп-кадр на 2 секунды.'),
+    t('Сохрани проект и экспортируй в 1080p H.264.'),
   ];
 
   overlay.append(h('div', { class: 'modal', style: { width: '760px' } },
-    h('div', { class: 'modal-head' }, h('h2', {}, 'ИИ-ассистент (MCP)'),
-      h('button', { class: 'icon-btn', title: 'Закрыть', onclick: close, html: icon('close', 18) })),
+    h('div', { class: 'modal-head' }, h('h2', {}, t('ИИ-ассистент (MCP)')),
+      h('button', { class: 'icon-btn', title: t('Закрыть'), onclick: close, html: icon('close', 18) })),
     h('div', { class: 'modal-body' },
-      h('p', {}, 'MCP (Model Context Protocol) — открытый стандарт, по которому ИИ-ассистенты подключают внешние программы. '
-        + 'Подключите FF Montage к Claude Desktop, Cursor, VS Code или Claude Code — и ассистент сможет по вашей просьбе '
-        + 'импортировать файлы, резать и переставлять клипы, ставить переходы, «смотреть» кадры, искать паузы и экспортировать ролик.'),
+      h('p', {}, t('MCP (Model Context Protocol) — открытый стандарт, по которому ИИ-ассистенты подключают внешние программы. Подключите FF Montage к Claude Desktop, Cursor, VS Code или Claude Code — и ассистент сможет по вашей просьбе импортировать файлы, резать и переставлять клипы, ставить переходы, «смотреть» кадры, искать паузы и экспортировать ролик.')),
       status,
-      section('Claude Desktop, Cursor и другие клиенты'),
-      h('p', { class: 'muted small' }, 'Claude Desktop: Settings → Developer → Edit Config (файл claude_desktop_config.json). '
-        + 'Cursor: файл ~/.cursor/mcp.json (или .cursor/mcp.json в папке проекта). '
-        + 'Если в файле уже есть "mcpServers" — добавьте внутрь только блок "ff-montage". После правки перезапустите клиент.'),
+      section(t('Claude Desktop, Cursor и другие клиенты')),
+      h('p', { class: 'muted small' }, t('Claude Desktop: Settings → Developer → Edit Config (файл claude_desktop_config.json). Cursor: файл ~/.cursor/mcp.json (или .cursor/mcp.json в папке проекта). Если в файле уже есть "mcpServers" — добавьте внутрь только блок "ff-montage". После правки перезапустите клиент.')),
       codeBlock(info.configJson),
       section('VS Code (.vscode/mcp.json)'),
       codeBlock(info.vscodeJson),
-      section('Claude Code (командная строка)'),
+      section(t('Claude Code (командная строка)')),
       codeBlock(info.claudeCodeCommand, true),
-      h('p', { class: 'muted small' }, `Сервер: ${info.command} --mcp`),
-      h('p', { class: 'muted small' }, 'Если FF Montage закрыт, ассистент запустит программу сам.'),
-      section('Что можно попросить'),
-      h('ul', { class: 'muted small', style: { margin: '4px 0 0', paddingLeft: '20px', lineHeight: '1.6' } }, ...examples.map((x) => h('li', {}, `«${x}»`))),
+      h('p', { class: 'muted small' }, t('Сервер: {cmd} --mcp', { cmd: info.command })),
+      h('p', { class: 'muted small' }, t('Если FF Montage закрыт, ассистент запустит программу сам.')),
+      section(t('Что можно попросить')),
+      h('ul', { class: 'muted small', style: { margin: '4px 0 0', paddingLeft: '20px', lineHeight: '1.6' } }, ...examples.map((x) => h('li', {}, t('«{text}»', { text: x })))),
       h('div', {
         style: {
           marginTop: '16px', padding: '10px 12px', borderRadius: '8px', fontSize: '12.5px', lineHeight: '1.5',
           background: 'rgba(255,190,80,.08)', border: '1px solid rgba(255,190,80,.35)', color: '#f3d7a2',
         },
       },
-      h('b', {}, 'Важно. '),
-      'Ассистент меняет открытый проект: добавляет и удаляет клипы, может открыть другой проект или запустить экспорт. '
-        + 'Каждое его действие видно на таймлайне и отмечается уведомлением «ИИ: …»; любую правку можно отменить Ctrl+Z. '
-        + 'Несохранённый проект ассистент без явного разрешения не закроет. Команды принимаются только с этого компьютера '
-        + 'и только с секретным ключом, который лежит в папке кэша программы.')),
+      h('b', {}, t('Важно. ')),
+      t('Ассистент меняет открытый проект: добавляет и удаляет клипы, может открыть другой проект или запустить экспорт. Каждое его действие видно на таймлайне и отмечается уведомлением «ИИ: …»; любую правку можно отменить Ctrl+Z. Несохранённый проект ассистент без явного разрешения не закроет. Команды принимаются только с этого компьютера и только с секретным ключом, который лежит в папке кэша программы.'))),
     h('div', { class: 'modal-foot' },
-      h('button', { class: 'btn primary', onclick: close }, 'Готово'))));
+      h('button', { class: 'btn primary', onclick: close }, t('Готово')))));
   overlay.addEventListener('mousedown', (e) => { if (e.target === overlay) close(); });
   document.addEventListener('keydown', onKey, true);
   document.body.append(overlay);

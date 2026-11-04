@@ -4,6 +4,7 @@ import { store } from './store.js';
 import { h, icon, toast, confirmDialog } from './util.js';
 import { openMenu } from './contextMenu.js';
 import { fmtTime } from './util.js';
+import { t } from './i18n.js';
 
 export function initEpisodes(timelineRoot) {
   const bar = h('div', { class: 'tl-episodes', id: 'episodes' });
@@ -23,14 +24,15 @@ export function initEpisodes(timelineRoot) {
 
   const remove = async (id) => {
     const dur = store.episodeDuration(id);
-    if (dur > 0 && !(await confirmDialog('Удалить эпизод?', `«${store.episodeName(id)}» (${fmtTime(dur, { ms: false })}) будет удалён вместе с его клипами. Файлы в «Ваших медиа» останутся. Отменить можно Ctrl+Z.`, 'Удалить', 'Отмена', true))) return;
+    if (dur > 0 && !(await confirmDialog(t('Удалить эпизод?'), t('«{name}» ({dur}) будет удалён вместе с его клипами. Файлы в «Ваших медиа» останутся. Отменить можно Ctrl+Z.', { name: store.episodeName(id), dur: fmtTime(dur, { ms: false }) }), t('Удалить'), t('Отмена'), true))) return;
     store.removeEpisode(id);
   };
 
   const insertInto = (src, dst, atCursor) => {
     const at = atCursor && dst === store.activeEpisode() ? store.time : null;
-    if (!store.insertEpisode(src, dst, at)) { toast('Эпизод пустой — добавлять нечего', 'info', 2200); return; }
-    toast(`«${store.episodeName(src)}» добавлен в «${store.episodeName(dst)}»${at === null ? ' (в конец)' : ' (по курсору)'}`, 'success', 2600);
+    if (!store.insertEpisode(src, dst, at)) { toast(t('Эпизод пустой — добавлять нечего'), 'info', 2200); return; }
+    const names = { src: store.episodeName(src), dst: store.episodeName(dst) };
+    toast(at === null ? t('«{src}» добавлен в «{dst}» (в конец)', names) : t('«{src}» добавлен в «{dst}» (по курсору)', names), 'success', 2600);
   };
 
   const tabMenu = (e, id) => {
@@ -38,12 +40,12 @@ export function initEpisodes(timelineRoot) {
     const active = store.activeEpisode();
     const others = store.episodes().filter((x) => x.id !== id);
     openMenu(e.clientX, e.clientY, [
-      { label: 'Переименовать', icon: 'rename', onClick: () => rename(id, bar.querySelector(`.ep-tab[data-ep="${id}"] .ep-name`)) },
-      id !== 'main' ? { label: 'Добавить в конец «Основного»', icon: 'plus', id: 'ep-to-main', onClick: () => insertInto(id, 'main', false) } : null,
-      id !== active ? { label: `Вставить сюда по курсору («${store.episodeName(active)}»)`, icon: 'plus', id: 'ep-here', onClick: () => insertInto(id, active, true) } : null,
-      ...(others.length ? ['sep', { header: 'Добавить в конец эпизода' }, ...others.map((o) => ({ label: o.name, onClick: () => insertInto(id, o.id, false) }))] : []),
+      { label: t('Переименовать'), icon: 'rename', onClick: () => rename(id, bar.querySelector(`.ep-tab[data-ep="${id}"] .ep-name`)) },
+      id !== 'main' ? { label: t('Добавить в конец «Основного»'), icon: 'plus', id: 'ep-to-main', onClick: () => insertInto(id, 'main', false) } : null,
+      id !== active ? { label: t('Вставить сюда по курсору («{name}»)', { name: store.episodeName(active) }), icon: 'plus', id: 'ep-here', onClick: () => insertInto(id, active, true) } : null,
+      ...(others.length ? ['sep', { header: t('Добавить в конец эпизода') }, ...others.map((o) => ({ label: o.name, onClick: () => insertInto(id, o.id, false) }))] : []),
       id !== 'main' ? 'sep' : null,
-      id !== 'main' ? { label: 'Удалить эпизод', icon: 'trash', danger: true, onClick: () => remove(id) } : null,
+      id !== 'main' ? { label: t('Удалить эпизод'), icon: 'trash', danger: true, onClick: () => remove(id) } : null,
     ]);
   };
 
@@ -55,24 +57,26 @@ export function initEpisodes(timelineRoot) {
       const name = h('span', { class: 'ep-name' }, ep.name);
       const tab = h('div', {
         class: `ep-tab${ep.id === active ? ' on' : ''}`, dataset: { ep: ep.id },
-        title: `${ep.name}${ep.id === 'main' ? ' — основной таймлайн' : ''}. Двойной щелчок — переименовать, правая кнопка — добавить в другой эпизод`,
+        title: ep.id === 'main'
+          ? t('{name} — основной таймлайн. Двойной щелчок — переименовать, правая кнопка — добавить в другой эпизод', { name: ep.name })
+          : t('{name}. Двойной щелчок — переименовать, правая кнопка — добавить в другой эпизод', { name: ep.name }),
       }, name);
       tab.addEventListener('click', () => store.switchEpisode(ep.id));
       name.addEventListener('dblclick', (e) => { e.stopPropagation(); rename(ep.id, name); });
       tab.addEventListener('contextmenu', (e) => tabMenu(e, ep.id));
       if (ep.id !== 'main') {
-        const x = h('button', { class: 'ep-x', title: 'Удалить эпизод', html: icon('close', 12) });
+        const x = h('button', { class: 'ep-x', title: t('Удалить эпизод'), html: icon('close', 12) });
         x.addEventListener('click', (e) => { e.stopPropagation(); remove(ep.id); });
         tab.append(x);
       }
       bar.append(tab);
     }
-    bar.append(h('button', { class: 'ep-add', id: 'ep-add', title: 'Новый эпизод: отдельный таймлайн, потом его легко добавить в основной', onclick: () => store.addEpisode() },
-      h('span', { html: icon('plus', 14) }), list.length > 1 ? '' : 'Эпизод'));
+    bar.append(h('button', { class: 'ep-add', id: 'ep-add', title: t('Новый эпизод: отдельный таймлайн, потом его легко добавить в основной'), onclick: () => store.addEpisode() },
+      h('span', { html: icon('plus', 14) }), list.length > 1 ? '' : t('Эпизод')));
     if (active !== 'main') {
       bar.append(h('div', { class: 'ep-spacer' }),
-        h('button', { class: 'btn small ep-join', id: 'ep-join', title: 'Скопировать весь этот эпизод в конец основного таймлайна', onclick: () => insertInto(active, 'main', false) },
-          h('span', { html: icon('plus', 14) }), `Добавить в «${store.episodeName('main')}»`));
+        h('button', { class: 'btn small ep-join', id: 'ep-join', title: t('Скопировать весь этот эпизод в конец основного таймлайна'), onclick: () => insertInto(active, 'main', false) },
+          h('span', { html: icon('plus', 14) }), t('Добавить в «{name}»', { name: store.episodeName('main') })));
     }
   }
 

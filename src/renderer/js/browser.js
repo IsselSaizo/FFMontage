@@ -1,15 +1,16 @@
 // Правая колонка: вкладки «Свойства» (инспектор), «Переходы» и «Фильтры» (id вкладки — 'effects').
 // Наведение на переход/эффект показывает его в плеере (проект не меняется), щелчок — применяет.
 import { store } from './store.js';
-import { h, $, icon, toast } from './util.js';
+import { h, $, icon, toast, t } from './util.js';
 import { TRANSITIONS, applyTransition, DEFAULT_DURATION } from './transitions.js';
 import { maxTransition } from './store.js';
 import { EFFECTS, clipEffects } from './effects.js';
+import { keyHint } from './keymap.js';
 
 const TABS = [
-  { id: 'props', name: 'Свойства', el: '#inspector' },
-  { id: 'transitions', name: 'Переходы', el: '#browse-transitions' },
-  { id: 'effects', name: 'Фильтры', el: '#browse-effects' },
+  { id: 'props', name: t('Свойства'), el: '#inspector' },
+  { id: 'transitions', name: t('Переходы'), el: '#browse-transitions' },
+  { id: 'effects', name: t('Фильтры'), el: '#browse-effects' },
 ];
 
 // Стык для перехода: выделенный переход → стык у выделенного видеоклипа → ближайший к курсору
@@ -45,14 +46,14 @@ export function initBrowser() {
   const show = (id) => {
     current = id;
     localStorage.setItem('ffm.rightTab', id);
-    for (const t of TABS) {
-      $(t.el).hidden = t.id !== id;
-      tabsEl.querySelector(`[data-tab="${t.id}"]`).classList.toggle('on', t.id === id);
+    for (const tab of TABS) {
+      $(tab.el).hidden = tab.id !== id;
+      tabsEl.querySelector(`[data-tab="${tab.id}"]`).classList.toggle('on', tab.id === id);
     }
     if (id === 'transitions') renderTransitions();
     if (id === 'effects') renderEffects();
   };
-  for (const t of TABS) tabsEl.append(h('button', { class: 'rp-tab', dataset: { tab: t.id }, onclick: () => show(t.id) }, t.name));
+  for (const tab of TABS) tabsEl.append(h('button', { class: 'rp-tab', dataset: { tab: tab.id }, onclick: () => show(tab.id) }, tab.name));
 
   // --- Переходы ---
   const trRoot = $('#browse-transitions');
@@ -62,33 +63,33 @@ export function initBrowser() {
     const bId = targetJunction();
     const j = bId ? store.junctionBefore(bId) : null;
     const cur = j && j.b.transition;
-    trRoot.append(h('div', { class: 'panel-head' }, h('h2', {}, 'Переходы')),
+    trRoot.append(h('div', { class: 'panel-head' }, h('h2', {}, t('Переходы'))),
       h('p', { class: 'muted small' }, j
-        ? `Наведите — переход покажется в плеере на стыке «${store.clipName(j.a)}» → «${store.clipName(j.b)}». Щелчок — поставить.`
-        : 'Поставьте два видеоклипа впритык — тогда сюда можно будет выбрать переход для стыка. Наведение показывает переход на образце.'));
+        ? t('Наведите — переход покажется в плеере на стыке «{a}» → «{b}». Щелчок — поставить.', { a: store.clipName(j.a), b: store.clipName(j.b) })
+        : t('Поставьте два видеоклипа впритык — тогда сюда можно будет выбрать переход для стыка. Наведение показывает переход на образце.')));
     const grid = h('div', { class: 'tr-grid' });
-    for (const t of TRANSITIONS) {
+    for (const tr of TRANSITIONS) {
       const a = h('div', { class: 'tp-a' }); const b = h('div', { class: 'tp-b' }); const ov = h('div', { class: 'tp-ov' });
       const tile = h('button', {
-        class: `tr-tile${cur && cur.type === t.id ? ' on' : ''}`, dataset: { type: t.id }, title: t.name,
+        class: `tr-tile${cur && cur.type === tr.id ? ' on' : ''}`, dataset: { type: tr.id }, title: tr.name,
         onclick: () => {
           const id = targetJunction();
-          if (!id) { toast('Нет стыка: поставьте два видеоклипа впритык', 'info', 2400); return; }
+          if (!id) { toast(t('Нет стыка: поставьте два видеоклипа впритык'), 'info', 2400); return; }
           const jj = store.junctionBefore(id);
           const d = jj.b.transition ? jj.b.transition.duration : Math.min(DEFAULT_DURATION, maxTransition(jj.a, jj.b));
-          store.setTransition(id, t.id, d);
+          store.setTransition(id, tr.id, d);
           store.select({ kind: 'transition', id });
         },
-      }, h('div', { class: 'tp-thumb' }, a, b, ov), h('span', {}, t.name));
-      applyTransition(t.id, 0.5, a, b, ov);
+      }, h('div', { class: 'tp-thumb' }, a, b, ov), h('span', {}, tr.name));
+      applyTransition(tr.id, 0.5, a, b, ov);
       let raf = null; let t0 = 0;
-      const anim = (now) => { const p = ((now - t0) / 1400) % 1; applyTransition(t.id, Math.min(1, p * 1.25), a, b, ov); raf = requestAnimationFrame(anim); };
+      const anim = (now) => { const p = ((now - t0) / 1400) % 1; applyTransition(tr.id, Math.min(1, p * 1.25), a, b, ov); raf = requestAnimationFrame(anim); };
       tile.addEventListener('mouseenter', () => {
         t0 = performance.now(); raf = requestAnimationFrame(anim);
         const id = targetJunction();
-        if (id) store.emit('preview-transition', { bId: id, type: t.id, el: tile });
+        if (id) store.emit('preview-transition', { bId: id, type: tr.id, el: tile });
       });
-      tile.addEventListener('mouseleave', () => { cancelAnimationFrame(raf); applyTransition(t.id, 0.5, a, b, ov); store.emit('preview-transition', null); });
+      tile.addEventListener('mouseleave', () => { cancelAnimationFrame(raf); applyTransition(tr.id, 0.5, a, b, ov); store.emit('preview-transition', null); });
       grid.append(tile);
     }
     trRoot.append(grid);
@@ -102,10 +103,10 @@ export function initBrowser() {
     const id = targetClip();
     const c = id ? store.findClip(id).clip : null;
     const on = c ? clipEffects(c) : [];
-    fxRoot.append(h('div', { class: 'panel-head' }, h('h2', {}, 'Фильтры')),
+    fxRoot.append(h('div', { class: 'panel-head' }, h('h2', {}, t('Фильтры'))),
       h('p', { class: 'muted small' }, c
-        ? `Клип «${store.clipName(c)}». Наведите — фильтр покажется в плеере, щелчок — включить или выключить. Чтобы фильтр был только на части клипа, сначала разрежьте его (S или лезвие B).`
-        : 'Выделите видеоклип (или поставьте курсор на него). Фильтр действует на весь клип — для фрагмента разрежьте клип (S или лезвие B).'));
+        ? t('Клип «{name}». Наведите — фильтр покажется в плеере, щелчок — включить или выключить. Чтобы фильтр был только на части клипа, сначала разрежьте его ({split} или лезвие {blade}).', { name: store.clipName(c), split: keyHint('clip.split'), blade: keyHint('tool.blade') })
+        : t('Выделите видеоклип (или поставьте курсор на него). Фильтр действует на весь клип — для фрагмента разрежьте клип ({split} или лезвие {blade}).', { split: keyHint('clip.split'), blade: keyHint('tool.blade') })));
     const grid = h('div', { class: 'fx-grid' });
     for (const e of EFFECTS) {
       const sw = h('div', { class: 'fx-sample', style: { filter: e.css(120) } });

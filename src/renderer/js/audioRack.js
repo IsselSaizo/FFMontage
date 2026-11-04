@@ -3,15 +3,18 @@
 import { store } from './store.js';
 import { h, $, icon } from './util.js';
 import { AUDIO_FX, fxDef, fxParam } from './audioFx.js';
+import { t, getLang } from './i18n.js';
 
-const fmt = (v, pd) => `${String(Math.round(v * 10) / 10).replace('.', ',')} ${pd.unit}`;
+// Десятичный разделитель языка без лишних нулей: 2,5 / 2.5
+const dec = (x) => (getLang() === 'ru' ? String(x).replace('.', ',') : String(x));
+const fmt = (v, pd) => `${dec(Math.round(v * 10) / 10)} ${pd.unit}`;
 
 export function rackTarget() {
   const s = store.selection;
   if (!s) return null;
   if (s.kind === 'track') {
-    const t = store.project.audioTracks.find((x) => x.id === s.id);
-    return t ? { kind: 'track', id: t.id, owner: t, name: t.name || `Аудио ${store.project.audioTracks.indexOf(t) + 1}` } : null;
+    const tk = store.project.audioTracks.find((x) => x.id === s.id);
+    return tk ? { kind: 'track', id: tk.id, owner: tk, name: tk.name || t('Аудио {n}', { n: store.project.audioTracks.indexOf(tk) + 1 }) } : null;
   }
   const f = s.kind === 'audio' ? store.findClip(s.id) : null;
   return f ? { kind: 'clip', id: f.clip.id, owner: f.clip, name: store.clipName(f.clip) } : null;
@@ -43,42 +46,42 @@ export function initAudioRack() {
     if (before) return;
     root.innerHTML = '';
     const tg = rackTarget();
-    root.append(h('div', { class: 'panel-head' }, h('h2', {}, 'Аудиоэффекты')));
+    root.append(h('div', { class: 'panel-head' }, h('h2', {}, t('Аудиоэффекты'))));
     if (!tg) {
       const s = store.selection;
       const vid = s && s.kind === 'video' ? store.findClip(s.id) : null;
       root.append(h('p', { class: 'muted small' }, vid && vid.clip.noAudio
-        ? 'Звук этого видео лежит на аудиодорожке — выберите его там.'
-        : 'Выберите звуковой клип на таймлайне — эффекты будут только у него. Щелчок по названию дорожки — эффекты для всей дорожки.'));
+        ? t('Звук этого видео лежит на аудиодорожке — выберите его там.')
+        : t('Выберите звуковой клип на таймлайне — эффекты будут только у него. Щелчок по названию дорожки — эффекты для всей дорожки.')));
       return;
     }
     const target = { kind: tg.kind, id: tg.id };
     root.append(h('div', { class: 'rack-target' },
       h('span', { class: 'th-ic', html: icon(tg.kind === 'track' ? 'menu' : 'music', 16) }),
-      h('span', {}, tg.kind === 'track' ? `Дорожка «${tg.name}»` : `Клип «${tg.name}»`)),
-    h('p', { class: 'muted small' }, tg.kind === 'track' ? 'Эффекты действуют на все клипы дорожки вместе.' : 'Эффекты действуют только на этот клип.'));
+      h('span', {}, tg.kind === 'track' ? t('Дорожка «{name}»', { name: tg.name }) : t('Клип «{name}»', { name: tg.name }))),
+    h('p', { class: 'muted small' }, tg.kind === 'track' ? t('Эффекты действуют на все клипы дорожки вместе.') : t('Эффекты действуют только на этот клип.')));
 
     const list = Array.isArray(tg.owner.afx) ? tg.owner.afx : [];
     list.forEach((fx, i) => {
       const d = fxDef(fx.type);
       if (!d) return;
-      const on = h('input', { type: 'checkbox', title: 'Включить / выключить', dataset: { fxOn: String(i) } });
+      const on = h('input', { type: 'checkbox', title: t('Включить / выключить'), dataset: { fxOn: String(i) } });
       on.checked = fx.on !== false;
       on.addEventListener('change', () => store.setAudioFx(target, i, { on: on.checked }));
       const card = h('div', { class: `fx-card${fx.on === false ? ' off' : ''}`, dataset: { fx: fx.type, index: String(i) } },
         h('div', { class: 'fx-card-head' },
           h('label', { class: 'check-row' }, on, h('b', {}, d.name)),
-          h('button', { class: 'icon-btn tiny', title: 'Убрать эффект', html: icon('trash', 14), dataset: { fxDel: String(i) }, onclick: () => store.removeAudioFx(target, i) })),
+          h('button', { class: 'icon-btn tiny', title: t('Убрать эффект'), html: icon('trash', 14), dataset: { fxDel: String(i) }, onclick: () => store.removeAudioFx(target, i) })),
         ...d.params.map((pd) => slider(target, i, fx, pd)),
-        d.previewOnlyExport ? h('p', { class: 'muted small' }, 'В плеере не слышно — только в готовом видео.') : null);
+        d.previewOnlyExport ? h('p', { class: 'muted small' }, t('В плеере не слышно — только в готовом видео.')) : null);
       root.append(card);
     });
 
     root.append(h('div', { class: 'rack-add' },
-      h('div', { class: 'pop-title' }, 'Добавить'),
+      h('div', { class: 'pop-title' }, t('Добавить')),
       ...AUDIO_FX.map((d) => h('button', { class: 'btn ghost small wide-left', title: d.hint, dataset: { addFx: d.id }, onclick: () => store.addAudioFx(target, d.id) },
         h('span', { html: icon('plus', 14) }), d.name)),
-      h('p', { class: 'muted small' }, 'Другие эффекты появятся с плагинами.')));
+      h('p', { class: 'muted small' }, t('Другие эффекты появятся с плагинами.'))));
   }
 
   store.on('selection', render);

@@ -2,32 +2,33 @@
 // В проекте: clip.afx / track.afx = [{ type: 'eq' | 'comp' | 'denoise', on: true, p: { ...параметры } }]
 // Модуль без DOM — его используют окно (стойка эффектов, Web Audio в плеере) и сборка экспорта.
 // Остальные эффекты появятся плагинами.
+import { t } from './i18n.js';
 
 export const AUDIO_FX = [
   {
-    id: 'eq', name: 'Эквалайзер', hint: 'Три полосы: низкие, середина, высокие',
+    id: 'eq', name: t('Эквалайзер'), hint: t('Три полосы: низкие, середина, высокие'),
     params: [
-      { k: 'low', name: 'Низкие (120 Гц)', min: -15, max: 15, step: 0.5, def: 0, unit: 'дБ' },
-      { k: 'mid', name: 'Середина', min: -15, max: 15, step: 0.5, def: 0, unit: 'дБ' },
-      { k: 'midF', name: 'Частота середины', min: 200, max: 5000, step: 10, def: 1000, unit: 'Гц' },
-      { k: 'high', name: 'Высокие (8 кГц)', min: -15, max: 15, step: 0.5, def: 0, unit: 'дБ' },
+      { k: 'low', name: t('Низкие (120 Гц)'), min: -15, max: 15, step: 0.5, def: 0, unit: t('дБ') },
+      { k: 'mid', name: t('Середина'), min: -15, max: 15, step: 0.5, def: 0, unit: t('дБ') },
+      { k: 'midF', name: t('Частота середины'), min: 200, max: 5000, step: 10, def: 1000, unit: t('Гц') },
+      { k: 'high', name: t('Высокие (8 кГц)'), min: -15, max: 15, step: 0.5, def: 0, unit: t('дБ') },
     ],
   },
   {
-    id: 'comp', name: 'Компрессор', hint: 'Выравнивает громкость: тихое громче, громкое тише',
+    id: 'comp', name: t('Компрессор'), hint: t('Выравнивает громкость: тихое громче, громкое тише'),
     params: [
-      { k: 'threshold', name: 'Порог', min: -60, max: 0, step: 1, def: -18, unit: 'дБ' },
-      { k: 'ratio', name: 'Степень', min: 1, max: 20, step: 0.5, def: 4, unit: ':1' },
-      { k: 'attack', name: 'Атака', min: 1, max: 200, step: 1, def: 20, unit: 'мс' },
-      { k: 'release', name: 'Восстановление', min: 10, max: 1000, step: 10, def: 250, unit: 'мс' },
-      { k: 'makeup', name: 'Усиление', min: 0, max: 24, step: 0.5, def: 0, unit: 'дБ' },
+      { k: 'threshold', name: t('Порог'), min: -60, max: 0, step: 1, def: -18, unit: t('дБ') },
+      { k: 'ratio', name: t('Степень'), min: 1, max: 20, step: 0.5, def: 4, unit: ':1' },
+      { k: 'attack', name: t('Атака'), min: 1, max: 200, step: 1, def: 20, unit: t('мс') },
+      { k: 'release', name: t('Восстановление'), min: 10, max: 1000, step: 10, def: 250, unit: t('мс') },
+      { k: 'makeup', name: t('Усиление'), min: 0, max: 24, step: 0.5, def: 0, unit: t('дБ') },
     ],
   },
   {
-    id: 'denoise', name: 'Шумоподавление', hint: 'Убирает ровный фоновый шум (гул, шипение)', previewOnlyExport: true,
+    id: 'denoise', name: t('Шумоподавление'), hint: t('Убирает ровный фоновый шум (гул, шипение)'), previewOnlyExport: true,
     params: [
-      { k: 'strength', name: 'Сила', min: 3, max: 40, step: 1, def: 12, unit: 'дБ' },
-      { k: 'floor', name: 'Уровень шума', min: -80, max: -20, step: 1, def: -50, unit: 'дБ' },
+      { k: 'strength', name: t('Сила'), min: 3, max: 40, step: 1, def: 12, unit: t('дБ') },
+      { k: 'floor', name: t('Уровень шума'), min: -80, max: -20, step: 1, def: -50, unit: t('дБ') },
     ],
   },
 ];

@@ -4,6 +4,7 @@
 // style(p) получает долю перехода p = 0…1 и возвращает стили для двух слоёв:
 //   a — уходящий клип, b — следующий клип, top — какой слой сверху,
 //   overlay — заливка поверх обоих (для «через белый»).
+import { t } from './i18n.js';
 
 const pct = (x) => `${(x * 100).toFixed(3)}%`;
 const clamp01 = (x) => Math.max(0, Math.min(1, x));
@@ -14,42 +15,42 @@ export const MIN_DURATION = 0.1;
 export const MAX_DURATION = 3;
 
 export const TRANSITIONS = [
-  { id: 'fade', name: 'Растворение', style: (p) => ({ b: { opacity: p } }) },
-  { id: 'fadeblack', name: 'Через чёрный', style: (p) => ({ a: { opacity: clamp01(1 - 2 * p) }, b: { opacity: clamp01(2 * p - 1) } }) },
+  { id: 'fade', name: t('Растворение'), style: (p) => ({ b: { opacity: p } }) },
+  { id: 'fadeblack', name: t('Через чёрный'), style: (p) => ({ a: { opacity: clamp01(1 - 2 * p) }, b: { opacity: clamp01(2 * p - 1) } }) },
   {
-    id: 'fadewhite', name: 'Через белый',
+    id: 'fadewhite', name: t('Через белый'),
     style: (p) => ({ a: { opacity: p < 0.5 ? 1 : 0 }, b: { opacity: p < 0.5 ? 0 : 1 }, overlay: { color: '#fff', opacity: 1 - Math.abs(2 * p - 1) } }),
   },
-  { id: 'wipeleft', name: 'Жёсткая шторка справа налево', style: (p) => ({ b: { clipPath: `inset(0 0 0 ${pct(1 - p)})` } }) },
-  { id: 'wiperight', name: 'Жёсткая шторка слева направо', style: (p) => ({ b: { clipPath: `inset(0 ${pct(1 - p)} 0 0)` } }) },
-  { id: 'wipeup', name: 'Жёсткая шторка снизу вверх', style: (p) => ({ b: { clipPath: `inset(${pct(1 - p)} 0 0 0)` } }) },
-  { id: 'wipedown', name: 'Жёсткая шторка сверху вниз', style: (p) => ({ b: { clipPath: `inset(0 0 ${pct(1 - p)} 0)` } }) },
-  { id: 'smoothleft', name: 'Мягкая шторка справа налево', style: (p) => ({ b: { mask: `linear-gradient(to right, transparent ${pct(1 - 2 * p)}, black ${pct(2 - 2 * p)})` } }) },
-  { id: 'smoothright', name: 'Мягкая шторка слева направо', style: (p) => ({ b: { mask: `linear-gradient(to left, transparent ${pct(1 - 2 * p)}, black ${pct(2 - 2 * p)})` } }) },
-  { id: 'smoothup', name: 'Мягкая шторка снизу вверх', style: (p) => ({ b: { mask: `linear-gradient(to bottom, transparent ${pct(1 - 2 * p)}, black ${pct(2 - 2 * p)})` } }) },
-  { id: 'smoothdown', name: 'Мягкая шторка сверху вниз', style: (p) => ({ b: { mask: `linear-gradient(to top, transparent ${pct(1 - 2 * p)}, black ${pct(2 - 2 * p)})` } }) },
-  { id: 'slideleft', name: 'Сдвиг влево', style: (p) => ({ a: { transform: `translateX(${pct(-p)})` }, b: { transform: `translateX(${pct(1 - p)})` } }) },
-  { id: 'slideright', name: 'Сдвиг вправо', style: (p) => ({ a: { transform: `translateX(${pct(p)})` }, b: { transform: `translateX(${pct(p - 1)})` } }) },
-  { id: 'slideup', name: 'Сдвиг вверх', style: (p) => ({ a: { transform: `translateY(${pct(-p)})` }, b: { transform: `translateY(${pct(1 - p)})` } }) },
-  { id: 'slidedown', name: 'Сдвиг вниз', style: (p) => ({ a: { transform: `translateY(${pct(p)})` }, b: { transform: `translateY(${pct(p - 1)})` } }) },
+  { id: 'wipeleft', name: t('Жёсткая шторка справа налево'), style: (p) => ({ b: { clipPath: `inset(0 0 0 ${pct(1 - p)})` } }) },
+  { id: 'wiperight', name: t('Жёсткая шторка слева направо'), style: (p) => ({ b: { clipPath: `inset(0 ${pct(1 - p)} 0 0)` } }) },
+  { id: 'wipeup', name: t('Жёсткая шторка снизу вверх'), style: (p) => ({ b: { clipPath: `inset(${pct(1 - p)} 0 0 0)` } }) },
+  { id: 'wipedown', name: t('Жёсткая шторка сверху вниз'), style: (p) => ({ b: { clipPath: `inset(0 0 ${pct(1 - p)} 0)` } }) },
+  { id: 'smoothleft', name: t('Мягкая шторка справа налево'), style: (p) => ({ b: { mask: `linear-gradient(to right, transparent ${pct(1 - 2 * p)}, black ${pct(2 - 2 * p)})` } }) },
+  { id: 'smoothright', name: t('Мягкая шторка слева направо'), style: (p) => ({ b: { mask: `linear-gradient(to left, transparent ${pct(1 - 2 * p)}, black ${pct(2 - 2 * p)})` } }) },
+  { id: 'smoothup', name: t('Мягкая шторка снизу вверх'), style: (p) => ({ b: { mask: `linear-gradient(to bottom, transparent ${pct(1 - 2 * p)}, black ${pct(2 - 2 * p)})` } }) },
+  { id: 'smoothdown', name: t('Мягкая шторка сверху вниз'), style: (p) => ({ b: { mask: `linear-gradient(to top, transparent ${pct(1 - 2 * p)}, black ${pct(2 - 2 * p)})` } }) },
+  { id: 'slideleft', name: t('Сдвиг влево'), style: (p) => ({ a: { transform: `translateX(${pct(-p)})` }, b: { transform: `translateX(${pct(1 - p)})` } }) },
+  { id: 'slideright', name: t('Сдвиг вправо'), style: (p) => ({ a: { transform: `translateX(${pct(p)})` }, b: { transform: `translateX(${pct(p - 1)})` } }) },
+  { id: 'slideup', name: t('Сдвиг вверх'), style: (p) => ({ a: { transform: `translateY(${pct(-p)})` }, b: { transform: `translateY(${pct(1 - p)})` } }) },
+  { id: 'slidedown', name: t('Сдвиг вниз'), style: (p) => ({ a: { transform: `translateY(${pct(p)})` }, b: { transform: `translateY(${pct(p - 1)})` } }) },
   {
-    id: 'circleopen', name: 'Круг из центра',
+    id: 'circleopen', name: t('Круг из центра'),
     style: (p) => { const r = (p - 0.5) * 3; return { b: { mask: `radial-gradient(circle farthest-corner at 50% 50%, black ${pct(r)}, transparent ${pct(r + 1)})` } }; },
   },
   {
-    id: 'circleclose', name: 'Круг к центру',
+    id: 'circleclose', name: t('Круг к центру'),
     style: (p) => { const r = (0.5 - p) * 3; return { top: 'a', a: { mask: `radial-gradient(circle farthest-corner at 50% 50%, black ${pct(r)}, transparent ${pct(r + 1)})` } }; },
   },
   {
-    id: 'zoomin', name: 'Приближение',
+    id: 'zoomin', name: t('Приближение'),
     style: (p) => ({ a: { transform: `scale(${1 + 1.2 * clamp01(p * 2)})` }, b: { opacity: clamp01(2 * p - 1) } }),
   },
   {
-    id: 'hblur', name: 'Размытие',
+    id: 'hblur', name: t('Размытие'),
     style: (p) => { const b = 14 * (1 - Math.abs(2 * p - 1)); return { a: { filter: `blur(${b.toFixed(1)}px)` }, b: { opacity: p, filter: `blur(${b.toFixed(1)}px)` } }; },
   },
   {
-    id: 'blinds', name: 'Жалюзи',
+    id: 'blinds', name: t('Жалюзи'),
     style: (p) => ({ b: { mask: `repeating-linear-gradient(to right, black 0, black ${(p * 10).toFixed(3)}%, transparent ${(p * 10).toFixed(3)}%, transparent 10%)` } }),
   },
 ];

@@ -34,6 +34,9 @@ pub struct Config {
     pub projects_dir: String,
     #[serde(default, rename = "ffmpegDir")]
     pub ffmpeg_dir: String,
+    /// Настройки интерфейса (язык, хоткеи, …) — объект, который ведёт окно; см. commands::settings_*
+    #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
+    pub settings: serde_json::Value,
 }
 
 static PATHS: OnceLock<Paths> = OnceLock::new();
@@ -149,15 +152,30 @@ pub fn ensure_dirs() {
 }
 
 pub fn save_config(cfg: &Config) -> std::io::Result<()> {
-    let data = json!({
-        "_comment": "Настройки FF Montage. Можно править вручную или через меню → «Настройки папок». Удалите файл, чтобы снова увидеть окно первого запуска.",
+    let mut data = json!({
+        "_comment": "FF Montage settings. Edit by hand or in the Settings window (☰ → Settings). Delete this file to see the first-run window again.",
         "version": 1,
         "cacheDir": cfg.cache_dir,
         "outputDir": cfg.output_dir,
         "projectsDir": cfg.projects_dir,
         "ffmpegDir": cfg.ffmpeg_dir,
     });
-    std::fs::write(&get().config_file, serde_json::to_string_pretty(&data).unwrap_or_default())
+    if cfg.settings.is_object() {
+        data["settings"] = cfg.settings.clone();
+    }
+    let file = &get().config_file;
+    let tmp = file.with_extension("json.tmp");
+    std::fs::write(&tmp, serde_json::to_string_pretty(&data).unwrap_or_default())?;
+    std::fs::rename(&tmp, file)
+}
+
+/// Настройки интерфейса из config.json (объект; пустой, если файла нет)
+pub fn load_settings() -> serde_json::Value {
+    std::fs::read_to_string(&get().config_file).ok()
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(t.trim_start_matches('\u{feff}')).ok())
+        .map(|v| v["settings"].clone())
+        .filter(|v| v.is_object())
+        .unwrap_or_else(|| json!({}))
 }
 
 /// Предложения для окна первого запуска. Если рядом с программой уже есть папки Cache / Output / Projects — берём их.
@@ -178,5 +196,6 @@ pub fn suggest_defaults(videos: Option<PathBuf>, documents: Option<PathBuf>) -> 
             if near("Cache").is_some() { parent.join("Projects") } else { documents.join("FF Montage") }
         })),
         ffmpeg_dir: String::new(),
+        settings: serde_json::Value::Null,
     }
 }

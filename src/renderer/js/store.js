@@ -1,5 +1,6 @@
 // Состояние проекта: данные, отмена/повтор, производные значения и операции монтажа.
 import { uid, clamp, snapFps } from './util.js';
+import { t } from './i18n.js';
 import { speedOf, tlLen, clipEnd, srcAt, tlAt, MIN_SPEED, MAX_SPEED } from './clipTime.js';
 import { newAudioFx } from './audioFx.js';
 import { MIN_DURATION as TR_MIN, MAX_DURATION as TR_MAX, DEFAULT_DURATION as TR_DEFAULT, TRANSITIONS } from './transitions.js';
@@ -35,7 +36,7 @@ export const newTrack = (extra = {}) => ({ id: uid('trk'), muted: false, solo: f
 export function emptyProject() {
   return {
     version: 2,
-    name: 'Мой ролик',
+    name: t('Мой ролик'),
     media: {},
     videoClips: [],
     audioTracks: [newTrack()],
@@ -520,12 +521,12 @@ class Store {
   // Открытый эпизод лежит прямо в project.videoClips/audioTracks (весь остальной код работает с ним),
   // остальные хранят своё содержимое в project.episodes[i]. Первый — «Основной» (id 'main').
   // ------------------------------------------------------------------------
-  episodes() { return this.project.episodes && this.project.episodes.length ? this.project.episodes : [{ id: 'main', name: 'Основной' }]; }
+  episodes() { return this.project.episodes && this.project.episodes.length ? this.project.episodes : [{ id: 'main', name: t('Основной') }]; }
   activeEpisode() { return this.project.activeEpisode || 'main'; }
   episodeName(id) { const e = this.episodes().find((x) => x.id === id); return e ? e.name : ''; }
 
   ensureEpisodes(p) {
-    if (!p.episodes || !p.episodes.length) p.episodes = [{ id: 'main', name: 'Основной' }];
+    if (!p.episodes || !p.episodes.length) p.episodes = [{ id: 'main', name: t('Основной') }];
     if (!p.activeEpisode) p.activeEpisode = 'main';
   }
 
@@ -560,7 +561,7 @@ class Store {
     this.mutate((p) => {
       this.ensureEpisodes(p);
       const n = p.episodes.length;
-      p.episodes.push({ id, name: name || `Эпизод ${n}`, videoClips: [], audioTracks: [newTrack()] });
+      p.episodes.push({ id, name: name || t('Эпизод {n}', { n }), videoClips: [], audioTracks: [newTrack()] });
     });
     this.switchEpisode(id);
     return id;
@@ -821,10 +822,10 @@ class Store {
     }, opts);
   }
   trackName(trackId) {
-    if (trackId === 'video') return this.project.videoName || 'Видео';
+    if (trackId === 'video') return this.project.videoName || t('Видео');
     const i = this.project.audioTracks.findIndex((x) => x.id === trackId);
-    const t = this.project.audioTracks[i];
-    return (t && t.name) || `Аудио ${i + 1}`;
+    const tk = this.project.audioTracks[i];
+    return (tk && tk.name) || t('Аудио {n}', { n: i + 1 });
   }
 
   // Переместить видеоклип к времени start (с размещением как при перетаскивании)

@@ -10,6 +10,8 @@ import { transitionById } from './transitions.js';
 import { clipEffects, effectById } from './effects.js';
 import { speedOf, tlLen, clipEnd, fmtSpeed } from './clipTime.js';
 import { activeFx, fxSummary } from './audioFx.js';
+import { t, getLang } from './i18n.js';
+import { withKey } from './keymap.js';
 
 const HEAD_W = 168;
 const VIDEO_H = 76;
@@ -20,6 +22,15 @@ const MIN_PPS = 0.2;
 const MAX_PPS = 800;
 
 const clone = (x) => JSON.parse(JSON.stringify(x));
+// «0:04.20 (из файла 0:01.00 – 0:05.20, скорость ×2)» — для подсказки клипа
+const clipTimes = (c) => {
+  const p = { len: fmtTime(tlLen(c)), a: fmtTime(c.in), b: fmtTime(c.out) };
+  return speedOf(c) !== 1
+    ? t('{len} (из файла {a} – {b}, скорость {speed})', { ...p, speed: fmtSpeed(speedOf(c)) })
+    : t('{len} (из файла {a} – {b})', p);
+};
+// Десятичная дробь для подписей: 0,5 / 0.5
+const dec = (x) => (getLang() === 'ru' ? String(x).replace('.', ',') : String(x));
 
 export class Timeline {
   constructor(root) {
@@ -67,12 +78,13 @@ export class Timeline {
   // Панель инструментов
   // ------------------------------------------------------------------------
   buildToolbar() {
-    const b = (name, title, fn, id) => {
-      const el = h('button', { class: 'icon-btn', title, onclick: fn, id });
+    // tip: строка или [текст, id действия] — подсказка с текущей клавишей
+    const b = (name, tip, fn, id) => {
+      const el = h('button', { class: 'icon-btn', ...(Array.isArray(tip) ? { tip } : { title: tip }), onclick: fn, id });
       el.innerHTML = icon(name, 19);
       return el;
     };
-    this.zoomSlider = h('input', { type: 'range', min: '0', max: '1000', value: '500', class: 'zoom-slider', title: 'Масштаб (Ctrl + колесо мыши)' });
+    this.zoomSlider = h('input', { type: 'range', min: '0', max: '1000', value: '500', class: 'zoom-slider', title: t('Масштаб (Ctrl + колесо мыши)') });
     this.zoomSlider.addEventListener('input', () => {
       const v = Number(this.zoomSlider.value) / 1000;
       this.setZoom(MIN_PPS * Math.pow(MAX_PPS / MIN_PPS, v), null, true);
@@ -80,26 +92,33 @@ export class Timeline {
     this.magnetBtn = b('magnet', '', () => this.toggleMagnet(), 'tb-magnet');
     this.toolbar.append(
       h('div', { class: 'tb-group' },
-        b('undo', 'Отменить (Ctrl+Z)', () => store.undo(), 'tb-undo'),
-        b('redo', 'Повторить (Ctrl+Y)', () => store.redo(), 'tb-redo')),
+        b('undo', [t('Отменить'), 'edit.undo'], () => store.undo(), 'tb-undo'),
+        b('redo', [t('Повторить'), 'edit.redo'], () => store.redo(), 'tb-redo')),
       h('div', { class: 'tb-sep' }),
       h('div', { class: 'tb-group' },
-        this.pointerBtn = b('pointer', 'Выделение (A)', () => this.setTool('select'), 'tb-pointer'),
-        this.bladeBtn = b('blade', 'Лезвие (B): щелчок по клипу разрезает его в этом месте вместе со связанным звуком; Alt+щелчок — только этот клип', () => this.setTool(this.tool === 'blade' ? 'select' : 'blade'), 'tb-blade'),
+        this.pointerBtn = b('pointer', [t('Выделение'), 'tool.select'], () => this.setTool('select'), 'tb-pointer'),
+        this.bladeBtn = b('blade', '', () => this.setTool(this.tool === 'blade' ? 'select' : 'blade'), 'tb-blade'),
         h('div', { class: 'tb-sep small' }),
-        b('split', 'Разрезать по курсору (S); всё под курсором — видео и звук (Alt+S)', (e) => (e.altKey ? this.splitAllAction() : this.splitAction()), 'tb-split'),
-        b('trash', 'Удалить выделенное (Delete)', () => this.deleteAction(), 'tb-delete'),
+        this.splitBtn = b('split', '', (e) => (e.altKey ? this.splitAllAction() : this.splitAction()), 'tb-split'),
+        b('trash', [t('Удалить выделенное'), 'clip.delete'], () => this.deleteAction(), 'tb-delete'),
         this.magnetBtn),
       h('div', { class: 'tb-time', id: 'tb-time' }),
       h('div', { class: 'tb-spacer' }),
       h('div', { class: 'tb-group zoom' },
-        b('minus', 'Уменьшить', () => this.setZoom(this.pps / 1.4, null, true)),
+        b('minus', t('Уменьшить'), () => this.setZoom(this.pps / 1.4, null, true)),
         this.zoomSlider,
-        b('plus', 'Увеличить', () => this.setZoom(this.pps * 1.4, null, true)),
-        b('fit', 'Весь проект (Ctrl+0)', () => { this.autoFit = true; this.fit(true); })),
+        b('plus', t('Увеличить'), () => this.setZoom(this.pps * 1.4, null, true)),
+        b('fit', [t('Весь проект'), 'view.zoomFit'], () => { this.autoFit = true; this.fit(true); })),
     );
     this.updateMagnetBtn();
+    this.updateKeyTips();
     this.setTool('select');
+  }
+
+  // Подсказки, где клавиша стоит посередине текста (обновляются при каждой отрисовке — после смены клавиш тоже)
+  updateKeyTips() {
+    this.bladeBtn.title = `${withKey(t('Лезвие'), 'tool.blade')}: ${t('щелчок по клипу разрезает его в этом месте вместе со связанным звуком; Alt+щелчок — только этот клип')}`;
+    this.splitBtn.title = `${withKey(t('Разрезать по курсору'), 'clip.split')}; ${withKey(t('всё под курсором — видео и звук'), 'clip.splitAll')}`;
   }
 
   // Инструмент: 'select' — выделение и перетаскивание, 'blade' — лезвие (как в DaVinci Resolve)
@@ -127,21 +146,21 @@ export class Timeline {
   }
 
   splitAllAction() {
-    if (!store.splitAll(store.time)) toast('Под курсором нет клипов, которые можно разрезать', 'info', 2200);
+    if (!store.splitAll(store.time)) toast(t('Под курсором нет клипов, которые можно разрезать'), 'info', 2200);
   }
 
   toggleMagnet() {
     this.magnet = !this.magnet;
     localStorage.setItem('ffm.magnet', this.magnet ? '1' : '0');
     this.updateMagnetBtn();
-    toast(this.magnet ? 'Магнит включён: клипы липнут к краям соседей' : 'Магнит выключен', 'info', 1600);
+    toast(this.magnet ? t('Магнит включён: клипы липнут к краям соседей') : t('Магнит выключен'), 'info', 1600);
   }
 
   updateMagnetBtn() {
     this.magnetBtn.classList.toggle('on', this.magnet);
     this.magnetBtn.title = this.magnet
-      ? 'Магнит включён — клипы прилипают к соседям, курсору и началу (Alt при перетаскивании — без магнита и без наложения: клип не затирает соседей, а встаёт рядом)'
-      : 'Магнит выключен — клипы ставятся куда угодно';
+      ? t('Магнит включён — клипы прилипают к соседям, курсору и началу (Alt при перетаскивании — без магнита и без наложения: клип не затирает соседей, а встаёт рядом)')
+      : t('Магнит выключен — клипы ставятся куда угодно');
   }
 
   updateToolbar() {
@@ -149,6 +168,7 @@ export class Timeline {
     $('#tb-redo').disabled = !store.redoStack.length;
     $('#tb-delete').disabled = !store.selection || store.selection.kind === 'transition' || store.selection.kind === 'track';
     $('#tb-split').disabled = !this.canSplit();
+    this.updateKeyTips();
     this.zoomSlider.value = String(Math.round(1000 * Math.log(this.pps / MIN_PPS) / Math.log(MAX_PPS / MIN_PPS)));
   }
 
@@ -162,10 +182,10 @@ export class Timeline {
   }
 
   splitAction() {
-    const t = store.time;
+    const at = store.time;
     const sel = store.selection && store.selection.kind !== 'transition' ? store.findClip(store.selection.id) : null;
-    if (sel && t > sel.clip.start && t < clipEnd(sel.clip)) { splitClip(sel.clip.id, t); return; }
-    if (!store.splitAt(t)) toast('Поставьте курсор внутрь клипа, чтобы разрезать', 'info', 2200);
+    if (sel && at > sel.clip.start && at < clipEnd(sel.clip)) { splitClip(sel.clip.id, at); return; }
+    if (!store.splitAt(at)) toast(t('Поставьте курсор внутрь клипа, чтобы разрезать'), 'info', 2200);
   }
 
   deleteAction(ripple = false) {
@@ -247,48 +267,48 @@ export class Timeline {
     const vHead = h('div', { class: 'tl-head' }, h('span', { class: 'th-ic', html: icon('film', 18) }), this.trackNameEl('video'));
     this.content.append(h('div', { class: 'tl-row video' }, vHead, vLane));
     const layout = store.videoLayout();
-    if (!layout.length) vLane.append(h('div', { class: 'lane-hint' }, 'Перетащите сюда видео из «Ваши медиа»'));
+    if (!layout.length) vLane.append(h('div', { class: 'lane-hint' }, t('Перетащите сюда видео из «Ваши медиа»')));
     if (!this.drag) for (const g of store.gaps('video')) vLane.append(this.gapEl(g, 'video'));
     for (const seg of layout) vLane.append(this.videoClipEl(seg));
     if (!this.drag || this.drag.mode === 'fade') this.renderJunctions(vLane, layout);
 
     // Аудио
     const solo = store.anySolo();
-    store.project.audioTracks.forEach((t, i) => {
-      const silent = t.muted || (solo && !t.solo);
-      const lane = h('div', { class: `tl-lane audio-lane${silent ? ' muted' : ''}`, dataset: { lane: 'audio', track: t.id }, style: { width: `${laneW}px`, height: `${AUDIO_H}px` } });
-      const muteBtn = h('button', { class: `icon-btn tiny th-mute${t.muted ? ' on' : ''}`, title: t.muted ? 'Включить звук дорожки' : 'Выключить звук дорожки', onclick: () => store.toggleTrackMute(t.id) });
-      muteBtn.innerHTML = icon(t.muted ? 'mute' : 'speaker', 15);
+    store.project.audioTracks.forEach((trk, i) => {
+      const silent = trk.muted || (solo && !trk.solo);
+      const lane = h('div', { class: `tl-lane audio-lane${silent ? ' muted' : ''}`, dataset: { lane: 'audio', track: trk.id }, style: { width: `${laneW}px`, height: `${AUDIO_H}px` } });
+      const muteBtn = h('button', { class: `icon-btn tiny th-mute${trk.muted ? ' on' : ''}`, title: trk.muted ? t('Включить звук дорожки') : t('Выключить звук дорожки'), onclick: () => store.toggleTrackMute(trk.id) });
+      muteBtn.innerHTML = icon(trk.muted ? 'mute' : 'speaker', 15);
       const soloBtn = h('button', {
-        class: `th-solo${t.solo ? ' on' : ''}`, title: t.solo ? 'Снять «соло»' : 'Соло: слушать только эту дорожку (только в предпросмотре, на экспорт не влияет)',
-        onclick: () => store.toggleTrackSolo(t.id),
+        class: `th-solo${trk.solo ? ' on' : ''}`, title: trk.solo ? t('Снять «соло»') : t('Соло: слушать только эту дорожку (только в предпросмотре, на экспорт не влияет)'),
+        onclick: () => store.toggleTrackSolo(trk.id),
       }, 'S');
-      const delBtn = h('button', { class: 'icon-btn tiny', title: 'Удалить дорожку', onclick: () => store.removeAudioTrack(t.id) });
+      const delBtn = h('button', { class: 'icon-btn tiny', title: t('Удалить дорожку'), onclick: () => store.removeAudioTrack(trk.id) });
       delBtn.innerHTML = icon('close', 13);
-      const trSel = store.selection && store.selection.kind === 'track' && store.selection.id === t.id;
+      const trSel = store.selection && store.selection.kind === 'track' && store.selection.id === trk.id;
       const head = h('div', {
-        class: `tl-head audio-head${trSel ? ' selected' : ''}`, dataset: { trackHead: t.id },
-        title: 'Щелчок — выбрать дорожку (эффекты дорожки — во вкладке «Аудио»)',
-        onclick: (e) => { if (e.target.closest('button, input')) return; store.select({ kind: 'track', id: t.id }); },
+        class: `tl-head audio-head${trSel ? ' selected' : ''}`, dataset: { trackHead: trk.id },
+        title: t('Щелчок — выбрать дорожку (эффекты дорожки — во вкладке «Аудио»)'),
+        onclick: (e) => { if (e.target.closest('button, input')) return; store.select({ kind: 'track', id: trk.id }); },
       },
         h('div', { class: 'th-row' },
-          h('span', { class: 'th-ic', html: icon('music', 15) }), this.trackNameEl(t.id),
-          activeFx(t.afx).length ? h('span', { class: 'th-fx', title: `Эффекты дорожки: ${fxSummary(t.afx)}` }, 'ƒx') : null,
-          h('span', { class: 'th-actions' }, soloBtn, muteBtn, store.project.audioTracks.length > 1 || t.clips.length ? delBtn : null)),
-        this.trackVolumeEl(t));
-      this.content.append(h('div', { class: 'tl-row audio', dataset: { track: t.id } }, head, lane));
-      if (!t.clips.length && i === 0) lane.append(h('div', { class: 'lane-hint' }, 'Музыка и звук'));
+          h('span', { class: 'th-ic', html: icon('music', 15) }), this.trackNameEl(trk.id),
+          activeFx(trk.afx).length ? h('span', { class: 'th-fx', title: t('Эффекты дорожки: {fx}', { fx: fxSummary(trk.afx) }) }, 'ƒx') : null,
+          h('span', { class: 'th-actions' }, soloBtn, muteBtn, store.project.audioTracks.length > 1 || trk.clips.length ? delBtn : null)),
+        this.trackVolumeEl(trk));
+      this.content.append(h('div', { class: 'tl-row audio', dataset: { track: trk.id } }, head, lane));
+      if (!trk.clips.length && i === 0) lane.append(h('div', { class: 'lane-hint' }, t('Музыка и звук')));
       // На аудиодорожках показываем только пустоты между клипами (музыка может начинаться не с нуля)
-      if (!this.drag) for (const g of store.gaps(t.id)) if (g[0] > ADJ) lane.append(this.gapEl(g, t.id));
-      for (const c of t.clips) lane.append(this.audioClipEl(c, t));
+      if (!this.drag) for (const g of store.gaps(trk.id)) if (g[0] > ADJ) lane.append(this.gapEl(g, trk.id));
+      for (const c of trk.clips) lane.append(this.audioClipEl(c, trk));
     });
 
     // Строка для новой дорожки
-    const addBtn = h('button', { class: 'btn ghost tiny', onclick: () => store.addAudioTrack() }, '+ Дорожка');
+    const addBtn = h('button', { class: 'btn ghost tiny', onclick: () => store.addAudioTrack() }, t('+ Дорожка'));
     this.content.append(h('div', { class: 'tl-row newtrack', dataset: { lane: 'newtrack' } },
       h('div', { class: 'tl-head' }, addBtn),
       h('div', { class: 'tl-lane newtrack-lane', dataset: { lane: 'newtrack' }, style: { width: `${laneW}px` } },
-        h('span', { class: 'lane-hint left' }, 'Перетащите аудио сюда, чтобы создать новую дорожку'))));
+        h('span', { class: 'lane-hint left' }, t('Перетащите аудио сюда, чтобы создать новую дорожку')))));
 
     this.content.append(this.playhead, this.marker, this.snapLine, this.bladeLine);
     this.updatePlayhead();
@@ -298,7 +318,7 @@ export class Timeline {
   // Имя дорожки: двойной щелчок — переименовать
   trackNameEl(trackId) {
     const name = store.trackName(trackId);
-    const el = h('span', { class: 'th-name', title: `${name} — двойной щелчок, чтобы переименовать` }, name);
+    const el = h('span', { class: 'th-name', title: t('{name} — двойной щелчок, чтобы переименовать', { name }) }, name);
     el.addEventListener('dblclick', (e) => {
       e.stopPropagation();
       const inp = h('input', { class: 'th-rename', value: name, maxlength: '40' });
@@ -323,20 +343,20 @@ export class Timeline {
   }
 
   // Громкость дорожки (умножается на громкость каждого клипа; влияет и на экспорт)
-  trackVolumeEl(t) {
-    const pct = () => Math.round((t.volume ?? 1) * 100);
+  trackVolumeEl(trk) {
+    const pct = () => Math.round((trk.volume ?? 1) * 100);
     const val = h('span', { class: 'th-volval' }, `${pct()}%`);
-    const r = h('input', { type: 'range', min: '0', max: '200', step: '1', value: String(pct()), class: 'th-vol', title: 'Громкость дорожки (двойной щелчок — 100%)' });
+    const r = h('input', { type: 'range', min: '0', max: '200', step: '1', value: String(pct()), class: 'th-vol', title: t('Громкость дорожки (двойной щелчок — 100%)') });
     let before = null;
     r.addEventListener('pointerdown', (e) => { e.stopPropagation(); before = store.snapshot(); });
     r.addEventListener('input', () => {
       if (!before) before = store.snapshot();
       const v = Number(r.value) / 100;
-      store.live((p) => { const x = p.audioTracks.find((y) => y.id === t.id); if (x) x.volume = v; });
+      store.live((p) => { const x = p.audioTracks.find((y) => y.id === trk.id); if (x) x.volume = v; });
       val.textContent = `${r.value}%`;
     });
     r.addEventListener('change', () => { store.commitFrom(before); before = null; });
-    r.addEventListener('dblclick', () => store.setTrack(t.id, { volume: 1 }));
+    r.addEventListener('dblclick', () => store.setTrack(trk.id, { volume: 1 }));
     return h('div', { class: 'th-row vol' }, r, val);
   }
 
@@ -368,7 +388,7 @@ export class Timeline {
     const el = h('div', { class: 'tl-gap', dataset: { lane, from: String(g0) }, style: { left: `${g0 * this.pps}px`, width: `${w}px` } });
     if (w >= 18) {
       const btn = h('button', {
-        class: 'gap-del', title: `Удалить пустоту (${fmtTime(g1 - g0)}) — клипы правее сдвинутся влево`,
+        class: 'gap-del', title: t('Удалить пустоту ({len}) — клипы правее сдвинутся влево', { len: fmtTime(g1 - g0) }),
         onclick: (e) => { e.stopPropagation(); store.closeGap(lane, (g0 + g1) / 2); },
       });
       btn.innerHTML = icon('trash', 15);
@@ -393,7 +413,7 @@ export class Timeline {
       const btn = h('button', {
         class: `junction${tr ? ' has' : ''}${sel ? ' selected' : ''}`,
         dataset: { clip: b.clip.id },
-        title: tr ? `Переход: ${transitionById(tr.type).name}, ${String(tr.duration).replace('.', ',')} с — нажмите, чтобы изменить` : 'Добавить переход',
+        title: tr ? t('Переход: {name}, {d} с — нажмите, чтобы изменить', { name: transitionById(tr.type).name, d: dec(tr.duration) }) : t('Добавить переход'),
         style: { left: `${x}px` },
         onclick: (e) => { e.stopPropagation(); store.select({ kind: 'transition', id: b.clip.id }); store.emit('focus-inspector', 'transition'); },
       });
@@ -415,7 +435,7 @@ export class Timeline {
       class: `clip ${kind}${sel ? ' selected' : ''}${c.muted ? ' clip-muted' : ''}${rt.missing ? ' missing' : ''} ${extraClass}`,
       dataset: { id: c.id, kind },
       style: { left: `${left}px`, width: `${Math.max(2, width)}px` },
-      title: `${store.clipName(c)}\n${fmtTime(tlLen(c))} (из файла ${fmtTime(c.in)} – ${fmtTime(c.out)}${speedOf(c) !== 1 ? `, скорость ${fmtSpeed(speedOf(c))}` : ""})\nПравая кнопка мыши — действия`,
+      title: `${store.clipName(c)}\n${clipTimes(c)}\n${t('Правая кнопка мыши — действия')}`,
     });
     return el;
   }
@@ -433,22 +453,22 @@ export class Timeline {
     el.append(h('div', { class: 'handle l' }), h('div', { class: 'handle r' }));
     if (sel && width > 40) {
       el.append(
-        h('div', { class: 'fade-knob in', title: 'Потяните, чтобы сделать плавное появление', style: { left: `${Math.min(width - 10, c.fadeIn * this.pps)}px` } }),
-        h('div', { class: 'fade-knob out', title: 'Потяните, чтобы сделать плавное исчезание', style: { right: `${Math.min(width - 10, c.fadeOut * this.pps)}px` } }));
+        h('div', { class: 'fade-knob in', title: t('Потяните, чтобы сделать плавное появление'), style: { left: `${Math.min(width - 10, c.fadeIn * this.pps)}px` } }),
+        h('div', { class: 'fade-knob out', title: t('Потяните, чтобы сделать плавное исчезание'), style: { right: `${Math.min(width - 10, c.fadeOut * this.pps)}px` } }));
     }
   }
 
   clipLabel(c, m, extra = null) {
     const label = h('div', { class: 'clip-label' });
-    if (isReversed(c)) label.append(h('span', { class: 'ci fx', title: 'Задом наперёд', html: icon('reverse', 13) }));
-    if (isFreeze(c)) label.append(h('span', { class: 'ci fx', title: 'Стоп-кадр', html: icon('freeze', 13) }));
+    if (isReversed(c)) label.append(h('span', { class: 'ci fx', title: t('Задом наперёд'), html: icon('reverse', 13) }));
+    if (isFreeze(c)) label.append(h('span', { class: 'ci fx', title: t('Стоп-кадр'), html: icon('freeze', 13) }));
     const fxl = clipEffects(c);
-    if (fxl.length) label.append(h('span', { class: 'ci fxb', title: `Эффекты: ${fxl.map((x) => effectById(x).name).join(', ')}` }, 'fx'));
-    if (c.fit === 'cover') label.append(h('span', { class: 'ci fxb', title: 'Заполняет кадр (края обрезаны)' }, '▣'));
-    if (c.fit === 'stretch') label.append(h('span', { class: 'ci fxb', title: 'Растянут на весь кадр' }, '⇔'));
-    if (activeFx(c.afx).length) label.append(h('span', { class: 'ci fxb', title: `Аудиоэффекты: ${fxSummary(c.afx)}` }, 'ƒx'));
-    if (speedOf(c) !== 1) label.append(h('span', { class: 'ci speed', title: 'Скорость клипа' }, fmtSpeed(speedOf(c))));
-    if (c.link && store.linkedOf(c.id).length) label.append(h('span', { class: 'ci link', title: 'Связан со звуком/видео: двигаются и режутся вместе (Alt — только этот клип)', html: icon('link', 13) }));
+    if (fxl.length) label.append(h('span', { class: 'ci fxb', title: t('Эффекты: {list}', { list: fxl.map((x) => effectById(x).name).join(', ') }) }, 'fx'));
+    if (c.fit === 'cover') label.append(h('span', { class: 'ci fxb', title: t('Заполняет кадр (края обрезаны)') }, '▣'));
+    if (c.fit === 'stretch') label.append(h('span', { class: 'ci fxb', title: t('Растянут на весь кадр') }, '⇔'));
+    if (activeFx(c.afx).length) label.append(h('span', { class: 'ci fxb', title: t('Аудиоэффекты: {fx}', { fx: fxSummary(c.afx) }) }, 'ƒx'));
+    if (speedOf(c) !== 1) label.append(h('span', { class: 'ci speed', title: t('Скорость клипа') }, fmtSpeed(speedOf(c))));
+    if (c.link && store.linkedOf(c.id).length) label.append(h('span', { class: 'ci link', title: t('Связан со звуком/видео: двигаются и режутся вместе (Alt — только этот клип)'), html: icon('link', 13) }));
     if (c.muted && m.hasAudio && !c.noAudio) label.append(h('span', { class: 'ci', html: icon('mute', 13) }));
     else if (m.hasAudio && !c.noAudio && Math.abs(c.volume - 1) > 0.01) label.append(h('span', { class: 'ci vol' }, `${Math.round(c.volume * 100)}%`));
     label.append(h('span', { class: 'cn' }, store.clipName(c)));
@@ -516,7 +536,7 @@ export class Timeline {
       if (wave) el.append(wave);
     }
     const streams = streamCount(m);
-    el.append(this.clipLabel(c, m, streams > 1 ? h('span', { class: 'ci stream', title: 'Звуковой поток файла' }, `#${(c.stream || 0) + 1}`) : null));
+    el.append(this.clipLabel(c, m, streams > 1 ? h('span', { class: 'ci stream', title: t('Звуковой поток файла') }, `#${(c.stream || 0) + 1}`) : null));
     this.decorate(el, c, width, el.classList.contains('selected'));
     return el;
   }
@@ -525,15 +545,15 @@ export class Timeline {
   // двойной щелчок — открыть анимацию в редакторе
   overlayRow(laneW) {
     const lane = h('div', { class: 'tl-lane overlay-lane', dataset: { lane: 'overlay' }, style: { width: `${laneW}px`, height: '34px' } });
-    const head = h('div', { class: 'tl-head overlay-head' }, h('span', { class: 'th-ic', html: icon('media', 15) }), h('span', { class: 'th-name' }, 'Наложения'));
+    const head = h('div', { class: 'tl-head overlay-head' }, h('span', { class: 'th-ic', html: icon('media', 15) }), h('span', { class: 'th-name' }, t('Наложения')));
     const list = store.project.overlayClips || [];
-    if (!list.length) lane.append(h('div', { class: 'lane-hint' }, 'Сохранённые анимации появятся здесь'));
+    if (!list.length) lane.append(h('div', { class: 'lane-hint' }, t('Сохранённые анимации появятся здесь')));
     for (const c of list) {
       const m = store.media(c.mediaId) || {};
       const sel = store.selection && store.selection.kind === 'overlay' && store.selection.id === c.id;
       const el = h('div', {
         class: `ov-clip${sel ? ' selected' : ''}`, dataset: { id: c.id },
-        title: `${store.clipName(c)}\n${fmtTime(tlLen(c))}\nДвойной щелчок — изменить анимацию, Delete — убрать`,
+        title: `${store.clipName(c)}\n${fmtTime(tlLen(c))}\n${t('Двойной щелчок — изменить анимацию, Delete — убрать')}`,
         style: { left: `${c.start * this.pps}px`, width: `${Math.max(6, tlLen(c) * this.pps)}px` },
       }, h('span', { class: 'ov-name' }, m.anim ? `✦ ${store.clipName(c)}` : store.clipName(c)));
       el.addEventListener('pointerdown', (e) => {
@@ -679,9 +699,9 @@ export class Timeline {
     // Лезвие: щелчок по клипу разрезает его в этом месте (вместе со связанными; Alt — только его), курсор не двигается
     if (this.tool === 'blade' && !e.target.closest('.ruler-lane')) {
       if (clipEl) {
-        const t = this.bladeTime(e);
-        const n = store.splitAt(t, clipEl.dataset.id, { withLinked: !e.altKey });
-        if (!n) toast('Слишком близко к краю клипа', 'info', 1500);
+        const bt = this.bladeTime(e);
+        const n = store.splitAt(bt, clipEl.dataset.id, { withLinked: !e.altKey });
+        if (!n) toast(t('Слишком близко к краю клипа'), 'info', 1500);
       }
       return;
     }
@@ -943,8 +963,8 @@ export class Timeline {
   initDrop() {}
 
   // Без Alt — наложение (затирает то, что под клипом), с Alt — в пустоту рядом или раздвинуть соседей
-  placeDropped(ids, tg, t, vt, alt = false) {
-      let at = t;
+  placeDropped(ids, tg, atTime, vt, alt = false) {
+      let at = atTime;
       for (const id of ids) {
         const m = store.media(id);
         if (!m) continue;
@@ -956,7 +976,7 @@ export class Timeline {
           const c = store.addAudioClip(id, tg.kind === 'video' ? store.time : at, track, { overwrite: !alt && tg.kind === 'audio' });
           if (c) at = clipEnd(c);
         } else {
-          toast(`${m.name}: в файле нет звука — на аудиодорожку не добавить`, 'error');
+          toast(t('{name}: в файле нет звука — на аудиодорожку не добавить', { name: m.name }), 'error');
         }
       }
   }

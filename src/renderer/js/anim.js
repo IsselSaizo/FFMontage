@@ -2,13 +2,14 @@
 // «Сохранить» — запекание в WebM с прозрачностью (кэш) → файл в «Ваши медиа» → клип на дорожке «Наложения».
 // Двойной щелчок по клипу на «Наложениях» открывает анимацию снова.
 import { store } from './store.js';
-import { h, $, toast, errText, icon } from './util.js';
+import { h, $, toast, errText, icon, t } from './util.js';
+import { getLang } from './i18n.js';
 import { importPaths, pickAndImport, playUrl } from './media.js';
 import { setMode, currentMode } from './modes.js';
 import { RAIN_PARAMS, rainDefaults, rainClean, rainParticles, rainAt, rainBakePlan, rainKey } from './animRain.js';
 
 const api = window.api;
-const PRESETS = [{ id: 'rain', name: 'Дождь', hint: 'Картинка падает сверху вниз: купюры, листья, снег, конфетти' }];
+const PRESETS = [{ id: 'rain', name: t('Дождь'), hint: t('Картинка падает сверху вниз: купюры, листья, снег, конфетти') }];
 
 export function initAnim(preview) {
   const left = $('#anim-presets');
@@ -68,20 +69,22 @@ export function initAnim(preview) {
   // --- панели ---
   function renderLeft() {
     left.innerHTML = '';
-    left.append(h('div', { class: 'panel-head' }, h('h2', {}, 'Анимации')),
+    left.append(h('div', { class: 'panel-head' }, h('h2', {}, t('Анимации'))),
       ...PRESETS.map((pr) => h('button', {
         class: `anim-preset${st.preset === pr.id ? ' on' : ''}`, dataset: { preset: pr.id }, title: pr.hint,
         onclick: () => { st.preset = pr.id; renderLeft(); renderRight(); },
       }, h('span', { class: 'ap-ic', html: icon('media', 22) }), h('span', {}, h('b', {}, pr.name), h('small', {}, pr.hint)))),
-      h('p', { class: 'muted small' }, 'Другие пресеты появятся с плагинами.'));
+      h('p', { class: 'muted small' }, t('Другие пресеты появятся с плагинами.')));
   }
 
-  const fmtVal = (d, v) => (d.pct ? `${Math.round(v * 100)}%` : `${String(Math.round(v * 100) / 100).replace('.', ',')}${d.unit ? ` ${d.unit}` : ''}`);
+  // Десятичный разделитель языка без лишних нулей: 0,35 / 0.35
+const dec = (x) => (getLang() === 'ru' ? String(x).replace('.', ',') : String(x));
+const fmtVal = (d, v) => (d.pct ? `${Math.round(v * 100)}%` : `${dec(Math.round(v * 100) / 100)}${d.unit ? ` ${d.unit}` : ''}`);
 
   function renderRight() {
     right.innerHTML = '';
     const p = st.params;
-    right.append(h('div', { class: 'panel-head' }, h('h2', {}, st.editing ? 'Дождь — правка' : 'Дождь')));
+    right.append(h('div', { class: 'panel-head' }, h('h2', {}, st.editing ? t('Дождь — правка') : t('Дождь'))));
     // Картинка
     const imgs = images();
     if (!p.image && imgs.length) p.image = imgs[0].id;
@@ -89,16 +92,16 @@ export function initAnim(preview) {
       class: `anim-img${p.image === m.id ? ' on' : ''}`, title: m.name, dataset: { image: m.id },
       onclick: () => { p.image = m.id; renderRight(); },
     }, h('img', { src: m.url, alt: '', draggable: 'false' }))),
-    h('button', { class: 'anim-img add', title: 'Импорт картинки (PNG с прозрачностью)', html: icon('plus', 18), onclick: async () => {
+    h('button', { class: 'anim-img add', title: t('Импорт картинки (PNG с прозрачностью)'), html: icon('plus', 18), onclick: async () => {
       const ids = await pickAndImport();
       const im = ids.map((id) => store.media(id)).find((m) => m && m.isImage && !m.isAnimation);
-      if (im) { p.image = im.id; renderRight(); } else if (ids.length) toast('Нужна картинка (PNG, JPG, WebP)', 'info', 2500);
+      if (im) { p.image = im.id; renderRight(); } else if (ids.length) toast(t('Нужна картинка (PNG, JPG, WebP)'), 'info', 2500);
     } }));
-    right.append(h('div', { class: 'insp-section' }, h('h3', {}, 'Картинка'), pick,
-      imgs.length ? null : h('p', { class: 'muted small' }, 'Импортируйте картинку — лучше PNG с прозрачным фоном.')));
+    right.append(h('div', { class: 'insp-section' }, h('h3', {}, t('Картинка')), pick,
+      imgs.length ? null : h('p', { class: 'muted small' }, t('Импортируйте картинку — лучше PNG с прозрачным фоном.'))));
 
     // Параметры
-    const sec = h('div', { class: 'insp-section' }, h('h3', {}, 'Параметры'));
+    const sec = h('div', { class: 'insp-section' }, h('h3', {}, t('Параметры')));
     for (const d of RAIN_PARAMS) {
       const val = h('span', { class: 'vol-val' }, fmtVal(d, p[d.k]));
       const r = h('input', { type: 'range', class: 'slider', min: String(d.min), max: String(d.max), step: String(d.step), value: String(p[d.k]), dataset: { param: d.k } });
@@ -112,16 +115,16 @@ export function initAnim(preview) {
     seed.addEventListener('change', () => { p.seed = Math.max(0, Math.round(Number(seed.value) || 0)); seed.value = String(p.seed); });
     seed.addEventListener('keydown', (e) => e.stopPropagation());
     sec.append(
-      h('label', { class: 'check-row', title: 'Анимация бесшовно повторяется: конец переходит в начало' }, loop, h('span', {}, 'Зациклить')),
-      h('div', { class: 'row gap', style: { marginTop: '8px' } }, h('span', { class: 'fx-pname', style: { margin: 0 } }, 'Случайный узор'), seed,
-        h('button', { class: 'btn ghost small', id: 'anim-reseed', title: 'Другой узор', onclick: () => { p.seed = Math.floor(Math.random() * 100000); renderRight(); } }, 'Другой')));
+      h('label', { class: 'check-row', title: t('Анимация бесшовно повторяется: конец переходит в начало') }, loop, h('span', {}, t('Зациклить'))),
+      h('div', { class: 'row gap', style: { marginTop: '8px' } }, h('span', { class: 'fx-pname', style: { margin: 0 } }, t('Случайный узор')), seed,
+        h('button', { class: 'btn ghost small', id: 'anim-reseed', title: t('Другой узор'), onclick: () => { p.seed = Math.floor(Math.random() * 100000); renderRight(); } }, t('Другой'))));
     right.append(sec);
 
     const fmt = store.sourceFormat();
     right.append(h('div', { class: 'anim-actions' },
-      h('button', { class: 'btn primary', id: 'anim-save', disabled: st.busy || !imageMedia(), onclick: () => save() }, st.busy ? 'Сохраняю…' : (st.editing ? 'Сохранить изменения' : 'Сохранить')),
-      st.editing ? h('button', { class: 'btn ghost small', id: 'anim-new', onclick: () => { st.editing = null; renderRight(); } }, 'Как новую') : null,
-      h('p', { class: 'muted small' }, `Видео ${fmt.width}×${fmt.height}, ${fmt.fps} fps с прозрачностью. Появится в «Ваши медиа» и на дорожке «Наложения» с позиции курсора.`)));
+      h('button', { class: 'btn primary', id: 'anim-save', disabled: st.busy || !imageMedia(), onclick: () => save() }, st.busy ? t('Сохраняю…') : (st.editing ? t('Сохранить изменения') : t('Сохранить'))),
+      st.editing ? h('button', { class: 'btn ghost small', id: 'anim-new', onclick: () => { st.editing = null; renderRight(); } }, t('Как новую')) : null,
+      h('p', { class: 'muted small' }, t('Видео {w}×{h}, {fps} fps с прозрачностью. Появится в «Ваши медиа» и на дорожке «Наложения» с позиции курсора.', { w: fmt.width, h: fmt.height, fps: fmt.fps }))));
   }
 
   async function save() {
@@ -133,16 +136,16 @@ export function initAnim(preview) {
     const key = rainKey(params, m, fmt);
     const out = [info.cacheDir, 'anim', `rain-${key}.webm`].join(info.sep);
     st.busy = true; renderRight();
-    const off = api.onExportProgress((ev) => { const b = $('#anim-save'); if (b && ev && ev.fraction !== undefined) b.textContent = `Сохраняю… ${Math.round(ev.fraction * 100)}%`; });
+    const off = api.onExportProgress((ev) => { const b = $('#anim-save'); if (b && ev && ev.fraction !== undefined) b.textContent = t('Сохраняю… {p}%', { p: Math.round(ev.fraction * 100) }); });
     try {
       if (!(await api.exists(out))) {
         const plan = rainBakePlan(params, m, fmt, out, info.ffMajor);
         const r = await api.runPlan(plan);
-        if (r && r.ok === false) throw new Error(r.error || 'ошибка FFmpeg');
+        if (r && r.ok === false) throw new Error(r.error || t('ошибка FFmpeg'));
       }
       const [id] = await importPaths([out]);
-      if (!id) throw new Error('файл анимации не открылся');
-      store.mutate((p) => { const mm = p.media[id]; if (mm) { mm.anim = { preset: 'rain', params }; mm.name = `Дождь · ${m.name.replace(/\.[^.]+$/, '')}`; } });
+      if (!id) throw new Error(t('файл анимации не открылся'));
+      store.mutate((p) => { const mm = p.media[id]; if (mm) { mm.anim = { preset: 'rain', params }; mm.name = t('Дождь · {name}', { name: m.name.replace(/\.[^.]+$/, '') }); } });
       const ed = st.editing && store.findOverlay(st.editing);
       if (ed) {
         store.setOverlay(ed.id, { mediaId: id, in: 0, out: params.duration });
@@ -151,9 +154,9 @@ export function initAnim(preview) {
         const c = store.addOverlayClip(id, store.time);
         if (c) st.editing = c.id;
       }
-      toast('Анимация сохранена: она в «Ваши медиа» и на дорожке «Наложения»', 'success', 2600);
+      toast(t('Анимация сохранена: она в «Ваши медиа» и на дорожке «Наложения»'), 'success', 2600);
     } catch (e) {
-      toast(`Анимация не сохранилась: ${errText(e)}`, 'error', 5000);
+      toast(t('Анимация не сохранилась: {err}', { err: errText(e) }), 'error', 5000);
     } finally {
       off && off();
       st.busy = false; renderRight();
@@ -163,7 +166,7 @@ export function initAnim(preview) {
   function edit(clipId) {
     const c = store.findOverlay(clipId);
     const m = c && store.media(c.mediaId);
-    if (!m || !m.anim) { toast('Этот клип — не анимация из пресета', 'info', 2000); return; }
+    if (!m || !m.anim) { toast(t('Этот клип — не анимация из пресета'), 'info', 2000); return; }
     st.preset = m.anim.preset || 'rain';
     st.params = rainClean(m.anim.params);
     st.editing = clipId;

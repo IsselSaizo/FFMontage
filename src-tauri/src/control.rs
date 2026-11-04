@@ -9,7 +9,7 @@
 //   ответ   { id, result } | { id, error }
 // Методы: ping → { ok, version, pid, ready }; call { tool, args } → результат инструмента из окна;
 //         quit (только если программа запущена с FFM_ALLOW_QUIT=1 — для автотестов).
-use crate::paths;
+use crate::{paths, tr};
 use serde_json::{json, Value};
 use sha1::{Digest, Sha1};
 use std::collections::HashMap;
@@ -101,8 +101,8 @@ fn window_open() -> bool {
 }
 
 async fn call_tool(tool: &str, args: Value) -> Result<Value, String> {
-    if tool.is_empty() { return Err("Не указан инструмент.".into()); }
-    if !window_open() { return Err("Окно FF Montage не открыто.".into()); }
+    if tool.is_empty() { return Err(tr!("Не указан инструмент.", "No tool specified.").into()); }
+    if !window_open() { return Err(tr!("Окно FF Montage не открыто.", "The FF Montage window is not open.").into()); }
     if !READY.load(Ordering::SeqCst) {
         let waited = tokio::time::timeout(READY_TIMEOUT, async {
             while !READY.load(Ordering::SeqCst) {
@@ -113,12 +113,12 @@ async fn call_tool(tool: &str, args: Value) -> Result<Value, String> {
         }).await;
         if waited.is_err() {
             return Err(if window_open() {
-                "Интерфейс FF Montage не отвечает: окно ещё загружается или в нём произошла ошибка (см. logs/renderer.log).".into()
-            } else { "Окно FF Montage не открыто.".into() });
+                tr!("Интерфейс FF Montage не отвечает: окно ещё загружается или в нём произошла ошибка (см. logs/renderer.log).", "The FF Montage interface is not responding: the window is still loading or an error occurred in it (see logs/renderer.log).").into()
+            } else { tr!("Окно FF Montage не открыто.", "The FF Montage window is not open.").into() });
         }
     }
-    let app = APP.get().ok_or("Программа не запущена")?;
-    let win = app.get_webview_window("main").ok_or("Окно FF Montage закрыто.")?;
+    let app = APP.get().ok_or(tr!("Программа не запущена", "The program is not running"))?;
+    let win = app.get_webview_window("main").ok_or(tr!("Окно FF Montage закрыто.", "The FF Montage window is closed."))?;
     let id = format!("c{}", SEQ.fetch_add(1, Ordering::SeqCst) + 1);
     let (tx, rx) = oneshot::channel();
     PENDING.lock().unwrap().get_or_insert_with(HashMap::new).insert(id.clone(), tx);
@@ -129,10 +129,10 @@ async fn call_tool(tool: &str, args: Value) -> Result<Value, String> {
     }
     match tokio::time::timeout(CALL_TIMEOUT, rx).await {
         Ok(Ok(r)) => r,
-        Ok(Err(_)) => Err("Окно FF Montage закрыто.".into()),
+        Ok(Err(_)) => Err(tr!("Окно FF Montage закрыто.", "The FF Montage window is closed.").into()),
         Err(_) => {
             PENDING.lock().unwrap().as_mut().map(|m| m.remove(&id));
-            Err(format!("Нет ответа от окна за {} мин.", CALL_TIMEOUT.as_secs() / 60))
+            Err(tr!("Нет ответа от окна за {} мин.", "No response from the window in {} min.", CALL_TIMEOUT.as_secs() / 60))
         }
     }
 }
@@ -195,11 +195,11 @@ async fn handle_conn<S: AsyncRead + AsyncWrite + Send + 'static>(stream: S) {
         if line.len() > 64 * 1024 * 1024 { break; }
         let req: Value = match serde_json::from_str(&line) {
             Ok(v) => v,
-            Err(_) => { let _ = tx.send(Some(format!("{}\n", json!({ "id": null, "error": "Неверный JSON" })))); continue; }
+            Err(_) => { let _ = tx.send(Some(format!("{}\n", json!({ "id": null, "error": tr!("Неверный JSON", "Invalid JSON") })))); continue; }
         };
         let id = req.get("id").cloned().unwrap_or(Value::Null);
         if !safe_eq(req["token"].as_str().unwrap_or(""), &token) {
-            let _ = tx.send(Some(format!("{}\n", json!({ "id": id, "error": "Неверный ключ доступа" }))));
+            let _ = tx.send(Some(format!("{}\n", json!({ "id": id, "error": tr!("Неверный ключ доступа", "Invalid access key") }))));
             let _ = tx.send(None);
             break;
         }
@@ -225,9 +225,9 @@ async fn handle_conn<S: AsyncRead + AsyncWrite + Send + 'static>(stream: S) {
                         if let Some(a) = APP.get() { a.exit(0); }
                         return;
                     }
-                    Err("Метод quit запрещён".into())
+                    Err(tr!("Метод quit запрещён", "The quit method is not allowed").into())
                 }
-                m => Err(format!("Неизвестный метод: {m}")),
+                m => Err(tr!("Неизвестный метод: {}", "Unknown method: {}", m)),
             };
             let msg = match r { Ok(v) => json!({ "id": id, "result": v }), Err(e) => json!({ "id": id, "error": e }) };
             let _ = tx2.send(Some(format!("{msg}\n")));
@@ -313,7 +313,7 @@ pub fn focus_existing() -> bool {
 }
 
 pub fn stop() {
-    fail_all("FF Montage закрывается.");
+    fail_all(tr!("FF Montage закрывается.", "FF Montage is closing."));
     let file = endpoint_file();
     if let Ok(t) = std::fs::read_to_string(&file) {
         if let Ok(v) = serde_json::from_str::<Value>(&t) {
