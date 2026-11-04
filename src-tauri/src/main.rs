@@ -3,6 +3,9 @@
 //   ff-montage --mcp           — MCP-сервер для ИИ-ассистента (stdio)
 //   ff-montage --engine <cmd>  — движок без окна (автотесты)
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+// Clippy 0.1.99+ стал считать «слишком сложными» типы вида Arc<Mutex<HashMap<…, Vec<…>>>> (control.rs, ff.rs, fonts.rs,
+// protocol.rs) — это не ошибка, а вкус; без allow CI упадёт, как только раннер получит новый stable
+#![allow(clippy::type_complexity)]
 
 mod assets;
 mod cache;
