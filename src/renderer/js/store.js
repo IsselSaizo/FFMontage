@@ -1505,7 +1505,9 @@ class Store {
   }
 
   serialize() {
-    return JSON.stringify({ app: 'FF Montage', version: 2, savedAt: new Date().toISOString(), project: this.project }, null, 1);
+    // appVersion — какой версией программы сохранено: по ней 0.4+ делает резервную копию проектов 0.3 (commands.rs)
+    // и предупреждает, если проект сохранён более новой версией
+    return JSON.stringify({ app: 'FF Montage', version: 2, appVersion: this.appVersion || undefined, savedAt: new Date().toISOString(), project: this.project }, null, 1);
   }
 }
 

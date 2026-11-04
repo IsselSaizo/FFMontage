@@ -19,7 +19,9 @@ const LAUNCH_WAIT: Duration = Duration::from_secs(45);
 const CALL_TIMEOUT: Duration = Duration::from_secs(16 * 60);
 const TOOLS_JSON: &str = include_str!("../../mcp/tools.json");
 
-fn log(s: &str) { eprintln!("[ff-montage-mcp] {s}"); }
+fn log(s: &str) {
+    eprintln!("[ff-montage-mcp] {s}");
+}
 
 type Pending = Arc<Mutex<HashMap<String, oneshot::Sender<Result<Value, String>>>>>;
 
@@ -39,23 +41,30 @@ struct App {
 fn read_endpoint() -> Result<Option<Value>, String> {
     let p = paths::get();
     if p.first_run {
-        return Err(tr!("FF Montage is not set up yet ({} not found). First start FF Montage and choose the folders \
+        return Err(tr!(
+            "FF Montage is not set up yet ({} not found). First start FF Montage and choose the folders \
             (сначала запустите FF Montage и выберите папки), then try again.",
             "FF Montage is not set up yet ({} not found). First start FF Montage and choose the folders, then try again.",
-            p.config_file.display()));
+            p.config_file.display()
+        ));
     }
     let v = std::fs::read_to_string(control::endpoint_file()).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok());
     Ok(v.filter(|e| e["pipe"].is_string() && e["token"].is_string()))
 }
 
 #[cfg(windows)]
-async fn open_pipe(name: &str) -> std::io::Result<(Box<dyn tokio::io::AsyncRead + Send + Unpin>, Box<dyn tokio::io::AsyncWrite + Send + Unpin>)> {
+async fn open_pipe(
+    name: &str,
+) -> std::io::Result<(Box<dyn tokio::io::AsyncRead + Send + Unpin>, Box<dyn tokio::io::AsyncWrite + Send + Unpin>)> {
     use tokio::net::windows::named_pipe::ClientOptions;
     let mut tries = 0;
     let c = loop {
         match ClientOptions::new().open(name) {
             Ok(c) => break c,
-            Err(e) if e.raw_os_error() == Some(231) && tries < 20 => { tries += 1; tokio::time::sleep(Duration::from_millis(50)).await; } // ERROR_PIPE_BUSY
+            Err(e) if e.raw_os_error() == Some(231) && tries < 20 => {
+                tries += 1;
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            } // ERROR_PIPE_BUSY
             Err(e) => return Err(e),
         }
     };
@@ -64,7 +73,9 @@ async fn open_pipe(name: &str) -> std::io::Result<(Box<dyn tokio::io::AsyncRead 
 }
 
 #[cfg(unix)]
-async fn open_pipe(name: &str) -> std::io::Result<(Box<dyn tokio::io::AsyncRead + Send + Unpin>, Box<dyn tokio::io::AsyncWrite + Send + Unpin>)> {
+async fn open_pipe(
+    name: &str,
+) -> std::io::Result<(Box<dyn tokio::io::AsyncRead + Send + Unpin>, Box<dyn tokio::io::AsyncWrite + Send + Unpin>)> {
     let s = tokio::net::UnixStream::connect(name).await?;
     let (r, w) = tokio::io::split(s);
     Ok((Box::new(r), Box::new(w)))
@@ -81,7 +92,9 @@ async fn connect(ep: &Value) -> Result<Link, (bool, String)> {
     let (tx, mut rx) = mpsc::unbounded_channel::<String>();
     tokio::spawn(async move {
         while let Some(line) = rx.recv().await {
-            if w.write_all(line.as_bytes()).await.is_err() { break; }
+            if w.write_all(line.as_bytes()).await.is_err() {
+                break;
+            }
             let _ = w.flush().await;
         }
     });
@@ -94,12 +107,17 @@ async fn connect(ep: &Value) -> Result<Link, (bool, String)> {
             let Ok(msg) = serde_json::from_str::<Value>(&line) else { continue };
             let id = msg["id"].as_str().unwrap_or_default().to_string();
             if let Some(t) = p2.lock().unwrap().remove(&id) {
-                let r = match msg.get("error") { Some(e) if !e.is_null() => Err(e.as_str().map(str::to_string).unwrap_or_else(|| e.to_string())), _ => Ok(msg["result"].clone()) };
+                let r = match msg.get("error") {
+                    Some(e) if !e.is_null() => Err(e.as_str().map(str::to_string).unwrap_or_else(|| e.to_string())),
+                    _ => Ok(msg["result"].clone()),
+                };
                 let _ = t.send(r);
             }
         }
         a2.store(false, Ordering::SeqCst);
-        for (_, t) in p2.lock().unwrap().drain() { let _ = t.send(Err("Connection to FF Montage was lost (the app was closed?).".into())); }
+        for (_, t) in p2.lock().unwrap().drain() {
+            let _ = t.send(Err("Connection to FF Montage was lost (the app was closed?).".into()));
+        }
     });
     let link = Link { tx, token, pending, alive };
     match tokio::time::timeout(Duration::from_secs(3), request_on(&link, "hello", "ping", json!({}))).await {
@@ -125,7 +143,10 @@ fn launch_app() -> Result<(), String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     log(&format!("starting FF Montage: {}", exe.display()));
     let mut c = std::process::Command::new(exe);
-    c.current_dir(&paths::get().app_dir).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+    c.current_dir(&paths::get().app_dir)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -133,14 +154,18 @@ fn launch_app() -> Result<(), String> {
     }
     let mut child = c.spawn().map_err(|e| format!("launch failed: {e}"))?;
     // Забираем код выхода, иначе на Linux/macOS закрытая программа висит зомби, пока жив MCP-сервер
-    std::thread::spawn(move || { let _ = child.wait(); });
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
     Ok(())
 }
 
 impl App {
     async fn ensure(&self) -> Result<(), String> {
         let mut g = self.link.lock().await;
-        if g.as_ref().map(|l| l.alive.load(Ordering::SeqCst)).unwrap_or(false) { return Ok(()); }
+        if g.as_ref().map(|l| l.alive.load(Ordering::SeqCst)).unwrap_or(false) {
+            return Ok(());
+        }
         *g = None;
         let try_existing = || async {
             match read_endpoint()? {
@@ -149,7 +174,10 @@ impl App {
             }
         };
         let mut r: Result<Link, (bool, String)> = try_existing().await?;
-        if let Ok(l) = r { *g = Some(l); return Ok(()); }
+        if let Ok(l) = r {
+            *g = Some(l);
+            return Ok(());
+        }
         let gone = matches!(&r, Err((true, _)));
         let recently = self.launched_at.lock().unwrap().map(|t| t.elapsed() < LAUNCH_WAIT).unwrap_or(false);
         if gone && !recently {
@@ -160,7 +188,10 @@ impl App {
         while Instant::now() < deadline {
             tokio::time::sleep(Duration::from_millis(500)).await;
             r = try_existing().await?;
-            if let Ok(l) = r { *g = Some(l); return Ok(()); }
+            if let Ok(l) = r {
+                *g = Some(l);
+                return Ok(());
+            }
         }
         Err(match r {
             Err((false, e)) => format!("FF Montage is running but does not answer ({e}). Restart FF Montage and try again."),
@@ -170,7 +201,9 @@ impl App {
 }
 
 async fn call(app: &App, name: &str, args: Value, tools: &[Value]) -> Result<Value, String> {
-    if !tools.iter().any(|t| t["name"] == name) { return Err(format!("Unknown tool: {name}")); }
+    if !tools.iter().any(|t| t["name"] == name) {
+        return Err(format!("Unknown tool: {name}"));
+    }
     let params = json!({ "tool": name, "args": if args.is_object() { args.clone() } else { json!({}) } });
     let mut res = send(app, "call", params.clone()).await;
     if let Err(e) = &res {
@@ -183,7 +216,10 @@ async fn call(app: &App, name: &str, args: Value, tools: &[Value]) -> Result<Val
     if let Some(c) = result.get("__content").filter(|c| c.is_array()) {
         return Ok(json!({ "content": c }));
     }
-    let text = match &result { Value::String(s) => s.clone(), v => serde_json::to_string_pretty(v).unwrap_or_default() };
+    let text = match &result {
+        Value::String(s) => s.clone(),
+        v => serde_json::to_string_pretty(v).unwrap_or_default(),
+    };
     Ok(json!({ "content": [{ "type": "text", "text": text }] }))
 }
 
@@ -203,12 +239,19 @@ async fn send(app: &App, method: &str, params: Value) -> Result<Value, String> {
     match tokio::time::timeout(CALL_TIMEOUT, r).await {
         Ok(Ok(v)) => v,
         Ok(Err(_)) => Err("Connection to FF Montage was lost (the app was closed?).".into()),
-        Err(_) => { pending.lock().unwrap().remove(&id); Err("FF Montage did not answer in time.".into()) }
+        Err(_) => {
+            pending.lock().unwrap().remove(&id);
+            Err("FF Montage did not answer in time.".into())
+        }
     }
 }
 
-fn rpc_error(id: Value, code: i64, message: &str) -> Value { json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } }) }
-fn rpc_result(id: Value, result: Value) -> Value { json!({ "jsonrpc": "2.0", "id": id, "result": result }) }
+fn rpc_error(id: Value, code: i64, message: &str) -> Value {
+    json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } })
+}
+fn rpc_result(id: Value, result: Value) -> Value {
+    json!({ "jsonrpc": "2.0", "id": id, "result": result })
+}
 
 async fn handle(app: &App, msg: &Value, tools: &[Value], instructions: &str) -> Option<Value> {
     if !msg.is_object() || msg["jsonrpc"] != "2.0" {
@@ -216,23 +259,30 @@ async fn handle(app: &App, msg: &Value, tools: &[Value], instructions: &str) -> 
     }
     let id = msg.get("id").cloned().unwrap_or(Value::Null);
     let method = msg["method"].as_str()?;
-    if method.starts_with("notifications/") || id.is_null() { return None; }
+    if method.starts_with("notifications/") || id.is_null() {
+        return None;
+    }
     let params = &msg["params"];
     Some(match method {
         "initialize" => {
             let asked = params["protocolVersion"].as_str().unwrap_or("");
-            rpc_result(id, json!({
-                "protocolVersion": if SUPPORTED.contains(&asked) { asked } else { LATEST },
-                "capabilities": { "tools": { "listChanged": false } },
-                "serverInfo": { "name": "ff-montage", "title": "FF Montage", "version": control::version() },
-                "instructions": instructions,
-            }))
+            rpc_result(
+                id,
+                json!({
+                    "protocolVersion": if SUPPORTED.contains(&asked) { asked } else { LATEST },
+                    "capabilities": { "tools": { "listChanged": false } },
+                    "serverInfo": { "name": "ff-montage", "title": "FF Montage", "version": control::version() },
+                    "instructions": instructions,
+                }),
+            )
         }
         "ping" => rpc_result(id, json!({})),
         "tools/list" => rpc_result(id, json!({ "tools": tools })),
         "tools/call" => {
             let Some(name) = params["name"].as_str() else { return Some(rpc_error(id, -32602, "Invalid params: name is required")) };
-            if !tools.iter().any(|t| t["name"] == name) { return Some(rpc_error(id, -32602, &format!("Unknown tool: {name}"))); }
+            if !tools.iter().any(|t| t["name"] == name) {
+                return Some(rpc_error(id, -32602, &format!("Unknown tool: {name}")));
+            }
             match call(app, name, params["arguments"].clone(), tools).await {
                 Ok(v) => rpc_result(id, v),
                 Err(e) => {
@@ -267,25 +317,43 @@ pub fn main() {
         let mut tasks = vec![];
         while let Ok(Some(line)) = lines.next_line().await {
             let line = line.trim().to_string();
-            if line.is_empty() { continue; }
+            if line.is_empty() {
+                continue;
+            }
             let (app, tools, ins) = (app.clone(), tools.clone(), instructions.clone());
             tasks.push(tokio::spawn(async move {
                 let msg: Value = match serde_json::from_str(&line) {
                     Ok(v) => v,
-                    Err(_) => { out(&rpc_error(Value::Null, -32700, "Parse error")); return; }
+                    Err(_) => {
+                        out(&rpc_error(Value::Null, -32700, "Parse error"));
+                        return;
+                    }
                 };
                 if let Some(arr) = msg.as_array() {
-                    if arr.is_empty() { out(&rpc_error(Value::Null, -32600, "Invalid Request")); return; }
+                    if arr.is_empty() {
+                        out(&rpc_error(Value::Null, -32600, "Invalid Request"));
+                        return;
+                    }
                     let mut res = vec![];
-                    for m in arr { if let Some(r) = handle(&app, m, &tools, &ins).await { res.push(r); } }
-                    if !res.is_empty() { out(&Value::Array(res)); }
+                    for m in arr {
+                        if let Some(r) = handle(&app, m, &tools, &ins).await {
+                            res.push(r);
+                        }
+                    }
+                    if !res.is_empty() {
+                        out(&Value::Array(res));
+                    }
                     return;
                 }
-                if let Some(r) = handle(&app, &msg, &tools, &ins).await { out(&r); }
+                if let Some(r) = handle(&app, &msg, &tools, &ins).await {
+                    out(&r);
+                }
             }));
             tasks.retain(|t| !t.is_finished());
         }
-        for t in tasks { let _ = t.await; }
+        for t in tasks {
+            let _ = t.await;
+        }
         tokio::time::sleep(Duration::from_millis(100)).await;
     });
     std::process::exit(0);

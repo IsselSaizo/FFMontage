@@ -161,7 +161,9 @@
   // --- 7. Громкость предпросмотра ---
   const ms = document.querySelector('#monitor-vol');
   ms.value = '30'; ms.dispatchEvent(new Event('input'));
-  ok(localStorage.getItem('ffm.monitorVol') === '0.3' && preview.monitor() === 0.3, 'громкость предпросмотра 30%');
+  // с M0.6 громкость хранится в settings.json → ui.monitorVol (js/prefs.js), а не в localStorage
+  const { getPref } = await import('./js/prefs.js');
+  ok(Number(getPref('ui.monitorVol')) === 0.3 && preview.monitor() === 0.3, 'громкость предпросмотра 30%');
   ok(!/0\.3/.test(JSON.stringify(store.project.audioTracks.map((t) => t.volume))), 'на проект (экспорт) не влияет');
   ms.value = '100'; ms.dispatchEvent(new Event('input'));
 

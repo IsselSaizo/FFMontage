@@ -106,13 +106,17 @@ mod imp {
             }
             h.0 as usize
         });
-        if h == 0 { None } else { Some(HANDLE(h as *mut core::ffi::c_void)) }
+        if h == 0 {
+            None
+        } else {
+            Some(HANDLE(h as *mut core::ffi::c_void))
+        }
     }
 
     pub fn track(child: &tokio::process::Child) -> u32 {
         if let (Some(j), Some(raw)) = (job(), child.raw_handle()) {
             unsafe {
-                let _ = AssignProcessToJobObject(j, HANDLE(raw as *mut core::ffi::c_void));
+                let _ = AssignProcessToJobObject(j, HANDLE(raw));
             }
         }
         0

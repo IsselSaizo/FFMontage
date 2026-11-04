@@ -1,5 +1,5 @@
-# Проверка при каждом push / pull request: сборка, тест движка (без видеокарты — на процессоре),
-# тест ИИ-ассистента (MCP); на Windows ещё автотест интерфейса.
+# Проверка при каждом push / pull request: стиль и clippy, сборка, юнит-тесты Rust, тест движка
+# (без видеокарты — на процессоре), тест ИИ-ассистента (MCP); на Windows ещё автотест интерфейса.
 name: CI
 on:
   push:
@@ -12,6 +12,39 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Быстрые проверки без FFmpeg: форматирование, clippy, перевод, таблица хоткеев, версии
+  lint:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - name: Библиотеки окна
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - name: Форматирование (cargo fmt)
+        working-directory: src-tauri
+        run: cargo fmt --check
+      # type_complexity — стилистика (типы колбэков в control/ff/fonts), остальное — ошибка
+      - name: Clippy
+        working-directory: src-tauri
+        run: cargo clippy --locked --all-targets -- -D warnings -A clippy::type_complexity
+      - name: Перевод интерфейса (i18n)
+        run: node tests/i18n-check.js
+      - name: Таблица горячих клавиш (docs/HOTKEYS.md) актуальна
+        run: node tools/hotkeys-doc.mjs --check
+      - name: Версия одинакова в Cargo.toml, Cargo.lock, tauri.conf.json, package.json
+        run: node tools/check-version.mjs
+
   windows:
     runs-on: windows-latest
     timeout-minutes: 60
@@ -26,7 +59,7 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 22
-      - name: FFmpeg
+      - name: FFmpeg (закреплённая сборка, проверка SHA-256)
         shell: pwsh
         run: ./tools/fetch-ffmpeg.ps1
       - name: Перевод интерфейса (i18n)
@@ -34,7 +67,7 @@ jobs:
       - name: Сборка
         working-directory: src-tauri
         run: cargo build --release --locked
-      - name: Юнит-тесты Rust (план экспорта, плагины)
+      - name: Юнит-тесты Rust (план экспорта, плагины, обновления)
         working-directory: src-tauri
         run: cargo test --release --locked
       - name: Тест движка (процессор, без NVENC)
@@ -50,12 +83,12 @@ jobs:
       - name: Автотест интерфейса
         shell: pwsh
         run: |
-          foreach ($t in 'ui-selftest3', 'ui-selftest4', 'ui-selftest5', 'ui-selftest6', 'ui-selftest11', 'ui-selftest14', 'ui-selftest15') {
+          foreach ($t in 'ui-selftest3', 'ui-selftest4', 'ui-selftest5', 'ui-selftest6', 'ui-selftest11', 'ui-selftest14', 'ui-selftest15', 'ui-selftest16') {
             ./tests/run-ui.ps1 $t -TimeoutSec 300 | Tee-Object -Variable out
-            if ($out -match 'FAIL|ERROR|TIMEOUT') { exit 1 }
+            if ($out -cmatch 'FAIL|ERROR|TIMEOUT') { exit 1 }
           }
           ./tests/run-ui.ps1 ui-selftest11 -Lang en -TimeoutSec 300 | Tee-Object -Variable out
-          if ($out -match 'FAIL|ERROR|TIMEOUT') { exit 1 }
+          if ($out -cmatch 'FAIL|ERROR|TIMEOUT') { exit 1 }
       - name: Тест ИИ-ассистента (MCP)
         run: node tests/mcp-test.js
       - name: Журналы
@@ -76,10 +109,11 @@ jobs:
       FFM_NO_GPU: '1'
     steps:
       - uses: actions/checkout@v5
+      # libayatana-appindicator не нужен: трея в программе нет (tauri без feature tray-icon)
       - name: Библиотеки окна
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev gstreamer1.0-plugins-good xvfb
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev gstreamer1.0-plugins-good xvfb
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
@@ -87,12 +121,12 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 22
-      - name: FFmpeg
+      - name: FFmpeg (закреплённая сборка, проверка SHA-256)
         run: bash tools/fetch-ffmpeg.sh
       - name: Сборка
         working-directory: src-tauri
         run: cargo build --release --locked
-      - name: Юнит-тесты Rust (план экспорта, плагины)
+      - name: Юнит-тесты Rust (план экспорта, плагины, обновления)
         working-directory: src-tauri
         run: cargo test --release --locked
       - name: Тест движка (процессор)

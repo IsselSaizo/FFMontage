@@ -909,7 +909,7 @@
   {
    "name": "export_video",
    "title": "Export video",
-   "description": "Render the timeline to an MP4 file in the background and return immediately; poll export_status. codec: av1 (smallest, default), hevc, h264 (most compatible); NVIDIA GPU is used when available. quality: high (default), medium, compact. resolution: source (default) or 2160/1440/1080/720 (height, keeps aspect). fps: frames per second (default: as source). Without path the file goes to the output folder named after the project.",
+   "description": "Render the timeline to an MP4 file in the background and return immediately; poll export_status. codec: av1 (smallest, default), hevc, h264 (most compatible); a GPU encoder is used when available (NVIDIA NVENC, then Intel Quick Sync, AMD AMF, VAAPI on Linux), otherwise the CPU. quality: high (default), medium, compact. resolution: source (default) or 2160/1440/1080/720 (height, keeps aspect). fps: frames per second (default: as source). Without path the file goes to the output folder named after the project.",
    "inputSchema": {
     "type": "object",
     "properties": {

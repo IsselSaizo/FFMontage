@@ -12,6 +12,7 @@ import { keyHint } from './keymap.js';
 import * as registry from './registry.js';
 import { renderTextPanel } from './textPanel.js';
 import { onFontsChange } from './fonts.js';
+import { getPref, setPref } from './prefs.js';
 
 const TABS = [
   { id: 'props', name: t('Свойства'), el: '#inspector' },
@@ -60,12 +61,12 @@ export function initBrowser() {
   const tabs = TABS.map((x) => ({ ...x }));
   const elOf = (tab) => (typeof tab.el === 'string' ? $(tab.el) : tab.el);
   // Сохранённая вкладка может быть вкладкой плагина, который загрузится позже — тогда откроем её при появлении
-  let wanted = localStorage.getItem('ffm.rightTab') || 'props';
+  let wanted = getPref('ui.rightTab', 'props') || 'props';
   let current = wanted;
   const show = (id, remember = true) => {
     if (!tabs.some((x) => x.id === id)) id = 'props';
     current = id;
-    if (remember) { wanted = id; localStorage.setItem('ffm.rightTab', id); }
+    if (remember) { wanted = id; setPref('ui.rightTab', id); }
     for (const tab of tabs) {
       const el = elOf(tab);
       if (el) el.hidden = tab.id !== id;

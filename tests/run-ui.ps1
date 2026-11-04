@@ -20,6 +20,9 @@ $cfg = @{ version = 1; cacheDir = "$T\cache"; outputDir = "$T\out"; projectsDir 
 if ($Lang) { $cfg.settings = @{ lang = $Lang } }
 $json = $cfg | ConvertTo-Json
 [System.IO.File]::WriteAllText("$T\config.json", $json, (New-Object System.Text.UTF8Encoding $false))
+# Настройки интерфейса (M0.6) — в settings.json рядом с config.json: каждый тест начинает с чистых
+# (settings.lang из config.json программа перенесёт туда сама)
+Remove-Item "$T\settings.json" -ErrorAction SilentlyContinue
 if (-not $KeepAutosave) { Remove-Item "$T\cache\app\autosave.ffproj" -ErrorAction SilentlyContinue }
 Remove-Item "$T\$Test.json" -ErrorAction SilentlyContinue
 # Плагины: <App>\.test-cache\tmp\uitest\plugins — заново при каждом запуске (вместе с .data — storage плагинов)

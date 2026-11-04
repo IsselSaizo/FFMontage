@@ -1,4 +1,4 @@
-# Сборка FF Montage из исходников (Windows). Запускается из setup.cmd.
+﻿# Сборка FF Montage из исходников (Windows). Запускается из setup.cmd.
 #   1) FFmpeg → папка ffmpeg\     2) Rust (если нет — ставит rustup)     3) сборка → «FF Montage.exe»
 # Проще всего НЕ собирать, а скачать готовый ZIP: https://github.com/IsselSaizo/FFMontage/releases/latest
 param([switch]$SkipFFmpeg, [switch]$NoShortcut)

@@ -1,7 +1,9 @@
 // Окно настроек внутри главного окна (M2.3): Общие (язык, запуск), Горячие клавиши (пресеты, переназначение,
 // конфликты, экспорт/импорт), Папки, Кэш, ИИ-ассистент, Плагины (M3.6), О программе.
-// Хранятся в config.json → "settings" (команды settings_get / settings_set в Rust).
-import { h, icon, toast, confirmDialog, promptDialog, fmtBytes, errText } from './util.js';
+// Хранятся в settings.json (Rust settings.rs) через js/prefs.js: getSetting/setSettings — его обёртки.
+import { h, icon, toast, confirmDialog, promptDialog, fmtBytes, errText, debounce } from './util.js';
+import { loadPrefs, getPref, setPref, setPrefs } from './prefs.js';
+import { invoke } from './tauri.js';
 import { t, tIn, LANGS, getLang, rememberLang, langChosen, systemLang } from './i18n.js';
 import {
   ACTIONS, CATEGORIES, PRESETS, keysOf, baseKeysOf, isCustom, keyLabel, comboFromEvent,
@@ -11,22 +13,18 @@ import { foldersForm } from './folders.js';
 import { store } from './store.js';
 
 const api = window.api;
-let data = {};
 // Действия главного окна: перезагрузка с сохранением проекта, обновления, диалог MCP, сохранение перед перезапуском
 let hooks = { reload: () => location.reload(), checkUpdates: () => {}, showMcp: () => {}, beforeRestart: async () => {} };
 
 export async function initSettings(appHooks = {}) {
   hooks = { ...hooks, ...appHooks };
-  try { data = (await api.settingsGet()).settings || {}; } catch (e) { console.warn('settings', e); }
-  configureKeymap(data.keymap || {});
+  await loadPrefs();
+  configureKeymap(getPref('keymap', {}) || {});
 }
 
-export const getSetting = (key, def) => (data && key in data ? data[key] : def);
+export const getSetting = (key, def) => getPref(key, def);
 
-export async function setSettings(patch) {
-  data = await api.settingsSet(patch);
-  return data;
-}
+export const setSettings = (patch) => setPrefs(patch);
 
 async function switchLang(l) {
   if (l === getLang()) { await setSettings({ lang: l }).catch(() => {}); return; }
@@ -40,7 +38,7 @@ async function switchLang(l) {
 // ---------------------------------------------------------------------------
 export function maybeAskLanguage() {
   const boot = window.__FFM_BOOT || {};
-  if (langChosen() || boot.selftest || data.lang) return;
+  if (langChosen() || boot.selftest || getPref('lang')) return;
   askLanguage();
 }
 
@@ -280,50 +278,133 @@ async function renderFolders(body) {
     form.el, err,
     h('div', { class: 'row gap set-actions' }, save,
       h('span', { class: 'muted small cfg-path', title: info.configFile }, t('Настройки: {path}', { path: info.configFile }))));
+  const where = await invoke('paths_info').catch(() => null);
+  if (where) body.append(dataPlaces(where));
   form.check();
 }
 
+// Где лежат настройки, свои шрифты и плагины (M0.5): режим portable / системные папки и как его сменить
+function dataPlaces(p) {
+  const MODE = {
+    portable: t('Переносной режим: настройки, свои шрифты и плагины хранятся в папке программы.'),
+    system: t('Системные папки: настройки, свои шрифты и плагины хранятся в папке пользователя.'),
+    custom: t('Папки заданы переменной окружения FFM_CONFIG (автотест или ИИ-клиент).'),
+  };
+  const row = (title, path) => h('div', { class: 'about-row', style: { gridTemplateColumns: '140px 1fr auto', alignItems: 'center' } },
+    h('span', { class: 'muted' }, title),
+    h('span', { class: 'sel cfg-path', title: path }, path),
+    h('button', { class: 'icon-btn small', title: t('Открыть папку'), html: icon('folder', 15), onclick: () => api.openPath(path).then((e) => { if (e) toast(e, 'error'); }) }));
+  const files = 'config.json, settings.json, user-fonts, plugins';
+  const hint = p.mode === 'portable' && p.other
+    ? t('Чтобы перейти на системные папки, закройте программу, перенесите {files} в {dir} и удалите portable.txt и config.json рядом с программой.', { files, dir: p.other.configDir })
+    : p.mode === 'system'
+      ? t('Чтобы сделать программу переносной, закройте её, положите рядом с программой пустой файл portable.txt и перенесите туда {files} из {dir}.', { files, dir: p.configDir })
+      : '';
+  return h('div', { class: 'set-places', id: 'data-places', dataset: { mode: p.mode }, style: { display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '18px' } },
+    h('b', {}, t('Где хранятся данные')),
+    h('p', { class: 'muted small' }, MODE[p.mode] || p.mode),
+    row(t('Настройки'), p.configDir),
+    p.dataDir !== p.configDir ? row(t('Данные'), p.dataDir) : null,
+    row(t('Плагины'), p.pluginsDir),
+    row(t('Свои шрифты'), p.fontsDir),
+    hint ? h('p', { class: 'muted small' }, hint) : null,
+    p.other && p.other.hasData
+      ? h('p', { class: 'plg-warn small' }, t('В {dir} есть данные другого режима — программа их сейчас не использует. Автоматически они не переносятся.', { dir: p.other.configDir }))
+      : null);
+}
+
 // --- Кэш ---
+// Ключи кэша и пути медиа открытого проекта: их кэш (прокси, реверс, стоп-кадры, анимации) не удаляется
+export function projectCacheKeep() {
+  const keep = [];
+  for (const m of Object.values(store.project.media || {})) { if (m.key) keep.push(m.key); if (m.path) keep.push(m.path); }
+  return keep;
+}
+
+/** Автоочистка кэша до лимита (после смены лимита; при запуске её делает программа сама) */
+export const cacheAutoclean = () => invoke('cache_autoclean', { keep: projectCacheKeep() });
+
+const gb = (n) => t('{n} ГБ', { n });
+
 async function renderCache(body) {
   const box = h('div', { class: 'cache-box' }, h('p', { class: 'muted' }, t('Считаю…')));
   body.append(box);
+  let stats = null;
+  // Лимит: 1..50 ГБ, по умолчанию 1. Лишнее удаляется само (Rust cache.rs autoclean), начиная с давно неиспользованного
+  const limitIn = h('input', { type: 'range', id: 'cache-limit', min: 1, max: 50, step: 1 });
+  const limitVal = h('b', { id: 'cache-limit-val', class: 'cache-limit-val' });
+  const usedNow = h('span', { id: 'cache-used', class: 'muted small' });
+  const showUsed = () => { if (stats) usedNow.textContent = t('Сейчас занято: {size}', { size: fmtBytes(stats.auto || 0) }); };
+  const applyLimit = debounce(async () => {
+    try {
+      const r = await cacheAutoclean();
+      if (r && r.freed > 0) toast(t('Автоочистка: освобождено {size}', { size: fmtBytes(r.freed) }), 'success', 3000);
+      if (limitIn.isConnected) draw(await api.cacheStats());
+    } catch (e) { toast(errText(e), 'error', 5000); }
+  }, 800);
+  limitIn.addEventListener('input', () => {
+    const n = Math.max(1, Math.min(50, Math.round(Number(limitIn.value) || 1)));
+    limitVal.textContent = gb(n);
+    setPref('cache', { ...(getPref('cache', {}) || {}), limitGb: n });
+    applyLimit();
+  });
+  limitIn.style.flex = '1';
+  limitVal.style.whiteSpace = 'nowrap';
+  usedNow.style.whiteSpace = 'nowrap';
+  const limitRow = h('div', { class: 'cache-limit', style: { display: 'flex', flexDirection: 'column', gap: '8px', padding: '8px', marginBottom: '6px' } },
+    h('div', { class: 'set-label' },
+      h('b', {}, t('Сколько места оставлять под старый кэш')),
+      h('span', { class: 'muted small' }, t('Лишнее удаляется само, начиная с давно неиспользованного. Файлы открытого проекта не удаляются, даже если они больше лимита.'))),
+    h('div', { class: 'row gap', style: { alignItems: 'center' } }, limitIn, limitVal, usedNow));
+  const list = h('div', { class: 'cache-list' });
+
   const draw = (s) => {
-    box.innerHTML = '';
+    stats = s;
+    const lim = Math.max(1, Math.min(50, Math.round(Number(getPref('cache.limitGb', s.limitGb || 1)) || 1)));
+    limitIn.value = String(lim);
+    limitVal.textContent = gb(lim);
+    showUsed();
+    list.innerHTML = '';
     const rows = [
-      { id: 'media', title: t('Миниатюры, волны звука, прокси'), desc: t('Пересоздаются сами, когда файл снова понадобится. Файлы открытого проекта не трогаем.'), size: s.media, on: true },
-      { id: 'temp', title: t('Временные файлы'), desc: t('Остатки экспорта и окна.'), size: s.temp, on: true },
+      { id: 'thumbs', title: t('Миниатюры'), desc: t('Кадры на таймлайне и в медиатеке. Пересоздаются сами.'), size: s.thumbs, on: true },
+      { id: 'peaks', title: t('Волны звука'), desc: t('Пересоздаются сами, когда файл снова понадобится.'), size: s.peaks, on: true },
+      { id: 'proxy', title: t('Прокси'), desc: t('Облегчённые копии видео для плавного просмотра. Пересоздаются, но не сразу.'), size: s.proxy, on: true },
+      { id: 'fx', title: t('Реверс и стоп-кадры'), desc: t('Пересоздаются по проекту, но долго. Файлы открытого проекта не трогаем.'), size: s.fx, on: false },
+      { id: 'assets', title: t('Тексты и субтитры для экспорта'), desc: t('Картинки и файлы субтитров, которые готовятся перед каждым экспортом.'), size: s.assets, on: true },
+      { id: 'fonts', title: t('Шрифты для субтитров'), desc: t('Копии шрифтов для экспорта субтитров (libass).'), size: s.fonts, on: true },
+      { id: 'temp', title: t('Прочее'), desc: t('Временные файлы экспорта и окна, неопознанные файлы кэша.'), size: s.temp, on: true },
+      { id: 'anim', title: t('Сохранённые анимации'), desc: t('Это материалы ваших проектов: удаляйте, только если они больше не нужны. Анимации открытого проекта не трогаем.'), size: s.anim, on: false },
       { id: 'logs', title: t('Журналы'), desc: t('Нужны, только если вы сообщаете об ошибке.'), size: s.logs, on: false },
-      { id: 'anim', title: t('Сохранённые анимации'), desc: t('Это материалы ваших проектов — не очищаются.'), size: s.anim, fixed: true },
       { id: 'webview', title: t('Данные окна'), desc: t('Служебные файлы WebView — не очищаются.'), size: s.webview, fixed: true },
     ];
     const checks = {};
     for (const r of rows) {
       const cb = r.fixed ? null : h('input', { type: 'checkbox', dataset: { cat: r.id } });
       if (cb) { cb.checked = r.on; checks[r.id] = cb; }
-      box.append(h('label', { class: `cache-row${r.fixed ? ' fixed' : ''}` },
+      list.append(h('label', { class: `cache-row${r.fixed ? ' fixed' : ''}`, dataset: { row: r.id } },
         cb || h('span', { class: 'cb-space' }),
         h('span', { class: 'set-label' }, h('b', {}, r.title), h('span', { class: 'muted small' }, r.desc)),
         h('span', { class: 'cache-size' }, fmtBytes(r.size || 0))));
     }
-    const total = rows.reduce((a, r) => a + (r.size || 0), 0);
     const clear = h('button', { class: 'btn primary', id: 'cache-clear', onclick: async () => {
       const cats = Object.entries(checks).filter(([, c]) => c.checked).map(([id]) => id);
       if (!cats.length) return;
       clear.disabled = true;
-      const keep = [];
-      for (const m of Object.values(store.project.media || {})) { if (m.key) keep.push(m.key); if (m.path) keep.push(m.path); }
       try {
-        const r = await api.cacheClear(cats, keep);
+        const r = await api.cacheClear(cats, projectCacheKeep());
         toast(t('Освобождено: {size}', { size: fmtBytes(r.freed) }) + (r.failed ? ` · ${t('не удалось удалить: {n}', { n: r.failed })}` : ''), 'success', 3000);
         draw(r.stats);
       } catch (e) { toast(errText(e), 'error', 5000); clear.disabled = false; }
     } }, t('Очистить выбранное'));
-    box.append(
+    list.append(
       h('div', { class: 'row gap set-actions' }, clear,
         h('button', { class: 'btn ghost', onclick: () => api.openPath(s.cacheDir) }, h('span', { html: icon('folder', 16) }), t('Открыть папку кэша')),
-        h('span', { class: 'muted small' }, t('Всего: {size}', { size: fmtBytes(total) }))));
+        h('span', { class: 'muted small', id: 'cache-total' }, t('Всего: {size}', { size: fmtBytes(s.total || 0) }))));
   };
-  draw(await api.cacheStats());
+  const s = await api.cacheStats();
+  box.innerHTML = '';
+  box.append(limitRow, list);
+  draw(s);
 }
 
 // --- ИИ-ассистент ---
@@ -507,6 +588,10 @@ async function renderAbout(body) {
     row(t('Экспорт'), i.outputDir),
     row(t('Проекты'), i.projectsDir),
     row(t('Файл настроек'), i.configFile),
+    ...(await invoke('paths_info').then((p) => [
+      row(t('Настройки интерфейса'), p.settingsFile),
+      row(t('Хранение данных'), p.mode === 'portable' ? t('переносной режим (рядом с программой)') : p.mode === 'system' ? t('системные папки') : 'FFM_CONFIG'),
+    ]).catch(() => [])),
     h('div', { class: 'row gap set-actions' },
       h('button', { class: 'btn primary', onclick: () => hooks.checkUpdates() }, h('span', { html: icon('refresh', 16) }), t('Проверить обновления…')),
       h('button', { class: 'btn ghost', onclick: () => api.openPath(i.logsDir) }, h('span', { html: icon('folder', 16) }), t('Папка журналов'))));

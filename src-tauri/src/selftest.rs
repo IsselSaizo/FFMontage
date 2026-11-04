@@ -16,18 +16,26 @@ fn script_path() -> Option<PathBuf> {
 }
 
 pub fn shot_path() -> PathBuf {
-    std::env::var("FFM_SHOT").ok().filter(|s| !s.is_empty()).map(PathBuf::from)
+    std::env::var("FFM_SHOT")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
         .unwrap_or_else(|| crate::paths::get().temp.join("selftest.png"))
 }
 
 pub fn on_loaded(app: AppHandle, label: String) {
     let Some(file) = script_path() else { return };
-    if DONE.load(Ordering::SeqCst) { return; }
+    if DONE.load(Ordering::SeqCst) {
+        return;
+    }
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(Duration::from_millis(1200)).await;
         let script = match std::fs::read_to_string(&file) {
             Ok(s) => s,
-            Err(e) => { finish(&app, &label, serde_json::json!({ "error": format!("script: {e}") })).await; return; }
+            Err(e) => {
+                finish(&app, &label, serde_json::json!({ "error": format!("script: {e}") })).await;
+                return;
+            }
         };
         let body = script.trim().trim_end_matches(';').trim().to_string();
         let wrapper = format!(
@@ -44,12 +52,16 @@ pub fn on_loaded(app: AppHandle, label: String) {
 }
 
 async fn finish(app: &AppHandle, label: &str, mut result: Value) {
-    if DONE.swap(true, Ordering::SeqCst) { return; }
+    if DONE.swap(true, Ordering::SeqCst) {
+        return;
+    }
     tokio::time::sleep(Duration::from_millis(600)).await;
     let shot = shot_path();
     if let Some(w) = app.get_webview_window(label) {
         if let Err(e) = capture(&w, &shot).await {
-            if result.is_object() { result["shotError"] = Value::from(e); }
+            if result.is_object() {
+                result["shotError"] = Value::from(e);
+            }
         }
     }
     let json = shot.with_extension("json");
@@ -67,7 +79,9 @@ pub async fn test_done(window: WebviewWindow, result: Value) {
 
 #[tauri::command]
 pub async fn test_shot(window: WebviewWindow, name: String) -> Result<String, String> {
-    if script_path().is_none() { return Err(tr!("только в режиме автотеста", "only in self-test mode").into()); }
+    if script_path().is_none() {
+        return Err(tr!("только в режиме автотеста", "only in self-test mode").into());
+    }
     let safe: String = name.chars().map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_' { c } else { '_' }).collect();
     let dir = shot_path().parent().map(|p| p.to_path_buf()).unwrap_or_default();
     let file = dir.join(format!("{safe}.png"));
@@ -87,15 +101,34 @@ pub async fn capture(w: &WebviewWindow, file: &std::path::Path) -> Result<(), St
     let tx = std::sync::Arc::new(std::sync::Mutex::new(Some(tx)));
     let tx2 = tx.clone();
     w.with_webview(move |pw| unsafe {
-        let send = move |r: Result<Vec<u8>, String>| { if let Some(t) = tx2.lock().unwrap().take() { let _ = t.send(r); } };
-        let core = match pw.controller().CoreWebView2() { Ok(c) => c, Err(e) => { send(Err(e.to_string())); return; } };
-        let Some(stream) = SHCreateMemStream(None) else { send(Err("SHCreateMemStream".into())); return; };
+        let send = move |r: Result<Vec<u8>, String>| {
+            if let Some(t) = tx2.lock().unwrap().take() {
+                let _ = t.send(r);
+            }
+        };
+        let core = match pw.controller().CoreWebView2() {
+            Ok(c) => c,
+            Err(e) => {
+                send(Err(e.to_string()));
+                return;
+            }
+        };
+        let Some(stream) = SHCreateMemStream(None) else {
+            send(Err("SHCreateMemStream".into()));
+            return;
+        };
         let st2: IStream = stream.clone();
         let send2 = send.clone();
         let handler = CapturePreviewCompletedHandler::create(Box::new(move |res| {
-            if let Err(e) = res { send2(Err(e.to_string())); return Ok(()); }
+            if let Err(e) = res {
+                send2(Err(e.to_string()));
+                return Ok(());
+            }
             let mut stat = Default::default();
-            if let Err(e) = st2.Stat(&mut stat, STATFLAG_NONAME) { send2(Err(e.to_string())); return Ok(()); }
+            if let Err(e) = st2.Stat(&mut stat, STATFLAG_NONAME) {
+                send2(Err(e.to_string()));
+                return Ok(());
+            }
             let size = stat.cbSize as usize;
             let mut buf = vec![0u8; size];
             let _ = st2.Seek(0, STREAM_SEEK_SET, None);
@@ -108,10 +141,15 @@ pub async fn capture(w: &WebviewWindow, file: &std::path::Path) -> Result<(), St
         if let Err(e) = core.CapturePreview(COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG, &stream, &handler) {
             send(Err(e.to_string()));
         }
-    }).map_err(|e| e.to_string())?;
-    let data = tokio::time::timeout(Duration::from_secs(10), rx).await.map_err(|_| tr!("снимок: нет ответа", "screenshot: no response").to_string())?
+    })
+    .map_err(|e| e.to_string())?;
+    let data = tokio::time::timeout(Duration::from_secs(10), rx)
+        .await
+        .map_err(|_| tr!("снимок: нет ответа", "screenshot: no response").to_string())?
         .map_err(|_| tr!("снимок: отменён", "screenshot: cancelled").to_string())??;
-    if let Some(d) = file.parent() { let _ = std::fs::create_dir_all(d); }
+    if let Some(d) = file.parent() {
+        let _ = std::fs::create_dir_all(d);
+    }
     std::fs::write(file, data).map_err(|e| e.to_string())
 }
 

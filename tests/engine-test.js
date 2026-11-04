@@ -34,6 +34,80 @@ async function rgb(file, t) {
 const isRed = ([r, g, b]) => r > 150 && g < 80 && b < 80;
 const isGreen = ([r, g, b]) => g > 150 && r < 80 && b < 80;
 
+// M0.4 / M0.2 / M0.9: кодировщики видеокарты (nvenc → qsv → amf → vaapi), кэш проверки на диске,
+// параметры качества qsv/amf/vaapi в плане, проверка плана движком, очередь, реверс при b<a
+async function encodersTest(enc) {
+  console.log('Кодировщики и проверка плана:');
+  const hw = ['h264_qsv', 'hevc_qsv', 'av1_qsv', 'h264_amf', 'hevc_amf', 'av1_amf'];
+  if (process.platform !== 'darwin') {
+    for (const k of ['h264_nvenc', ...hw]) assert(typeof enc[k] === 'boolean', `кодировщик ${k} проверен: ${enc[k]}`);
+  }
+  assert(process.platform === 'linux' ? typeof enc.h264_vaapi === 'boolean' : enc.h264_vaapi === undefined, 'VAAPI проверяется только на Linux');
+  // Выбор как в exportDialog.js / mcpBridge.js: первый доступный из nvenc → qsv → amf → vaapi
+  const order = (c) => ['nvenc', 'qsv', 'amf', 'vaapi'].map((f) => `${c}_${f}`).find((e) => enc[e]) || null;
+  const h264 = order('h264');
+  if (enc.h264_nvenc) assert(h264 === 'h264_nvenc', 'есть NVENC — выбирается он');
+  console.log(`  выбор для H.264: ${h264 || 'процессор'}; qsv=${enc.h264_qsv}, amf=${enc.h264_amf}`);
+  // Кэш проверки на диске: <cache>/app/encoders.json, ключ — путь, размер и время ffmpeg
+  const P = ff.paths();
+  const file = path.join(P.app_cache || path.join(P.cache_dir, 'app'), 'encoders.json');
+  assert(fs.existsSync(file), `кэш проверки кодировщиков: ${file}`);
+  const j = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert(j.version === 2 && j.entries.some((e) => e.size > 0 && e.mtime > 0 && e.encoders.libx264 === true), 'в кэше — ключ (размер, время) и результат');
+  let t0 = Date.now();
+  const again = await ff.detectEncoders();
+  const cached = Date.now() - t0;
+  assert(JSON.stringify(again) === JSON.stringify(enc), `повторная проверка берётся из кэша (${cached} мс)`);
+  t0 = Date.now();
+  const fresh = await ff.engine('encoders', { reset: true });
+  assert(fresh.libx264 === true && fresh.h264_nvenc === enc.h264_nvenc, `сброс кэша — проверка заново (${Date.now() - t0} мс)`);
+  const q = await ff.engine('queue');
+  assert(q.cpu.limit >= 2 && q.gpu.limit === 3, `очередь: процессор ${q.cpu.limit}, видеокарта ${q.gpu.limit}`);
+
+  // План с параметрами каждого аппаратного кодировщика проходит проверку движка (plancheck)
+  const src = await make('t_enc.mp4', ['-f', 'lavfi', '-i', 'testsrc2=size=320x180:rate=30', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000',
+    '-t', '2', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac']);
+  const im = await ff.probe(src);
+  const pr = { media: { m: im }, videoClips: [{ mediaId: 'm', in: 0, out: 2, start: 0, volume: 1 }], audioTracks: [] };
+  const planMod = await import(require('url').pathToFileURL(path.join(__dirname, '..', 'src', 'renderer', 'js', 'exportPlan.js')).href);
+  const out = path.join(DIR, 'out_hw.mp4');
+  for (const codec of [...hw, 'h264_vaapi', 'hevc_vaapi']) {
+    for (const quality of ['high', 'compact']) {
+      const plan = planMod.exportCommand(pr, { width: 320, height: 180, fps: 30, codec, quality, output: out });
+      assert(plan.args.includes(codec), `${codec}/${quality}: ${plan.args.slice(plan.args.indexOf('-c:v'), plan.args.indexOf('-fps_mode')).join(' ')}`);
+      if (codec.endsWith('_vaapi')) assert(plan.args.includes('-vaapi_device') && /hwupload\[vhw\]$/.test(plan.filter) && plan.args.includes('[vhw]'), 'VAAPI: hwupload и -vaapi_device');
+      assert(await ff.engine('checkplan', { plan }) === true, `${codec}: план проходит проверку`);
+    }
+  }
+  // Реальный экспорт на доступной видеокарте Intel/AMD (на машине с NVIDIA обычно их нет)
+  for (const codec of hw.filter((c) => enc[c])) {
+    const o = path.join(DIR, `out_${codec}.mp4`);
+    await startExport(pr, { width: 320, height: 180, fps: 30, codec, quality: 'medium', output: o });
+    const io = await ff.probe(o);
+    assert(Math.abs(io.duration - 2) < 0.15, `экспорт ${codec}: ${io.vcodec}, ${io.duration} с`);
+  }
+  // Подделанные планы движок тоже отклоняет: протоколы во входе и выходе, movie во вложенном виде
+  const base = planMod.exportCommand(pr, { width: 320, height: 180, fps: 30, codec: 'libx264', quality: 'medium', output: out });
+  const bad = async (name, f) => {
+    const plan = JSON.parse(JSON.stringify(base)); f(plan);
+    let err = null;
+    try { await ff.engine('checkplan', { plan }); } catch (e) { err = e.message; }
+    assert(err && /План экспорта отклонён|Export plan rejected/.test(err), `${name}: ${err}`);
+  };
+  const iIn = base.args.indexOf('-i') + 1;
+  await bad('вход concat:', (p) => { p.args[iIn] = `concat:${src}|${src}`; });
+  await bad('вход subfile,,', (p) => { p.args[iIn] = `subfile,,start,0,end,0,,:${src}`; });
+  await bad('вход file:', (p) => { p.args[iIn] = `file:${src}`; });
+  await bad('-f concat', (p) => { p.args[p.args.indexOf('-f') + 1] = 'concat'; });
+  await bad('выход http:', (p) => { p.output = 'http://127.0.0.1/x.mp4'; });
+  await bad('movie в значении', (p) => { p.filter = p.filter.replace('setpts=PTS-STARTPTS', 'hue=s=1\\,movie=x.mp4,setpts=PTS-STARTPTS'); });
+  await bad('-filter_script', (p) => { p.args.splice(1, 0, '-filter_script', src); });
+  // M0.9: реверс при b < a — понятная ошибка, а не отрицательная длительность
+  let rerr = null;
+  try { await ff.reverse(im, 1.5, 0.5); } catch (e) { rerr = e.message; }
+  assert(rerr && /реверс|reverse/i.test(rerr), `реверс 1,5 → 0,5 отклонён: ${rerr}`);
+}
+
 // Картинки, GIF, вертикальный кадр 9:16, цвет фона, «заполнить», чёрно-белое
 async function viewTest(enc, ib) {
   console.log('Картинки, формат кадра, фон, эффекты:');
@@ -415,7 +489,7 @@ async function textTest(enc) {
   // node tests/engine-test.js --only tracks — только одна группа проверок (для отладки)
   const only = process.argv.includes('--only') ? process.argv[process.argv.indexOf('--only') + 1] : null;
   if (only) {
-    await ({ tracks: tracksTest, effects: effectsTest, speed: speedTest, plugin: pluginTest, text: textTest })[only](enc);
+    await ({ tracks: tracksTest, effects: effectsTest, speed: speedTest, plugin: pluginTest, text: textTest, encoders: encodersTest })[only](enc);
     console.log('\nВСЁ ОК');
     return;
   }
@@ -529,5 +603,6 @@ async function textTest(enc) {
   await pluginTest(enc);
   await tracksTest(enc);
   await textTest(enc);
+  await encodersTest(enc);
   console.log('\nВСЁ ОК');
 })().catch((e) => { console.error(e); process.exit(1); });

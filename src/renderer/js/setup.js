@@ -1,4 +1,4 @@
-// Окно первого запуска (и старое окно «Настройки папок»): язык и папки. Результат пишется в config.json.
+// Окно первого запуска (и старое окно «Настройки папок»): язык и папки. Папки пишутся в config.json, язык — в settings.json.
 import { h, icon, errText } from './util.js';
 import { t, LANGS, getLang, rememberLang } from './i18n.js';
 import { foldersForm } from './folders.js';

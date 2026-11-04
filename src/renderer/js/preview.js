@@ -15,6 +15,9 @@ import { t } from './i18n.js';
 import { isText } from './textModel.js';
 import { drawText } from './textRender.js';
 import { fontsVersion, onFontsChange } from './fonts.js';
+import { getPref, setPref } from './prefs.js';
+
+const monitorVol = () => { const v = Number(getPref('ui.monitorVol', 1)); return isFinite(v) ? Math.max(0, Math.min(1, v)) : 1; };
 
 const EPS = 0.004;
 // crop { l, t, r, b } — доли кадра, срезанные с каждой стороны
@@ -97,13 +100,13 @@ export class Preview {
     }
     if (this.ctx.state === 'suspended') this.ctx.resume();
   }
+  // Громкость предпросмотра — settings.json → ui.monitorVol / ui.monitorMute (js/prefs.js)
   monitor() {
-    const v = Number(localStorage.getItem('ffm.monitorVol'));
-    return localStorage.getItem('ffm.monitorMute') === '1' ? 0 : (isFinite(v) && localStorage.getItem('ffm.monitorVol') !== null ? v : 1);
+    return getPref('ui.monitorMute', false) === true ? 0 : monitorVol();
   }
-  setMonitor(v, mute = localStorage.getItem('ffm.monitorMute') === '1') {
-    localStorage.setItem('ffm.monitorVol', String(v));
-    localStorage.setItem('ffm.monitorMute', mute ? '1' : '0');
+  setMonitor(v, mute = getPref('ui.monitorMute', false) === true) {
+    setPref('ui.monitorVol', v);
+    setPref('ui.monitorMute', !!mute);
     if (this.out) this.out.gain.value = this.monitor();
     else this.syncAudio(store.time, false);
     store.emit('monitor');
@@ -672,8 +675,8 @@ export class Preview {
 
 // Громкость предпросмотра (только то, что вы слышите; громкость в готовом видео — у клипов и дорожек)
 function monitorControl(preview) {
-  const vol = () => { const v = Number(localStorage.getItem('ffm.monitorVol')); return localStorage.getItem('ffm.monitorVol') !== null && isFinite(v) ? v : 1; };
-  const muted = () => localStorage.getItem('ffm.monitorMute') === '1';
+  const vol = monitorVol;
+  const muted = () => getPref('ui.monitorMute', false) === true;
   const b = h('button', { class: 'icon-btn', id: 'monitor-mute' });
   const slider = h('input', { type: 'range', min: '0', max: '100', class: 'monitor-slider', id: 'monitor-vol' });
   const upd = () => {

@@ -60,7 +60,7 @@
     await sleep(s === 'cache' || s === 'folders' ? 1500 : 300);
     check(document.querySelector('.set-body').dataset.section === s && document.querySelector('.set-body').childElementCount > 1, `section ${s} renders`);
     if (s === 'cache' || s === 'general') await window.api.testShot(`settings-${s}-${lang}`).catch(() => {});
-    if (s === 'cache') check(document.querySelectorAll('.cache-row').length === 5, `cache rows: ${document.querySelectorAll('.cache-row').length}`);
+    if (s === 'cache') check(document.querySelectorAll('.cache-row').length === 10 && !!document.querySelector('#cache-limit'), `cache rows: ${document.querySelectorAll('.cache-row').length}`);
     scan(document.querySelector('#settings'));
   }
 
@@ -89,7 +89,7 @@
   check(km.conflicts().has('Shift+KeyX') && document.querySelectorAll('.hk-key.conflict').length >= 2, 'conflict highlighted');
   await window.api.testShot(`settings-hotkeys-${lang}`).catch(() => {});
   const saved = await window.api.settingsGet();
-  check(saved.settings.keymap?.preset === 'premiere' && saved.settings.keymap.keys['clip.split']?.includes('Shift+KeyX'), 'keymap saved to config.json');
+  check(saved.settings.keymap?.preset === 'premiere' && saved.settings.keymap.keys['clip.split']?.includes('Shift+KeyX'), 'keymap saved to settings.json');
   closeAll();
   // Срабатывание по новой клавише: C (Premiere) — лезвие
   timeline.setTool('select');

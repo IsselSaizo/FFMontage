@@ -19,10 +19,11 @@ mod plancheck;
 mod plugins;
 mod procs;
 mod protocol;
+mod queue;
 mod selftest;
+mod settings;
 mod update;
 mod windows;
-
 
 fn main() {
     // Падение — в журнал <кэш>/app/logs/panic.log (у окна нет консоли)
@@ -98,6 +99,9 @@ fn run() {
             commands::settings_set,
             commands::cache_stats,
             commands::cache_clear,
+            commands::cache_autoclean,
+            commands::settings_migrate_local,
+            commands::paths_info,
             commands::media_pick,
             commands::media_probe,
             commands::media_thumbs,
@@ -105,6 +109,7 @@ fn run() {
             commands::media_audio_stream,
             commands::media_proxy,
             commands::enc_detect,
+            ff::enc_reset,
             commands::fx_reverse,
             commands::fx_freeze,
             commands::fx_frame,
@@ -155,9 +160,13 @@ fn run() {
             } else {
                 let _ = std::fs::create_dir_all(&paths::get().output_dir);
                 windows::open_main(&h);
-                tauri::async_runtime::spawn(async { ff::detect_encoders(&ff::find()).await; });
+                tauri::async_runtime::spawn(async {
+                    ff::detect_encoders(&ff::find()).await;
+                });
                 // Канал управления для ИИ-ассистента (MCP): только локально, с секретным ключом в папке кэша
                 control::start(h);
+                // Кэш: сироты, .part и автоочистка до лимита — уже после проверки «одна копия на папку кэша»
+                std::thread::spawn(cache::startup);
             }
             Ok(())
         })
@@ -186,11 +195,15 @@ fn run() {
 fn arm_exit_watchdog() {
     use std::sync::atomic::{AtomicBool, Ordering};
     static ARMED: AtomicBool = AtomicBool::new(false);
-    if ARMED.swap(true, Ordering::SeqCst) { return; }
+    if ARMED.swap(true, Ordering::SeqCst) {
+        return;
+    }
     std::thread::spawn(|| {
         std::thread::sleep(std::time::Duration::from_secs(5));
-        let _ = std::fs::OpenOptions::new().create(true).append(true).open(paths::get().logs.join("renderer.log"))
-            .and_then(|mut f| { use std::io::Write; writeln!(f, "[exit] watchdog: процесс не завершился за 5 с — завершаю принудительно") }); // i18n-ignore — служебный журнал
+        let _ = std::fs::OpenOptions::new().create(true).append(true).open(paths::get().logs.join("renderer.log")).and_then(|mut f| {
+            use std::io::Write;
+            writeln!(f, "[exit] watchdog: процесс не завершился за 5 с — завершаю принудительно")
+        }); // i18n-ignore — служебный журнал
         hard_exit(0);
     });
 }
@@ -198,7 +211,9 @@ fn arm_exit_watchdog() {
 #[cfg(windows)]
 fn hard_exit(code: u32) -> ! {
     use ::windows::Win32::System::Threading::{GetCurrentProcess, TerminateProcess};
-    unsafe { let _ = TerminateProcess(GetCurrentProcess(), code); }
+    unsafe {
+        let _ = TerminateProcess(GetCurrentProcess(), code);
+    }
     std::process::exit(code as i32)
 }
 

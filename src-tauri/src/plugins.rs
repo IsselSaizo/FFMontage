@@ -1,4 +1,4 @@
-// Плагины (M3): каталог <app_dir>/plugins/<id>/plugin.json, проверка манифестов, установка из папки / ZIP / GitHub,
+// Плагины (M3): каталог <папка данных>/plugins/<id>/plugin.json (paths::Paths::plugins_dir, FFM_PLUGINS_DIR), проверка манифестов, установка из папки / ZIP / GitHub,
 // хранилище данных плагина, сетевые запросы плагина и протокол plugin:// (файлы плагина для песочных iframe).
 // Общий контракт — .agent/plugins-contract.md. Права плагина проверяет окно; здесь — вторая линия защиты
 // (манифест перечитывается с диска, пути — только внутри папки плагина).
@@ -30,7 +30,9 @@ const MAX_SERVE_BYTES: u64 = 64 * 1024 * 1024;
 const SAFE_SRC: &str = include_str!("../../src/renderer/js/core/safeFilters.js");
 const SDK_JS: &str = include_str!("../../src/renderer/js/plugins/sdk.js");
 
-fn s(p: &Path) -> String { p.to_string_lossy().to_string() }
+fn s(p: &Path) -> String {
+    p.to_string_lossy().to_string()
+}
 
 // ---------------------------------------------------------------------------
 // Безопасные фильтры FFmpeg (один список с JS: js/core/safeFilters.js)
@@ -46,7 +48,9 @@ fn parse_safe(src: &str) -> Vec<String> {
         while let Some(a) = rest.find('\'') {
             let Some(b) = rest[a + 1..].find('\'') else { break };
             let name = &rest[a + 1..a + 1 + b];
-            if !name.is_empty() && !out.iter().any(|x| x == name) { out.push(name.to_string()); }
+            if !name.is_empty() && !out.iter().any(|x| x == name) {
+                out.push(name.to_string());
+            }
             rest = &rest[a + 2 + b..];
         }
     }
@@ -58,7 +62,9 @@ pub fn safe_filters() -> &'static [String] {
     LIST.get_or_init(|| parse_safe(SAFE_SRC))
 }
 
-pub fn is_safe_filter(name: &str) -> bool { safe_filters().iter().any(|f| f == name) }
+pub fn is_safe_filter(name: &str) -> bool {
+    safe_filters().iter().any(|f| f == name)
+}
 
 /// Как FORBIDDEN_OPTION в safeFilters.js: /file|^filename$|^model$|^sofa$|^url$|^commands?$/i
 pub fn forbidden_option(key: &str) -> bool {
@@ -69,11 +75,17 @@ pub fn forbidden_option(key: &str) -> bool {
 // ---------------------------------------------------------------------------
 // Каталог и адреса
 // ---------------------------------------------------------------------------
-pub fn plugins_dir() -> PathBuf { paths::get().plugins_dir.clone() }
+pub fn plugins_dir() -> PathBuf {
+    paths::get().plugins_dir.clone()
+}
 
 /// Начало адреса файлов плагина: <base><id>/<путь>
 pub fn base_url() -> &'static str {
-    if cfg!(windows) || cfg!(target_os = "android") { "http://plugin.localhost/" } else { "plugin://localhost/" }
+    if cfg!(windows) || cfg!(target_os = "android") {
+        "http://plugin.localhost/"
+    } else {
+        "plugin://localhost/"
+    }
 }
 
 /// ^[a-z0-9][a-z0-9-]{1,40}$, не "core"
@@ -86,12 +98,18 @@ pub fn valid_id(id: &str) -> bool {
 }
 
 fn check_id(id: &str) -> R<()> {
-    if valid_id(id) { Ok(()) } else { Err(tr!("Неверный id плагина: «{}»", "Invalid plugin id: \"{}\"", id)) }
+    if valid_id(id) {
+        Ok(())
+    } else {
+        Err(tr!("Неверный id плагина: «{}»", "Invalid plugin id: \"{}\"", id))
+    }
 }
 
 /// Относительный путь внутри папки плагина: без «..», «.», пустых частей, «\», «:» и управляющих символов
 pub fn safe_rel(p: &str) -> bool {
-    !p.is_empty() && p.len() <= 260 && !p.starts_with('/')
+    !p.is_empty()
+        && p.len() <= 260
+        && !p.starts_with('/')
         && !p.chars().any(|c| c == '\\' || c == ':' || c.is_control())
         && p.split('/').all(|seg| !seg.is_empty() && seg != "." && seg != "..")
 }
@@ -99,10 +117,15 @@ pub fn safe_rel(p: &str) -> bool {
 /// Имя хоста для права net:<host> (без порта, схемы, звёздочек)
 pub fn valid_host(h: &str) -> bool {
     let labels: Vec<&str> = h.split('.').collect();
-    !h.is_empty() && h.len() <= 253 && labels.len() >= 2
+    !h.is_empty()
+        && h.len() <= 253
+        && labels.len() >= 2
         && labels.iter().all(|l| {
             let b = l.as_bytes();
-            !b.is_empty() && b.len() <= 63 && b[0] != b'-' && b[b.len() - 1] != b'-'
+            !b.is_empty()
+                && b.len() <= 63
+                && b[0] != b'-'
+                && b[b.len() - 1] != b'-'
                 && b.iter().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || *c == b'-')
         })
 }
@@ -112,30 +135,46 @@ const PERMISSIONS: &[&str] = &["project:read", "project:write", "ui:panel", "sto
 fn text_or_lang(v: &Value) -> bool {
     match v {
         Value::String(t) => !t.trim().is_empty(),
-        Value::Object(o) => !o.is_empty() && o.values().all(|x| x.is_string()) && o.values().any(|x| !x.as_str().unwrap_or("").trim().is_empty()),
+        Value::Object(o) => {
+            !o.is_empty() && o.values().all(|x| x.is_string()) && o.values().any(|x| !x.as_str().unwrap_or("").trim().is_empty())
+        }
         _ => false,
     }
 }
 
 /// Проверка manifest; dir — папка плагина (тогда проверяется, что entry-файлы есть). Ok(id).
 pub fn check_manifest(m: &Value, dir: Option<&Path>) -> R<String> {
-    if !m.is_object() { return Err(tr!("plugin.json — не объект JSON", "plugin.json is not a JSON object").into()); }
+    if !m.is_object() {
+        return Err(tr!("plugin.json — не объект JSON", "plugin.json is not a JSON object").into());
+    }
     let id = m["id"].as_str().unwrap_or("");
     check_id(id)?;
-    if !text_or_lang(&m["name"]) { return Err(tr!("нет поля name", "the name field is missing").into()); }
+    if !text_or_lang(&m["name"]) {
+        return Err(tr!("нет поля name", "the name field is missing").into());
+    }
     let ver = m["version"].as_str().unwrap_or("");
-    if ver.trim().is_empty() || ver.len() > 40 { return Err(tr!("нет поля version", "the version field is missing").into()); }
+    if ver.trim().is_empty() || ver.len() > 40 {
+        return Err(tr!("нет поля version", "the version field is missing").into());
+    }
     if m["apiVersion"].as_u64() != Some(API_VERSION) {
         return Err(tr!("apiVersion должен быть {}", "apiVersion must be {}", API_VERSION));
     }
-    if !m["description"].is_null() && !text_or_lang(&m["description"]) { return Err(tr!("description — строка или объект ru/en", "description must be a string or an ru/en object").into()); }
+    if !m["description"].is_null() && !text_or_lang(&m["description"]) {
+        return Err(tr!("description — строка или объект ru/en", "description must be a string or an ru/en object").into());
+    }
     for k in ["author", "homepage"] {
-        if !m[k].is_null() && !m[k].is_string() { return Err(tr!("{} — строка", "{} must be a string", k)); }
+        if !m[k].is_null() && !m[k].is_string() {
+            return Err(tr!("{} — строка", "{} must be a string", k));
+        }
     }
     let file_ok = |rel: &str| -> R<()> {
-        if !safe_rel(rel) { return Err(tr!("путь «{}» должен быть внутри папки плагина", "path \"{}\" must be inside the plugin folder", rel)); }
+        if !safe_rel(rel) {
+            return Err(tr!("путь «{}» должен быть внутри папки плагина", "path \"{}\" must be inside the plugin folder", rel));
+        }
         if let Some(d) = dir {
-            if !d.join(rel).is_file() { return Err(tr!("нет файла «{}»", "file \"{}\" not found", rel)); }
+            if !d.join(rel).is_file() {
+                return Err(tr!("нет файла «{}»", "file \"{}\" not found", rel));
+            }
         }
         Ok(())
     };
@@ -144,12 +183,18 @@ pub fn check_manifest(m: &Value, dir: Option<&Path>) -> R<String> {
     }
     let c = &m["contributes"];
     if !c.is_null() {
-        if !c.is_object() { return Err(tr!("contributes — объект", "contributes must be an object").into()); }
+        if !c.is_object() {
+            return Err(tr!("contributes — объект", "contributes must be an object").into());
+        }
         for k in ["effects", "transitions", "audioEffects", "exportPresets", "textStyles", "keymaps", "actions", "panels"] {
-            if !c[k].is_null() && !c[k].is_array() { return Err(tr!("contributes.{} — массив", "contributes.{} must be an array", k)); }
+            if !c[k].is_null() && !c[k].is_array() {
+                return Err(tr!("contributes.{} — массив", "contributes.{} must be an array", k));
+            }
         }
         for p in c["panels"].as_array().into_iter().flatten() {
-            if !p["id"].is_string() { return Err(tr!("у панели нет id", "a panel has no id").into()); }
+            if !p["id"].is_string() {
+                return Err(tr!("у панели нет id", "a panel has no id").into());
+            }
             file_ok(p["entry"].as_str().ok_or(tr!("у панели нет entry", "a panel has no entry"))?)?;
         }
     }
@@ -158,7 +203,9 @@ pub fn check_manifest(m: &Value, dir: Option<&Path>) -> R<String> {
         for p in arr {
             let p = p.as_str().ok_or(tr!("permissions — массив строк", "permissions must be an array of strings"))?;
             let ok = PERMISSIONS.contains(&p) || p.strip_prefix("net:").map(valid_host).unwrap_or(false);
-            if !ok { return Err(tr!("неизвестное право «{}»", "unknown permission \"{}\"", p)); }
+            if !ok {
+                return Err(tr!("неизвестное право «{}»", "unknown permission \"{}\"", p));
+            }
         }
     }
     let f = &m["ffmpeg"];
@@ -168,30 +215,48 @@ pub fn check_manifest(m: &Value, dir: Option<&Path>) -> R<String> {
         }
         for x in f["filters"].as_array().into_iter().flatten() {
             let n = x.as_str().unwrap_or("");
-            if !is_safe_filter(n) { return Err(tr!("фильтр FFmpeg «{}» не разрешён", "FFmpeg filter \"{}\" is not allowed", n)); }
+            if !is_safe_filter(n) {
+                return Err(tr!("фильтр FFmpeg «{}» не разрешён", "FFmpeg filter \"{}\" is not allowed", n));
+            }
         }
     }
-    if !m["assets"].is_null() && !m["assets"].is_array() { return Err(tr!("assets — массив", "assets must be an array").into()); }
+    if !m["assets"].is_null() && !m["assets"].is_array() {
+        return Err(tr!("assets — массив", "assets must be an array").into());
+    }
     Ok(id.to_string())
 }
 
 fn read_json_file(file: &Path) -> R<Value> {
     let len = std::fs::metadata(file).map_err(|e| e.to_string())?.len();
-    if len > MAX_JSON { return Err(tr!("{} больше 1 МБ", "{} is larger than 1 MB", file.display())); }
+    if len > MAX_JSON {
+        return Err(tr!("{} больше 1 МБ", "{} is larger than 1 MB", file.display()));
+    }
     let text = std::fs::read_to_string(file).map_err(|e| e.to_string())?;
-    serde_json::from_str(text.trim_start_matches('\u{feff}')).map_err(|e| tr!("{}: ошибка JSON: {}", "{}: JSON error: {}", file.display(), e))
+    serde_json::from_str(text.trim_start_matches('\u{feff}'))
+        .map_err(|e| tr!("{}: ошибка JSON: {}", "{}: JSON error: {}", file.display(), e))
 }
 
-pub fn read_manifest(dir: &Path) -> R<Value> { read_json_file(&dir.join("plugin.json")) }
+pub fn read_manifest(dir: &Path) -> R<Value> {
+    read_json_file(&dir.join("plugin.json"))
+}
 
 /// Установленный плагин с проверенным манифестом (папка = id)
 fn installed(id: &str) -> R<(PathBuf, Value)> {
     check_id(id)?;
     let dir = plugins_dir().join(id);
-    if !dir.join("plugin.json").is_file() { return Err(tr!("Плагин «{}» не установлен", "Plugin \"{}\" is not installed", id)); }
+    if !dir.join("plugin.json").is_file() {
+        return Err(tr!("Плагин «{}» не установлен", "Plugin \"{}\" is not installed", id));
+    }
     let m = read_manifest(&dir)?;
     let mid = check_manifest(&m, Some(&dir))?;
-    if mid != id { return Err(tr!("id в plugin.json («{}») не совпадает с папкой «{}»", "the id in plugin.json (\"{}\") does not match the folder \"{}\"", mid, id)); }
+    if mid != id {
+        return Err(tr!(
+            "id в plugin.json («{}») не совпадает с папкой «{}»",
+            "the id in plugin.json (\"{}\") does not match the folder \"{}\"",
+            mid,
+            id
+        ));
+    }
     Ok((dir, m))
 }
 
@@ -208,15 +273,26 @@ pub fn list() -> Value {
     if let Ok(rd) = std::fs::read_dir(&dir) {
         for e in rd.flatten() {
             let name = e.file_name().to_string_lossy().to_string();
-            if name.starts_with('.') || !e.file_type().map(|t| t.is_dir()).unwrap_or(false) { continue; }
+            if name.starts_with('.') || !e.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                continue;
+            }
             let pdir = e.path();
-            if !pdir.join("plugin.json").exists() { continue; }
+            if !pdir.join("plugin.json").exists() {
+                continue;
+            }
             let mut item = json!({ "id": name, "dir": s(&pdir), "manifest": Value::Null });
             match read_manifest(&pdir) {
                 Ok(m) => {
                     match check_manifest(&m, Some(&pdir)) {
                         Ok(id) if id == name => {}
-                        Ok(id) => item["error"] = json!(tr!("id в plugin.json («{}») не совпадает с папкой «{}»", "the id in plugin.json (\"{}\") does not match the folder \"{}\"", id, name)),
+                        Ok(id) => {
+                            item["error"] = json!(tr!(
+                                "id в plugin.json («{}») не совпадает с папкой «{}»",
+                                "the id in plugin.json (\"{}\") does not match the folder \"{}\"",
+                                id,
+                                name
+                            ))
+                        }
                         Err(e) => item["error"] = json!(e),
                     }
                     item["manifest"] = m;
@@ -231,7 +307,9 @@ pub fn list() -> Value {
 }
 
 #[tauri::command]
-pub fn plugins_list() -> Value { list() }
+pub fn plugins_list() -> Value {
+    list()
+}
 
 #[tauri::command]
 pub async fn plugins_pick(window: WebviewWindow, kind: Option<String>) -> Option<String> {
@@ -251,7 +329,9 @@ pub async fn plugins_pick(window: WebviewWindow, kind: Option<String>) -> Option
 pub fn plugins_remove(id: String) -> R<bool> {
     check_id(&id)?;
     let dir = plugins_dir().join(&id);
-    if !dir.is_dir() { return Err(tr!("Плагин «{}» не установлен", "Plugin \"{}\" is not installed", id)); }
+    if !dir.is_dir() {
+        return Err(tr!("Плагин «{}» не установлен", "Plugin \"{}\" is not installed", id));
+    }
     // Сначала переименовать (файлы могут быть открыты), потом удалить
     let tmp = plugins_dir().join(format!(".old-{id}-{}", stamp()));
     std::fs::rename(&dir, &tmp).map_err(|e| tr!("Не удалось удалить плагин: {}", "Cannot remove the plugin: {}", e))?;
@@ -265,7 +345,9 @@ pub fn plugins_open_dir(id: Option<String>) -> R<bool> {
         Some(id) => {
             check_id(&id)?;
             let d = plugins_dir().join(&id);
-            if !d.is_dir() { return Err(tr!("Плагин «{}» не установлен", "Plugin \"{}\" is not installed", id)); }
+            if !d.is_dir() {
+                return Err(tr!("Плагин «{}» не установлен", "Plugin \"{}\" is not installed", id));
+            }
             d
         }
         None => {
@@ -288,7 +370,9 @@ fn stamp() -> u128 {
 /// Временная папка внутри каталога плагинов (тот же диск — rename атомарен); удаляется при drop
 struct Staging(PathBuf);
 impl Drop for Staging {
-    fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.0); }
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
 }
 
 fn staging() -> R<Staging> {
@@ -297,13 +381,20 @@ fn staging() -> R<Staging> {
     Ok(Staging(d))
 }
 
-struct Budget { bytes: u64, files: usize }
+struct Budget {
+    bytes: u64,
+    files: usize,
+}
 
 impl Budget {
-    fn new() -> Self { Budget { bytes: 0, files: 0 } }
+    fn new() -> Self {
+        Budget { bytes: 0, files: 0 }
+    }
     fn file(&mut self) -> R<()> {
         self.files += 1;
-        if self.files > MAX_INSTALL_FILES { return Err(tr!("В плагине больше {} файлов", "The plugin has more than {} files", MAX_INSTALL_FILES)); }
+        if self.files > MAX_INSTALL_FILES {
+            return Err(tr!("В плагине больше {} файлов", "The plugin has more than {} files", MAX_INSTALL_FILES));
+        }
         Ok(())
     }
 }
@@ -311,7 +402,9 @@ impl Budget {
 /// Путь записи ZIP → относительный путь внутри папки, или None (zip-slip: «..», абсолютный путь, диск, «\»-обход)
 pub fn zip_entry_path(name: &str) -> Option<PathBuf> {
     let n = name.replace('\\', "/");
-    if n.starts_with('/') || n.contains(':') || n.chars().any(|c| c.is_control()) { return None; }
+    if n.starts_with('/') || n.contains(':') || n.chars().any(|c| c.is_control()) {
+        return None;
+    }
     let mut out = PathBuf::new();
     for seg in n.split('/') {
         match seg {
@@ -320,21 +413,30 @@ pub fn zip_entry_path(name: &str) -> Option<PathBuf> {
             s => out.push(s),
         }
     }
-    if out.as_os_str().is_empty() { None } else { Some(out) }
+    if out.as_os_str().is_empty() {
+        None
+    } else {
+        Some(out)
+    }
 }
 
 /// Распаковать архив в dst. Любая подозрительная запись — ошибка (весь архив отклоняется).
 pub fn extract_zip(file: &Path, dst: &Path) -> R<()> {
     let len = std::fs::metadata(file).map_err(|e| e.to_string())?.len();
-    if len > MAX_INSTALL_BYTES { return Err(tr!("Архив больше 100 МБ", "The archive is larger than 100 MB").into()); }
+    if len > MAX_INSTALL_BYTES {
+        return Err(tr!("Архив больше 100 МБ", "The archive is larger than 100 MB").into());
+    }
     let f = std::fs::File::open(file).map_err(|e| e.to_string())?;
     let mut zip = zip::ZipArchive::new(std::io::BufReader::new(f)).map_err(|e| tr!("Не ZIP-архив: {}", "Not a ZIP archive: {}", e))?;
-    if zip.len() > MAX_INSTALL_FILES { return Err(tr!("В архиве больше {} файлов", "The archive has more than {} files", MAX_INSTALL_FILES)); }
+    if zip.len() > MAX_INSTALL_FILES {
+        return Err(tr!("В архиве больше {} файлов", "The archive has more than {} files", MAX_INSTALL_FILES));
+    }
     let mut budget = Budget::new();
     for i in 0..zip.len() {
         let mut ent = zip.by_index(i).map_err(|e| e.to_string())?;
         let name = ent.name().to_string();
-        let rel = zip_entry_path(&name).ok_or_else(|| tr!("Недопустимый путь в архиве: «{}»", "Invalid path in the archive: \"{}\"", name))?;
+        let rel =
+            zip_entry_path(&name).ok_or_else(|| tr!("Недопустимый путь в архиве: «{}»", "Invalid path in the archive: \"{}\"", name))?;
         if ent.unix_mode().map(|m| m & 0o170000 == 0o120000).unwrap_or(false) {
             return Err(tr!("В архиве символьная ссылка: «{}»", "The archive contains a symbolic link: \"{}\"", name));
         }
@@ -344,13 +446,17 @@ pub fn extract_zip(file: &Path, dst: &Path) -> R<()> {
             continue;
         }
         budget.file()?;
-        if let Some(p) = out.parent() { std::fs::create_dir_all(p).map_err(|e| e.to_string())?; }
+        if let Some(p) = out.parent() {
+            std::fs::create_dir_all(p).map_err(|e| e.to_string())?;
+        }
         let mut w = std::fs::File::create(&out).map_err(|e| e.to_string())?;
         // Размер из заголовка не верим: считаем реально распакованное
         let left = MAX_INSTALL_BYTES - budget.bytes;
         let n = std::io::copy(&mut (&mut ent).take(left + 1), &mut w).map_err(|e| e.to_string())?;
         budget.bytes += n;
-        if budget.bytes > MAX_INSTALL_BYTES { return Err(tr!("Распакованный плагин больше 100 МБ", "The unpacked plugin is larger than 100 MB").into()); }
+        if budget.bytes > MAX_INSTALL_BYTES {
+            return Err(tr!("Распакованный плагин больше 100 МБ", "The unpacked plugin is larger than 100 MB").into());
+        }
     }
     Ok(())
 }
@@ -361,14 +467,18 @@ fn copy_dir(src: &Path, dst: &Path, budget: &mut Budget) -> R<()> {
     for e in std::fs::read_dir(src).map_err(|e| e.to_string())?.flatten() {
         let name = e.file_name();
         let md = std::fs::symlink_metadata(e.path()).map_err(|e| e.to_string())?;
-        if md.file_type().is_symlink() || name == ".git" { continue; }
+        if md.file_type().is_symlink() || name == ".git" {
+            continue;
+        }
         let to = dst.join(&name);
         if md.is_dir() {
             copy_dir(&e.path(), &to, budget)?;
         } else if md.is_file() {
             budget.file()?;
             budget.bytes += md.len();
-            if budget.bytes > MAX_INSTALL_BYTES { return Err(tr!("Плагин больше 100 МБ", "The plugin is larger than 100 MB").into()); }
+            if budget.bytes > MAX_INSTALL_BYTES {
+                return Err(tr!("Плагин больше 100 МБ", "The plugin is larger than 100 MB").into());
+            }
             std::fs::copy(e.path(), &to).map_err(|e| e.to_string())?;
         }
     }
@@ -377,12 +487,26 @@ fn copy_dir(src: &Path, dst: &Path, budget: &mut Budget) -> R<()> {
 
 /// plugin.json — в корне или в единственной вложенной папке (служебные __MACOSX, .DS_Store не считаются)
 fn find_root(x: &Path) -> R<PathBuf> {
-    if x.join("plugin.json").is_file() { return Ok(x.to_path_buf()); }
-    let entries: Vec<PathBuf> = std::fs::read_dir(x).map_err(|e| e.to_string())?.flatten()
-        .filter(|e| { let n = e.file_name().to_string_lossy().to_string(); n != "__MACOSX" && n != ".DS_Store" })
-        .map(|e| e.path()).collect();
-    if entries.len() == 1 && entries[0].is_dir() && entries[0].join("plugin.json").is_file() { return Ok(entries[0].clone()); }
-    Err(tr!("plugin.json не найден (нужен в корне архива/папки или в единственной вложенной папке)", "plugin.json not found (it must be in the root of the archive/folder or in a single nested folder)").into())
+    if x.join("plugin.json").is_file() {
+        return Ok(x.to_path_buf());
+    }
+    let entries: Vec<PathBuf> = std::fs::read_dir(x)
+        .map_err(|e| e.to_string())?
+        .flatten()
+        .filter(|e| {
+            let n = e.file_name().to_string_lossy().to_string();
+            n != "__MACOSX" && n != ".DS_Store"
+        })
+        .map(|e| e.path())
+        .collect();
+    if entries.len() == 1 && entries[0].is_dir() && entries[0].join("plugin.json").is_file() {
+        return Ok(entries[0].clone());
+    }
+    Err(tr!(
+        "plugin.json не найден (нужен в корне архива/папки или в единственной вложенной папке)",
+        "plugin.json not found (it must be in the root of the archive/folder or in a single nested folder)"
+    )
+    .into())
 }
 
 /// Проверить распакованный плагин и атомарно поставить его на место <plugins>/<id>
@@ -394,13 +518,19 @@ fn install_from(root: &Path) -> R<Value> {
     let replaced = target.exists();
     let old = dir.join(format!(".old-{id}-{}", stamp()));
     if replaced {
-        std::fs::rename(&target, &old).map_err(|e| tr!("Не удалось заменить старую версию (файлы заняты?): {}", "Cannot replace the old version (files in use?): {}", e))?;
+        std::fs::rename(&target, &old).map_err(|e| {
+            tr!("Не удалось заменить старую версию (файлы заняты?): {}", "Cannot replace the old version (files in use?): {}", e)
+        })?;
     }
     if let Err(e) = std::fs::rename(root, &target) {
-        if replaced { let _ = std::fs::rename(&old, &target); }
+        if replaced {
+            let _ = std::fs::rename(&old, &target);
+        }
         return Err(tr!("Не удалось установить плагин: {}", "Cannot install the plugin: {}", e));
     }
-    if replaced { let _ = std::fs::remove_dir_all(&old); }
+    if replaced {
+        let _ = std::fs::remove_dir_all(&old);
+    }
     Ok(json!({ "id": id, "manifest": manifest, "replaced": replaced }))
 }
 
@@ -427,16 +557,39 @@ pub async fn plugins_install(source: String) -> R<Value> {
 
 // --- GitHub: последний релиз → первый ассет .zip; если есть <zip>.sha256 или SHA256SUMS* — сверить ---
 fn valid_repo(repo: &str) -> bool {
-    let ok = |p: &str| !p.is_empty() && p.len() <= 100 && p != "." && p != ".." && p.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.');
+    let ok = |p: &str| {
+        !p.is_empty()
+            && p.len() <= 100
+            && p != "."
+            && p != ".."
+            && p.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
+    };
     matches!(repo.split_once('/'), Some((a, b)) if ok(a) && ok(b))
 }
 
 async fn curl_get(url: &str, out: Option<&Path>, max_bytes: u64) -> R<Vec<u8>> {
     let curl = crate::update::which("curl").ok_or(tr!("curl не найден", "curl not found"))?;
     let mut c = ff::command(&curl);
-    c.args(["-q", "-sSL", "--fail", "--proto", "=https", "--proto-redir", "=https", "--max-time", "120", "--max-filesize", &max_bytes.to_string(),
-        "-H", "Accept: application/vnd.github+json", "-H", "User-Agent: FF-Montage"]);
-    if let Some(o) = out { c.arg("-o").arg(o); }
+    c.args([
+        "-q",
+        "-sSL",
+        "--fail",
+        "--proto",
+        "=https",
+        "--proto-redir",
+        "=https",
+        "--max-time",
+        "120",
+        "--max-filesize",
+        &max_bytes.to_string(),
+        "-H",
+        "Accept: application/vnd.github+json",
+        "-H",
+        "User-Agent: FF-Montage",
+    ]);
+    if let Some(o) = out {
+        c.arg("-o").arg(o);
+    }
     c.arg("--url").arg(url);
     let r = c.output().await.map_err(|e| e.to_string())?;
     if !r.status.success() {
@@ -456,9 +609,13 @@ pub fn expected_sha(text: &str, name: &str, single: bool) -> Option<String> {
     for line in text.lines() {
         let mut parts = line.split_whitespace();
         let Some(h) = parts.next() else { continue };
-        if !is_hex(h) { continue; }
+        if !is_hex(h) {
+            continue;
+        }
         let file = parts.next().map(|f| f.trim_start_matches('*'));
-        if file == Some(name) || (single && file.is_none_or(|f| f.ends_with(name))) { return Some(h.to_ascii_lowercase()); }
+        if file == Some(name) || (single && file.is_none_or(|f| f.ends_with(name))) {
+            return Some(h.to_ascii_lowercase());
+        }
     }
     None
 }
@@ -466,16 +623,22 @@ pub fn expected_sha(text: &str, name: &str, single: bool) -> Option<String> {
 #[tauri::command]
 pub async fn plugins_install_github(repo: String) -> R<Value> {
     let repo = repo.trim().trim_start_matches("https://github.com/").trim_end_matches('/').to_string();
-    if !valid_repo(&repo) { return Err(tr!("Укажите репозиторий в виде owner/name", "Enter the repository as owner/name").into()); }
+    if !valid_repo(&repo) {
+        return Err(tr!("Укажите репозиторий в виде owner/name", "Enter the repository as owner/name").into());
+    }
     let body = curl_get(&format!("https://api.github.com/repos/{repo}/releases/latest"), None, MAX_JSON * 4).await?;
     let rel: Value = serde_json::from_slice(&body).map_err(|_| tr!("GitHub не ответил", "GitHub did not respond").to_string())?;
     let assets = rel["assets"].as_array().cloned().unwrap_or_default();
     let name_of = |a: &Value| a["name"].as_str().unwrap_or("").to_string();
     let url_of = |a: &Value| a["browser_download_url"].as_str().unwrap_or("").to_string();
-    let zip = assets.iter().find(|a| name_of(a).to_lowercase().ends_with(".zip"))
+    let zip = assets
+        .iter()
+        .find(|a| name_of(a).to_lowercase().ends_with(".zip"))
         .ok_or(tr!("В последнем релизе нет ZIP-архива", "The latest release has no ZIP archive"))?;
     let zip_name = name_of(zip);
-    if !url_of(zip).starts_with("https://") { return Err(tr!("Неверный адрес архива", "Invalid archive URL").into()); }
+    if !url_of(zip).starts_with("https://") {
+        return Err(tr!("Неверный адрес архива", "Invalid archive URL").into());
+    }
     let st = staging()?;
     let file = st.0.join("plugin.zip");
     curl_get(&url_of(zip), Some(&file), MAX_INSTALL_BYTES).await?;
@@ -489,7 +652,9 @@ pub async fn plugins_install_github(repo: String) -> R<Value> {
         let want = expected_sha(&text, &zip_name, single)
             .ok_or_else(|| tr!("В {} нет суммы для {}", "{} has no checksum for {}", name_of(a), zip_name))?;
         let got = sha256_hex(&data);
-        if got != want { return Err(tr!("Контрольная сумма архива не совпала ({} ≠ {})", "Archive checksum mismatch ({} ≠ {})", got, want)); }
+        if got != want {
+            return Err(tr!("Контрольная сумма архива не совпала ({} ≠ {})", "Archive checksum mismatch ({} ≠ {})", got, want));
+        }
         verified = true;
     }
     let st_path = st.0.clone();
@@ -498,7 +663,9 @@ pub async fn plugins_install_github(repo: String) -> R<Value> {
         std::fs::create_dir_all(&x).map_err(|e| e.to_string())?;
         extract_zip(&st_path.join("plugin.zip"), &x)?;
         install_from(&find_root(&x)?)
-    }).await.map_err(|e| e.to_string())??;
+    })
+    .await
+    .map_err(|e| e.to_string())??;
     drop(st);
     r["sha256Verified"] = json!(verified);
     r["asset"] = json!(zip_name);
@@ -508,10 +675,16 @@ pub async fn plugins_install_github(repo: String) -> R<Value> {
 // ---------------------------------------------------------------------------
 // Хранилище плагина: <plugins>/.data/<id>.json (≤ 1 МБ)
 // ---------------------------------------------------------------------------
-fn storage_file(id: &str) -> PathBuf { plugins_dir().join(".data").join(format!("{id}.json")) }
+fn storage_file(id: &str) -> PathBuf {
+    plugins_dir().join(".data").join(format!("{id}.json"))
+}
 
 fn need_permission(m: &Value, perm: &str) -> R<()> {
-    if permissions(m).iter().any(|p| p == perm) { Ok(()) } else { Err(tr!("У плагина нет права «{}»", "The plugin has no \"{}\" permission", perm)) }
+    if permissions(m).iter().any(|p| p == perm) {
+        Ok(())
+    } else {
+        Err(tr!("У плагина нет права «{}»", "The plugin has no \"{}\" permission", perm))
+    }
 }
 
 #[tauri::command]
@@ -519,7 +692,9 @@ pub fn plugin_storage_get(id: String) -> R<Value> {
     let (_, m) = installed(&id)?;
     need_permission(&m, "storage")?;
     let f = storage_file(&id);
-    if !f.exists() { return Ok(json!({})); }
+    if !f.exists() {
+        return Ok(json!({}));
+    }
     let v = read_json_file(&f)?;
     Ok(if v.is_object() { v } else { json!({}) })
 }
@@ -528,11 +703,17 @@ pub fn plugin_storage_get(id: String) -> R<Value> {
 pub fn plugin_storage_set(id: String, data: Value) -> R<bool> {
     let (_, m) = installed(&id)?;
     need_permission(&m, "storage")?;
-    if !data.is_object() { return Err(tr!("Данные плагина — объект JSON", "Plugin data must be a JSON object").into()); }
+    if !data.is_object() {
+        return Err(tr!("Данные плагина — объект JSON", "Plugin data must be a JSON object").into());
+    }
     let text = serde_json::to_string(&data).map_err(|e| e.to_string())?;
-    if text.len() as u64 > MAX_JSON { return Err(tr!("Данные плагина больше 1 МБ", "Plugin data is larger than 1 MB").into()); }
+    if text.len() as u64 > MAX_JSON {
+        return Err(tr!("Данные плагина больше 1 МБ", "Plugin data is larger than 1 MB").into());
+    }
     let f = storage_file(&id);
-    if let Some(d) = f.parent() { std::fs::create_dir_all(d).map_err(|e| e.to_string())?; }
+    if let Some(d) = f.parent() {
+        std::fs::create_dir_all(d).map_err(|e| e.to_string())?;
+    }
     let tmp = f.with_extension("json.tmp");
     std::fs::write(&tmp, text).and_then(|_| std::fs::rename(&tmp, &f)).map_err(|e| e.to_string())?;
     Ok(true)
@@ -552,12 +733,18 @@ pub struct NetRequest {
 /// Хост из адреса, если запрос разрешён правами hosts
 pub fn net_allowed(url: &str, hosts: &[String]) -> R<()> {
     let u = tauri::Url::parse(url).map_err(|_| tr!("Неверный адрес: {}", "Invalid URL: {}", url))?;
-    if u.scheme() != "https" { return Err(tr!("Разрешены только адреса https://", "Only https:// URLs are allowed").into()); }
+    if u.scheme() != "https" {
+        return Err(tr!("Разрешены только адреса https://", "Only https:// URLs are allowed").into());
+    }
     if !u.username().is_empty() || u.password().is_some() || u.port().is_some_and(|p| p != 443) {
         return Err(tr!("Адрес с логином или портом не разрешён", "URLs with credentials or a port are not allowed").into());
     }
     let host = u.host_str().unwrap_or("").to_ascii_lowercase();
-    if hosts.iter().any(|h| *h == host) { Ok(()) } else { Err(tr!("У плагина нет права net:{}", "The plugin has no net:{} permission", host)) }
+    if hosts.contains(&host) {
+        Ok(())
+    } else {
+        Err(tr!("У плагина нет права net:{}", "The plugin has no net:{} permission", host))
+    }
 }
 
 /// Разбор ответа curl -i: пропускаем «100 Continue» и «Connection established» прокси
@@ -566,17 +753,25 @@ fn parse_http(raw: &[u8]) -> (u16, serde_json::Map<String, Value>, Vec<u8>) {
     loop {
         let (head, body) = match rest.windows(4).position(|w| w == b"\r\n\r\n") {
             Some(i) => (&rest[..i], &rest[i + 4..]),
-            None => match rest.windows(2).position(|w| w == b"\n\n") { Some(i) => (&rest[..i], &rest[i + 2..]), None => (rest, &rest[rest.len()..]) },
+            None => match rest.windows(2).position(|w| w == b"\n\n") {
+                Some(i) => (&rest[..i], &rest[i + 2..]),
+                None => (rest, &rest[rest.len()..]),
+            },
         };
         let text = String::from_utf8_lossy(head).to_string();
         let mut lines = text.lines();
         let status_line = lines.next().unwrap_or("");
         let code: u16 = status_line.split_whitespace().nth(1).and_then(|c| c.parse().ok()).unwrap_or(0);
         let interim = code < 200 || status_line.to_ascii_lowercase().contains("connection established");
-        if interim && body.starts_with(b"HTTP/") { rest = body; continue; }
+        if interim && body.starts_with(b"HTTP/") {
+            rest = body;
+            continue;
+        }
         let mut headers = serde_json::Map::new();
         for l in lines {
-            if let Some((k, v)) = l.split_once(':') { headers.insert(k.trim().to_ascii_lowercase(), json!(v.trim())); }
+            if let Some((k, v)) = l.split_once(':') {
+                headers.insert(k.trim().to_ascii_lowercase(), json!(v.trim()));
+            }
         }
         return (code, headers, body.to_vec());
     }
@@ -596,7 +791,9 @@ pub async fn plugin_net_fetch(id: String, request: NetRequest) -> R<Value> {
     // -q — без ~/.curlrc; -g — без «глоббинга» {}/[] в адресе; без -L — редиректы на другие хосты не идут
     c.args(["-q", "-g", "-sS", "-i", "--proto", "=https", "--max-time", "30", "--max-filesize", &MAX_NET_BYTES.to_string(), "-X", &method]);
     let headers = request.headers.unwrap_or_default();
-    if headers.len() > 64 { return Err(tr!("Слишком много заголовков", "Too many headers").into()); }
+    if headers.len() > 64 {
+        return Err(tr!("Слишком много заголовков", "Too many headers").into());
+    }
     for (k, v) in &headers {
         let v = v.as_str().map(str::to_string).unwrap_or_else(|| v.to_string());
         if k.is_empty() || !k.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') || v.contains(['\r', '\n']) {
@@ -605,8 +802,12 @@ pub async fn plugin_net_fetch(id: String, request: NetRequest) -> R<Value> {
         c.arg("-H").arg(format!("{k}: {v}"));
     }
     let body = request.body.unwrap_or_default();
-    if body.len() > MAX_NET_BYTES { return Err(tr!("Тело запроса больше 5 МБ", "The request body is larger than 5 MB").into()); }
-    if !body.is_empty() { c.args(["--data-binary", "@-"]).stdin(std::process::Stdio::piped()); }
+    if body.len() > MAX_NET_BYTES {
+        return Err(tr!("Тело запроса больше 5 МБ", "The request body is larger than 5 MB").into());
+    }
+    if !body.is_empty() {
+        c.args(["--data-binary", "@-"]).stdin(std::process::Stdio::piped());
+    }
     c.arg("--url").arg(&request.url);
     let mut child = c.spawn().map_err(|e| e.to_string())?;
     if !body.is_empty() {
@@ -622,9 +823,13 @@ pub async fn plugin_net_fetch(id: String, request: NetRequest) -> R<Value> {
         let mut chunk = vec![0u8; 64 * 1024];
         loop {
             let n = so.read(&mut chunk).await.map_err(|e| e.to_string())?;
-            if n == 0 { break; }
+            if n == 0 {
+                break;
+            }
             buf.extend_from_slice(&chunk[..n]);
-            if buf.len() > MAX_NET_BYTES + 256 * 1024 { return Err(tr!("Ответ больше 5 МБ", "The response is larger than 5 MB").to_string()); }
+            if buf.len() > MAX_NET_BYTES + 256 * 1024 {
+                return Err(tr!("Ответ больше 5 МБ", "The response is larger than 5 MB").to_string());
+            }
         }
         Ok(buf)
     };
@@ -637,7 +842,9 @@ pub async fn plugin_net_fetch(id: String, request: NetRequest) -> R<Value> {
         return Err(tr!("Запрос не выполнен: {}", "Request failed: {}", String::from_utf8_lossy(&out.stderr).trim()));
     }
     let (status, headers, body) = parse_http(&raw);
-    if body.len() > MAX_NET_BYTES { return Err(tr!("Ответ больше 5 МБ", "The response is larger than 5 MB").into()); }
+    if body.len() > MAX_NET_BYTES {
+        return Err(tr!("Ответ больше 5 МБ", "The response is larger than 5 MB").into());
+    }
     Ok(json!({ "status": status, "headers": headers, "body": String::from_utf8_lossy(&body) }))
 }
 
@@ -672,13 +879,15 @@ pub fn csp(id: &str) -> String {
 fn reply(status: StatusCode, id: &str, typ: &str, body: Vec<u8>) -> Response<Vec<u8>> {
     // Неизвестный id — всё равно самая строгая политика
     let policy = if valid_id(id) { csp(id) } else { "sandbox; default-src 'none'".to_string() };
-    Response::builder().status(status)
+    Response::builder()
+        .status(status)
         .header("Content-Type", typ)
         .header("Access-Control-Allow-Origin", "*")
         .header("X-Content-Type-Options", "nosniff")
         .header("Content-Security-Policy", policy)
         .header("Cache-Control", "no-store")
-        .body(body).unwrap()
+        .body(body)
+        .unwrap()
 }
 
 /// <script src="/<id>/__sdk.js"> сразу после <head …> или в начало документа
@@ -705,10 +914,16 @@ pub fn main_html(id: &str, entry: &str) -> String {
 
 /// Файл rel внутри dir (после разрешения символьных ссылок — всё ещё внутри)
 pub fn resolve_inside(dir: &Path, rel: &str) -> Option<PathBuf> {
-    if !safe_rel(rel) { return None; }
+    if !safe_rel(rel) {
+        return None;
+    }
     let root = dir.canonicalize().ok()?;
     let file = dir.join(rel).canonicalize().ok()?;
-    if file.starts_with(&root) && file.is_file() { Some(file) } else { None }
+    if file.starts_with(&root) && file.is_file() {
+        Some(file)
+    } else {
+        None
+    }
 }
 
 pub fn handle(req: &Request<Vec<u8>>) -> Response<Vec<u8>> {
@@ -716,9 +931,13 @@ pub fn handle(req: &Request<Vec<u8>>) -> Response<Vec<u8>> {
     let decoded = percent_decode_str(raw).decode_utf8_lossy().to_string();
     let (id, rest) = decoded.split_once('/').unwrap_or((decoded.as_str(), ""));
     let not_found = || reply(StatusCode::NOT_FOUND, id, "text/plain; charset=utf-8", b"Not found".to_vec());
-    if !valid_id(id) { return not_found(); }
+    if !valid_id(id) {
+        return not_found();
+    }
     let dir = plugins_dir().join(id);
-    if !dir.join("plugin.json").is_file() { return not_found(); }
+    if !dir.join("plugin.json").is_file() {
+        return not_found();
+    }
     match rest {
         "__sdk.js" => return reply(StatusCode::OK, id, "text/javascript; charset=utf-8", SDK_JS.as_bytes().to_vec()),
         "__main.html" => {
@@ -731,7 +950,9 @@ pub fn handle(req: &Request<Vec<u8>>) -> Response<Vec<u8>> {
         _ => {}
     }
     let Some(file) = resolve_inside(&dir, rest) else { return not_found() };
-    if std::fs::metadata(&file).map(|m| m.len()).unwrap_or(u64::MAX) > MAX_SERVE_BYTES { return not_found(); }
+    if std::fs::metadata(&file).map(|m| m.len()).unwrap_or(u64::MAX) > MAX_SERVE_BYTES {
+        return not_found();
+    }
     let Ok(mut data) = std::fs::read(&file) else { return not_found() };
     let typ = mime(rest);
     if typ.starts_with("text/html") {
@@ -750,14 +971,22 @@ mod tests {
     fn safe_list_parsed() {
         let f = safe_filters();
         assert!(f.len() > 100, "{}", f.len());
-        for n in ["setpts", "xfade", "overlay", "curves", "reverse", "rotate", "split", "color"] { assert!(is_safe_filter(n), "{n}"); }
-        for n in ["movie", "amovie", "sendcmd", "lut3d", "subtitles", "drawtext", "ladspa", "arnndn", "zmq", "BEGIN-FILTERS"] { assert!(!is_safe_filter(n), "{n}"); }
+        for n in ["setpts", "xfade", "overlay", "curves", "reverse", "rotate", "split", "color"] {
+            assert!(is_safe_filter(n), "{n}");
+        }
+        for n in ["movie", "amovie", "sendcmd", "lut3d", "subtitles", "drawtext", "ladspa", "arnndn", "zmq", "BEGIN-FILTERS"] {
+            assert!(!is_safe_filter(n), "{n}");
+        }
     }
 
     #[test]
     fn forbidden_keys() {
-        for k in ["file", "psfile", "FileName", "dumpfile", "model", "SOFA", "url", "command", "commands"] { assert!(forbidden_option(k), "{k}"); }
-        for k in ["preset", "master", "s", "expr", "models", "urls2"] { assert!(!forbidden_option(k), "{k}"); }
+        for k in ["file", "psfile", "FileName", "dumpfile", "model", "SOFA", "url", "command", "commands"] {
+            assert!(forbidden_option(k), "{k}");
+        }
+        for k in ["preset", "master", "s", "expr", "models", "urls2"] {
+            assert!(!forbidden_option(k), "{k}");
+        }
     }
 
     #[test]
@@ -766,8 +995,16 @@ mod tests {
         assert!(!valid_id("core") && !valid_id("a") && !valid_id("-x") && !valid_id("Big") && !valid_id("a_b") && !valid_id("../x"));
         assert!(!valid_id(&"a".repeat(42)));
         assert!(safe_rel("main.js") && safe_rel("ui/panel.html"));
-        for bad in ["", "../x.js", "a/../../x", "/abs.js", "C:/x.js", "a\\b.js", "./a.js", "a//b"] { assert!(!safe_rel(bad), "{bad}"); }
-        assert!(valid_host("api.example.com") && !valid_host("localhost") && !valid_host("*.x.com") && !valid_host("x.com:8080") && !valid_host("X.com"));
+        for bad in ["", "../x.js", "a/../../x", "/abs.js", "C:/x.js", "a\\b.js", "./a.js", "a//b"] {
+            assert!(!safe_rel(bad), "{bad}");
+        }
+        assert!(
+            valid_host("api.example.com")
+                && !valid_host("localhost")
+                && !valid_host("*.x.com")
+                && !valid_host("x.com:8080")
+                && !valid_host("X.com")
+        );
     }
 
     fn manifest() -> Value {
@@ -779,11 +1016,19 @@ mod tests {
     #[test]
     fn manifest_check() {
         assert_eq!(check_manifest(&manifest(), None).unwrap(), "vignette");
-        let bad = |f: &dyn Fn(&mut Value)| { let mut m = manifest(); f(&mut m); check_manifest(&m, None).is_err() };
+        let bad = |f: &dyn Fn(&mut Value)| {
+            let mut m = manifest();
+            f(&mut m);
+            check_manifest(&m, None).is_err()
+        };
         assert!(bad(&|m| m["id"] = json!("core")));
         assert!(bad(&|m| m["id"] = json!("Bad Id")));
-        assert!(bad(&|m| { m.as_object_mut().unwrap().remove("name"); }));
-        assert!(bad(&|m| { m.as_object_mut().unwrap().remove("version"); }));
+        assert!(bad(&|m| {
+            m.as_object_mut().unwrap().remove("name");
+        }));
+        assert!(bad(&|m| {
+            m.as_object_mut().unwrap().remove("version");
+        }));
         assert!(bad(&|m| m["apiVersion"] = json!(2)));
         assert!(bad(&|m| m["entry"] = json!("../main.js")));
         assert!(bad(&|m| m["entry"] = json!("/etc/main.js")));
@@ -876,8 +1121,15 @@ mod tests {
         let hosts = vec!["api.example.com".to_string()];
         assert!(net_allowed("https://api.example.com/v1?q=1", &hosts).is_ok());
         assert!(net_allowed("https://API.example.com/v1", &hosts).is_ok());
-        for bad in ["http://api.example.com/", "https://evil.com/", "https://api.example.com.evil.com/", "https://u:p@api.example.com/",
-            "https://api.example.com:8443/", "file:///etc/passwd", "https://evil.com#@api.example.com"] {
+        for bad in [
+            "http://api.example.com/",
+            "https://evil.com/",
+            "https://api.example.com.evil.com/",
+            "https://u:p@api.example.com/",
+            "https://api.example.com:8443/",
+            "file:///etc/passwd",
+            "https://evil.com#@api.example.com",
+        ] {
             assert!(net_allowed(bad, &hosts).is_err(), "{bad}");
         }
         let (code, h, body) = parse_http(b"HTTP/1.1 100 Continue\r\n\r\nHTTP/2 201 \r\nContent-Type: text/plain\r\nX-A: b\r\n\r\nhello");

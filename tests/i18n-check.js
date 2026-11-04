@@ -127,9 +127,12 @@ function checkRs(file) {
   for (let k = 0; k < lits.length; k++) {
     const lit = lits[k];
     if (!CYR.test(lit.value)) continue;
-    const line = lineText(src, lit.start);
+    // Пометка может стоять на строке литерала или на одной из двух следующих: cargo fmt переносит `); // i18n-ignore` вниз
+    let line = lineText(src, lit.start);
+    for (let k2 = 0, p = src.indexOf('\n', lit.start); k2 < 2 && p >= 0; k2++, p = src.indexOf('\n', p + 1)) line += `\n${lineText(src, p + 1)}`;
     if (/\/\/.*i18n-ignore/.test(line)) continue;
-    const before = src.slice(Math.max(0, lit.start - 20), lit.start);
+    // 200 символов: после cargo fmt строка может стоять на следующей строке после `tr!(` с большим отступом
+    const before = src.slice(Math.max(0, lit.start - 200), lit.start);
     if (!/tr!\(\s*$/.test(before)) { errors.push(`${rel}:${lineOf(src, lit.start)}: строка без tr!(): ${JSON.stringify(lit.value.slice(0, 80))}`); continue; }
     const next = lits[k + 1];
     if (!next || CYR.test(next.value)) errors.push(`${rel}:${lineOf(src, lit.start)}: tr!() без английского варианта`);

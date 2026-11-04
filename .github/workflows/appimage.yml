@@ -1,0 +1,69 @@
+# AppImage для Linux / Steam Deck (заготовка M0.12, полноценно — 0.4.2).
+# Запуск вручную: Actions → AppImage → Run workflow; результат — артефакт FF-Montage-<версия>-linux-x86_64.AppImage.
+# В релиз AppImage попадает, только если в настройках репозитория задана переменная FFM_APPIMAGE=1
+# (Settings → Secrets and variables → Actions → Variables) — release.yml вызывает этот workflow.
+#
+# Как собирается: tauri-cli (npx @tauri-apps/cli@2) с дополнительным конфигом .github/appimage.conf.json:
+# bundle.active, targets=appimage, bundleMediaFramework (GStreamer внутри — для <video>), FFmpeg в usr/bin/ffmpeg/bin.
+# Программа ищет FFmpeg в «ffmpeg» рядом с собой (ff.rs search_binaries); данные — в системных папках (XDG, M0.5),
+# потому что AppImage только для чтения. Обновление из программы подменяет файл $APPIMAGE (update.rs).
+name: AppImage
+on:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      ref:
+        description: 'Тег или ветка для сборки (из release.yml — тег релиза)'
+        type: string
+        required: false
+
+jobs:
+  appimage:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - name: Библиотеки окна, GStreamer и FUSE для linuxdeploy
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libfuse2 file \
+            gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-libav
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - name: Версия
+        id: ver
+        run: |
+          node tools/check-version.mjs
+          echo "version=$(node -p "require('./src-tauri/tauri.conf.json').version")" >> "$GITHUB_OUTPUT"
+      - name: FFmpeg (закреплённая сборка, проверка SHA-256)
+        run: bash tools/fetch-ffmpeg.sh dist/appimage-ffmpeg
+      - name: Сборка AppImage
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: '1'
+          NO_STRIP: 'true'
+        run: npx --yes @tauri-apps/cli@2 build --bundles appimage --config .github/appimage.conf.json -- --locked
+      - name: Переименовать
+        run: |
+          src="$(ls src-tauri/target/release/bundle/appimage/*.AppImage | head -n1)"
+          mkdir -p dist/out
+          cp "$src" "dist/out/FF-Montage-${{ steps.ver.outputs.version }}-linux-x86_64.AppImage"
+          chmod +x dist/out/*.AppImage
+          ls -la dist/out
+      - name: Запускается (версия FFmpeg внутри образа)
+        run: |
+          cd dist/out
+          ./*.AppImage --appimage-extract >/dev/null
+          ./squashfs-root/usr/bin/ffmpeg/bin/ffmpeg -hide_banner -version | head -n1
+          rm -rf squashfs-root
+      - uses: actions/upload-artifact@v5
+        with:
+          name: release-appimage
+          path: dist/out/*.AppImage
+          if-no-files-found: error

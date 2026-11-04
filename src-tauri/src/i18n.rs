@@ -4,11 +4,21 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 static EN: AtomicBool = AtomicBool::new(false);
 
-pub fn en() -> bool { EN.load(Ordering::Relaxed) }
+pub fn en() -> bool {
+    EN.load(Ordering::Relaxed)
+}
 
-pub fn lang() -> &'static str { if en() { "en" } else { "ru" } }
+pub fn lang() -> &'static str {
+    if en() {
+        "en"
+    } else {
+        "ru"
+    }
+}
 
-pub fn set(lang: &str) { EN.store(lang == "en", Ordering::Relaxed); }
+pub fn set(lang: &str) {
+    EN.store(lang == "en", Ordering::Relaxed);
+}
 
 /// `tr!("Русский", "English")` → строка на текущем языке; с аргументами — как format!:
 /// `tr!("Файл {}", "File {}", name)`.
@@ -24,7 +34,11 @@ macro_rules! tr {
 
 /// Язык системы: русский, если русский язык интерфейса Windows / локаль или установлена русская раскладка
 pub fn system_lang() -> &'static str {
-    if system_is_ru() { "ru" } else { "en" }
+    if system_is_ru() {
+        "ru"
+    } else {
+        "en"
+    }
 }
 
 #[cfg(windows)]
@@ -43,6 +57,10 @@ fn system_is_ru() -> bool {
 
 #[cfg(not(windows))]
 fn system_is_ru() -> bool {
-    ["LC_ALL", "LC_MESSAGES", "LANGUAGE", "LANG"].iter().filter_map(|k| std::env::var(k).ok()).filter(|v| !v.is_empty()).take(1)
+    ["LC_ALL", "LC_MESSAGES", "LANGUAGE", "LANG"]
+        .iter()
+        .filter_map(|k| std::env::var(k).ok())
+        .filter(|v| !v.is_empty())
+        .take(1)
         .any(|v| v.to_lowercase().starts_with("ru"))
 }

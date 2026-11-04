@@ -253,10 +253,11 @@ function getProject() {
 // ---------------------------------------------------------------------------
 // Экспорт (идёт в фоне, состояние — здесь)
 // ---------------------------------------------------------------------------
+// Как в exportDialog.js: видеокарта NVIDIA → Intel → AMD → VAAPI (первый, что прошёл проверку), иначе процессор
 const CODECS = {
-  av1: { gpu: 'av1_nvenc', cpu: 'libsvtav1' },
-  hevc: { gpu: 'hevc_nvenc', cpu: 'libx265' },
-  h264: { gpu: 'h264_nvenc', cpu: 'libx264' },
+  av1: { gpu: ['av1_nvenc', 'av1_qsv', 'av1_amf'], cpu: 'libsvtav1' },
+  hevc: { gpu: ['hevc_nvenc', 'hevc_qsv', 'hevc_amf', 'hevc_vaapi'], cpu: 'libx265' },
+  h264: { gpu: ['h264_nvenc', 'h264_qsv', 'h264_amf', 'h264_vaapi'], cpu: 'libx264' },
 };
 let exp = { state: 'idle' };
 let expWaiters = [];
@@ -312,7 +313,7 @@ async function exportVideo(args) {
   }
   if (!encoders) encoders = await api.encoders();
   const c = CODECS[codec];
-  const enc = encoders && encoders[c.gpu] ? c.gpu : c.cpu;
+  const enc = c.gpu.find((e) => encoders && encoders[e]) || c.cpu;
   let width = src.width; let height = src.height;
   if (resolution !== 'source') { height = Number(resolution); width = even(height * (src.width / src.height)); }
   width = even(width); height = even(height);

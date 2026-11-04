@@ -16,6 +16,7 @@ import { withKey } from './keymap.js';
 import { isText, TEXT_MAX } from './textModel.js';
 import { fontFamilies } from './textRender.js';
 import { subtitleRows, importSubtitles } from './subtitlesUi.js';
+import { getPref, setPref } from './prefs.js';
 
 const HEAD_W = 168;
 const VIDEO_H = 76;
@@ -42,7 +43,7 @@ export class Timeline {
     this.pps = 40;          // пикселей на секунду
     this.autoFit = true;    // подгонять масштаб, пока пользователь сам не изменит
     this.drag = null;
-    this.magnet = localStorage.getItem('ffm.magnet') !== '0';
+    this.magnet = getPref('ui.magnet', true) !== false; // settings.json (js/prefs.js)
 
     this.toolbar = h('div', { class: 'tl-toolbar' });
     this.scroll = h('div', { class: 'tl-scroll' });
@@ -155,7 +156,7 @@ export class Timeline {
 
   toggleMagnet() {
     this.magnet = !this.magnet;
-    localStorage.setItem('ffm.magnet', this.magnet ? '1' : '0');
+    setPref('ui.magnet', this.magnet);
     this.updateMagnetBtn();
     toast(this.magnet ? t('Магнит включён: клипы липнут к краям соседей') : t('Магнит выключен'), 'info', 1600);
   }

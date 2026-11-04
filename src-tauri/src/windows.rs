@@ -28,9 +28,12 @@ pub fn boot_lang() -> (String, bool) {
 fn boot_script() -> String {
     let (lang, chosen) = boot_lang();
     let selftest = std::env::var("FFM_SELFTEST").map(|v| !v.is_empty()).unwrap_or(false);
-    format!("window.__FFM_BOOT = {};", serde_json::json!({
-        "lang": lang, "langChosen": chosen, "systemLang": crate::i18n::system_lang(), "selftest": selftest,
-    }))
+    format!(
+        "window.__FFM_BOOT = {};",
+        serde_json::json!({
+            "lang": lang, "langChosen": chosen, "systemLang": crate::i18n::system_lang(), "selftest": selftest,
+        })
+    )
 }
 
 pub fn open_main(app: &AppHandle) {
@@ -66,8 +69,12 @@ fn gst_hint() -> &'static str {
 pub fn gst_audio_sink_missing() -> bool {
     static MISSING: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *MISSING.get_or_init(|| {
-        let mut dirs: Vec<std::path::PathBuf> = ["GST_PLUGIN_SYSTEM_PATH_1_0", "GST_PLUGIN_SYSTEM_PATH", "GST_PLUGIN_PATH_1_0", "GST_PLUGIN_PATH"]
-            .iter().filter_map(std::env::var_os).flat_map(|v| std::env::split_paths(&v).collect::<Vec<_>>()).collect();
+        let mut dirs: Vec<std::path::PathBuf> =
+            ["GST_PLUGIN_SYSTEM_PATH_1_0", "GST_PLUGIN_SYSTEM_PATH", "GST_PLUGIN_PATH_1_0", "GST_PLUGIN_PATH"]
+                .iter()
+                .filter_map(std::env::var_os)
+                .flat_map(|v| std::env::split_paths(&v).collect::<Vec<_>>())
+                .collect();
         for lib in ["/usr/lib", "/usr/lib64", "/usr/local/lib", "/usr/lib/x86_64-linux-gnu", "/usr/lib/aarch64-linux-gnu"] {
             dirs.push(std::path::Path::new(lib).join("gstreamer-1.0"));
         }
@@ -77,13 +84,19 @@ pub fn gst_audio_sink_missing() -> bool {
 }
 
 #[cfg(not(target_os = "linux"))]
-pub fn gst_audio_sink_missing() -> bool { false }
+pub fn gst_audio_sink_missing() -> bool {
+    false
+}
 
 /// Процесс окна упал: команды ИИ-ассистента сразу получают ошибку (а не ждут до таймаута).
 /// Возвращает true, если окно стоит перезагрузить — не чаще раза в 30 с, чтобы не крутиться, если оно падает сразу при загрузке.
 fn on_web_crash(reason: &str) -> bool {
     static LAST: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
-    let hint = if gst_audio_sink_missing() { tr!(" Похоже, не хватает GStreamer good. {}", " GStreamer good seems to be missing. {}", gst_hint()) } else { String::new() };
+    let hint = if gst_audio_sink_missing() {
+        tr!(" Похоже, не хватает GStreamer good. {}", " GStreamer good seems to be missing. {}", gst_hint())
+    } else {
+        String::new()
+    };
     let msg = tr!("Окно FF Montage упало ({}).{}", "The FF Montage window crashed ({}).{}", reason, hint);
     eprintln!("{msg}");
     use std::io::Write;
@@ -92,7 +105,7 @@ fn on_web_crash(reason: &str) -> bool {
     }
     control::set_ready(false);
     control::fail_all(&tr!("{} Окно перезагружается — повторите команду.", "{} The window is reloading — repeat the command.", msg));
-    let mut last = LAST.lock().unwrap();
+    let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
     let reload = last.is_none_or(|t| t.elapsed() > std::time::Duration::from_secs(30));
     *last = Some(std::time::Instant::now());
     reload
@@ -103,7 +116,9 @@ fn watch_crash(w: &tauri::WebviewWindow) {
     let _ = w.with_webview(|pw| {
         use webkit2gtk::WebViewExt;
         pw.inner().connect_web_process_terminated(|v, reason| {
-            if on_web_crash(&format!("{reason:?}")) { v.reload(); }
+            if on_web_crash(&format!("{reason:?}")) {
+                v.reload();
+            }
         });
     });
 }
@@ -116,7 +131,9 @@ fn watch_crash(w: &tauri::WebviewWindow) {
         let Ok(core) = pw.controller().CoreWebView2() else { return };
         let handler = ProcessFailedEventHandler::create(Box::new(|sender, args| {
             let mut kind = COREWEBVIEW2_PROCESS_FAILED_KIND::default();
-            if let Some(a) = args { let _ = a.ProcessFailedKind(&mut kind); }
+            if let Some(a) = args {
+                let _ = a.ProcessFailedKind(&mut kind);
+            }
             // Остальные процессы (GPU, утилиты, фреймы) WebView2 поднимает сам — окно живо
             let (name, reload) = match kind {
                 COREWEBVIEW2_PROCESS_FAILED_KIND_BROWSER_PROCESS_EXITED => ("browser process exited", false),
@@ -125,7 +142,9 @@ fn watch_crash(w: &tauri::WebviewWindow) {
                 _ => return Ok(()),
             };
             if on_web_crash(name) && reload {
-                if let Some(s) = sender { let _ = s.Reload(); }
+                if let Some(s) = sender {
+                    let _ = s.Reload();
+                }
             }
             Ok(())
         }));
@@ -144,15 +163,21 @@ pub fn open_setup(app: &AppHandle) {
     }
     start_log("setup");
     let first = paths::get().first_run;
-    let make = || WebviewWindowBuilder::new(app, "setup", WebviewUrl::App("setup.html".into()))
-        .initialization_script(boot_script())
-        .title(if first { tr!("FF Montage — первый запуск", "FF Montage — first run") } else { tr!("FF Montage — настройки папок", "FF Montage — folders") })
-        .inner_size(680.0, 720.0)
-        .resizable(false)
-        .minimizable(false)
-        .maximizable(false)
-        .background_color(tauri::window::Color(29, 29, 35, 255))
-        .data_directory(paths::get().webview.clone());
+    let make = || {
+        WebviewWindowBuilder::new(app, "setup", WebviewUrl::App("setup.html".into()))
+            .initialization_script(boot_script())
+            .title(if first {
+                tr!("FF Montage — первый запуск", "FF Montage — first run")
+            } else {
+                tr!("FF Montage — настройки папок", "FF Montage — folders")
+            })
+            .inner_size(680.0, 720.0)
+            .resizable(false)
+            .minimizable(false)
+            .maximizable(false)
+            .background_color(tauri::window::Color(29, 29, 35, 255))
+            .data_directory(paths::get().webview.clone())
+    };
     let b = match app.get_webview_window("main") {
         Some(main) => make().parent(&main).unwrap_or_else(|_| make()),
         None => make(),
@@ -162,7 +187,9 @@ pub fn open_setup(app: &AppHandle) {
             if first {
                 let a = app.clone();
                 w.on_window_event(move |e| {
-                    if let tauri::WindowEvent::Destroyed = e { a.exit(0); }
+                    if let tauri::WindowEvent::Destroyed = e {
+                        a.exit(0);
+                    }
                 });
             }
         }
@@ -176,7 +203,10 @@ pub fn on_page_load(webview: &Webview, payload: &PageLoadPayload<'_>) {
         PageLoadEvent::Started => {
             if label == "main" {
                 control::set_ready(false);
-                control::fail_all(tr!("Окно FF Montage перезагрузилось — повторите команду.", "The FF Montage window reloaded — repeat the command."));
+                control::fail_all(tr!(
+                    "Окно FF Montage перезагрузилось — повторите команду.",
+                    "The FF Montage window reloaded — repeat the command."
+                ));
             }
         }
         PageLoadEvent::Finished => {

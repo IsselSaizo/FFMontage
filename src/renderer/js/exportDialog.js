@@ -3,19 +3,25 @@ import { store } from './store.js';
 import { h, fmtTime, fmtBytes, fmtDur, icon, toast } from './util.js';
 import { t, num } from './i18n.js';
 import { listExportPresets, onRegistryChange } from './registry.js';
-import { buildExport } from './exportPlan.js';
+import { buildExport, gpuFamily } from './exportPlan.js';
+import { invoke } from './tauri.js';
 import './core/exportPresets.js';
 import { exportableSubs } from './exportAssets.js';
+import { getPref, setPref } from './prefs.js';
 
 const api = window.api;
 let encoders = null;
 let open = false;
 
+// gpu — кодировщики видеокарты в порядке выбора: NVIDIA (nvenc) → Intel (qsv) → AMD (amf) → VAAPI (Linux);
+// берётся первый, который прошёл пробное кодирование (ff.rs detect_encoders), иначе — процессор (cpu)
 const CODECS = [
-  { id: 'av1', title: 'AV1', desc: t('Самый компактный файл при том же качестве. Рекомендуется.'), gpu: 'av1_nvenc', cpu: 'libsvtav1' },
-  { id: 'hevc', title: 'HEVC (H.265)', desc: t('Почти как AV1, лучше поддерживается старыми устройствами.'), gpu: 'hevc_nvenc', cpu: 'libx265' },
-  { id: 'h264', title: 'H.264', desc: t('Открывается везде, но файл примерно вдвое больше.'), gpu: 'h264_nvenc', cpu: 'libx264' },
+  { id: 'av1', title: 'AV1', desc: t('Самый компактный файл при том же качестве. Рекомендуется.'), gpu: ['av1_nvenc', 'av1_qsv', 'av1_amf'], cpu: 'libsvtav1' },
+  { id: 'hevc', title: 'HEVC (H.265)', desc: t('Почти как AV1, лучше поддерживается старыми устройствами.'), gpu: ['hevc_nvenc', 'hevc_qsv', 'hevc_amf', 'hevc_vaapi'], cpu: 'libx265' },
+  { id: 'h264', title: 'H.264', desc: t('Открывается везде, но файл примерно вдвое больше.'), gpu: ['h264_nvenc', 'h264_qsv', 'h264_amf', 'h264_vaapi'], cpu: 'libx264' },
 ];
+// Подпись видеокарты по семейству кодировщика
+const GPU_VENDOR = { nvenc: 'NVIDIA', qsv: 'Intel', amf: 'AMD', vaapi: 'VAAPI' };
 const QUALITIES = [
   { id: 'high', title: t('Высокое'), desc: t('Почти без потерь') },
   { id: 'medium', title: t('Среднее'), desc: t('Баланс') },
@@ -24,10 +30,12 @@ const QUALITIES = [
 
 const even = (x) => Math.max(2, Math.round(x / 2) * 2);
 
+// Последние настройки экспорта — settings.json → export (js/prefs.js)
 function loadPrefs() {
-  try { return JSON.parse(localStorage.getItem('ffm.export') || '{}'); } catch { return {}; }
+  const p = getPref('export', {});
+  return p && typeof p === 'object' ? { ...p } : {};
 }
-function savePrefs(p) { localStorage.setItem('ffm.export', JSON.stringify(p)); }
+function savePrefs(p) { setPref('export', JSON.parse(JSON.stringify(p))); }
 
 export async function openExport() {
   if (open) return;
@@ -81,9 +89,20 @@ export async function openExport() {
   document.addEventListener('keydown', onKey);
 
   const encoderFor = (cid) => {
-    const c = CODECS.find((x) => x.id === cid);
-    return encoders[c.gpu] ? { enc: c.gpu, gpu: true } : { enc: c.cpu, gpu: false };
+    const c = CODECS.find((x) => x.id === cid) || CODECS[0];
+    const gpu = c.gpu.find((e) => encoders && encoders[e]);
+    return gpu ? { enc: gpu, gpu: true, vendor: GPU_VENDOR[gpuFamily(gpu)] || '' } : { enc: c.cpu, gpu: false, vendor: '' };
   };
+  // Проверить кодировщики заново (сменили видеокарту или драйвер): кэш encoders.json забывается (ff.rs enc_reset)
+  const recheckBtn = () => h('button', {
+    class: 'btn ghost small', id: 'export-recheck',
+    title: t('Заново проверить, какие кодировщики работают (после смены видеокарты или драйвера)'),
+    onclick: async (ev) => {
+      ev.currentTarget.disabled = true;
+      try { encoders = await invoke('enc_reset'); } catch (e) { toast(String((e && e.message) || e), 'error'); }
+      renderForm();
+    },
+  }, t('Проверить заново'));
 
   // ---------------- Форма ----------------
   function renderForm() {
@@ -108,7 +127,7 @@ export async function openExport() {
     const codecCards = h('div', { class: 'codec-cards' }, ...CODECS.map((c) => {
       const e = encoderFor(c.id);
       const card = h('button', { class: `codec-card${st.codec === c.id ? ' on' : ''}`, onclick: () => { st.codec = c.id; renderForm(); } },
-        h('div', { class: 'cc-title' }, c.title, h('span', { class: `cc-tag ${e.gpu ? 'gpu' : 'cpu'}` }, e.gpu ? t('Видеокарта') : t('Процессор'))),
+        h('div', { class: 'cc-title' }, c.title, h('span', { class: `cc-tag ${e.gpu ? 'gpu' : 'cpu'}`, title: e.enc }, e.gpu ? t('Видеокарта {vendor}', { vendor: e.vendor }) : t('Процессор'))),
         h('div', { class: 'cc-desc' }, c.desc));
       return card;
     }));
@@ -154,8 +173,9 @@ export async function openExport() {
           hasSubs ? select(SUB_MODES, 'subtitles') : null),
         h('p', { class: 'muted small' },
           encoderFor(st.codec).gpu
-            ? t('Длительность ролика: {dur}. Кодирование идёт на видеокарте NVIDIA — быстро. Звук: AAC 192 кбит/с, 48 кГц.', { dur: fmtTime(store.duration()) })
-            : t('Длительность ролика: {dur}. Кодирование идёт на процессоре — дольше. Звук: AAC 192 кбит/с, 48 кГц.', { dur: fmtTime(store.duration()) }))),
+            ? t('Длительность ролика: {dur}. Кодирование идёт на видеокарте ({gpu}) — быстро. Звук: AAC 192 кбит/с, 48 кГц.', { dur: fmtTime(store.duration()), gpu: encoderFor(st.codec).vendor })
+            : t('Длительность ролика: {dur}. Кодирование идёт на процессоре — дольше. Звук: AAC 192 кбит/с, 48 кГц.', { dur: fmtTime(store.duration()) }),
+          ' ', recheckBtn())),
       h('div', { class: 'modal-foot' },
         h('button', { class: 'btn ghost', onclick: close }, t('Отмена')),
         h('button', { class: 'btn primary', id: 'export-go', onclick: start }, h('span', { html: icon('export', 18) }), t('Экспортировать'))));

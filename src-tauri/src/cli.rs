@@ -1,7 +1,7 @@
 // Движок без окна — для автотестов (tests/engine-test.js) и CI:
 //   ff-montage --engine <команда>   (параметры — JSON в stdin, ответ — JSON в stdout)
 // Команды: probe {file} | thumbs {info} | peaks {info} | proxy {info} | reverse {info,a,b} | freeze {info,at}
-//          silence {file,threshold,min} | frame {file,t,width} | encoders | version | export {plan} | checkplan {plan} | paths
+//          silence {file,threshold,min} | frame {file,t,width} | encoders {reset?} | queue | version | export {plan} | checkplan {plan} | paths
 use crate::{commands, export, ff, paths, tr};
 use serde_json::{json, Value};
 use std::io::{Read, Write};
@@ -21,12 +21,23 @@ pub fn main(cmd: &str) {
         let noop = |_: f64| {};
         match cmd {
             "paths" => Ok(serde_json::to_value(paths::get()).unwrap_or_default()),
-            "version" => Ok(json!({ "ffmpeg": bin.ffmpeg.to_string_lossy(), "missing": bin.missing, "version": ff::version_info(&bin).await })),
-            "encoders" => Ok(enc().await),
+            "version" => {
+                Ok(json!({ "ffmpeg": bin.ffmpeg.to_string_lossy(), "missing": bin.missing, "version": ff::version_info(&bin).await }))
+            }
+            // {reset: true} — забыть кэш (encoders.json) и проверить заново
+            "encoders" => {
+                if args["reset"].as_bool() == Some(true) {
+                    ff::reset_encoders();
+                }
+                Ok(enc().await)
+            }
+            "queue" => Ok(crate::queue::stats()),
             "probe" => ff::probe(&file()).await,
             "thumbs" => ff::thumbs(&args["info"]).await,
             "peaks" => ff::peaks(&args["info"], args["stream"].as_u64().unwrap_or(0) as usize).await,
-            "astream" => ff::audio_stream(&args["info"], args["stream"].as_u64().unwrap_or(1) as usize).await.map(|p| json!(p.to_string_lossy())),
+            "astream" => {
+                ff::audio_stream(&args["info"], args["stream"].as_u64().unwrap_or(1) as usize).await.map(|p| json!(p.to_string_lossy()))
+            }
             "proxy" => ff::proxy(&args["info"], &noop, &enc().await).await.map(|p| json!(p.to_string_lossy())),
             "reverse" => ff::reverse(&args["info"], f("a"), f("b"), &noop, &enc().await).await.map(|p| json!(p.to_string_lossy())),
             "freeze" => ff::freeze(&args["info"], f("at"), &enc().await).await.map(|p| json!(p.to_string_lossy())),
@@ -36,19 +47,30 @@ pub fn main(cmd: &str) {
                 let plan: export::Plan = serde_json::from_value(args["plan"].clone()).map_err(|e| e.to_string())?;
                 let last = std::sync::Mutex::new(0.0f64);
                 // Без окна разрешённых файлов нет: входы — любые существующие файлы, граф и аргументы проверяются как в окне
-                let r = export::run(plan, crate::plancheck::Inputs::Engine, |p| { *last.lock().unwrap() = p["fraction"].as_f64().unwrap_or(0.0); }).await;
-                let fr = *last.lock().unwrap();
-                r.map(|mut v| { v["lastProgress"] = json!(fr); v }).map_err(|e| e["message"].as_str().unwrap_or("").to_string())
+                let r = export::run(plan, crate::plancheck::Inputs::Engine, |p| {
+                    *last.lock().unwrap_or_else(|e| e.into_inner()) = p["fraction"].as_f64().unwrap_or(0.0);
+                })
+                .await;
+                let fr = *last.lock().unwrap_or_else(|e| e.into_inner());
+                r.map(|mut v| {
+                    v["lastProgress"] = json!(fr);
+                    v
+                })
+                .map_err(|e| e["message"].as_str().unwrap_or("").to_string())
             }
             // Только проверка плана (как перед экспортом), без запуска FFmpeg: {plan} → true или ошибка
             "checkplan" => {
                 let plan: export::Plan = serde_json::from_value(args["plan"].clone()).map_err(|e| e.to_string())?;
-                crate::plancheck::check(&plan.args, &plan.filter, plan.duration, &plan.output, crate::plancheck::Inputs::Engine).map(|_| json!(true))
+                crate::plancheck::check(&plan.args, &plan.filter, plan.duration, &plan.output, crate::plancheck::Inputs::Engine)
+                    .map(|_| json!(true))
             }
             other => Err(tr!("неизвестная команда: {}", "unknown command: {}", other)),
         }
     });
-    let out = match r { Ok(v) => json!({ "ok": true, "result": v }), Err(e) => json!({ "ok": false, "error": e }) };
+    let out = match r {
+        Ok(v) => json!({ "ok": true, "result": v }),
+        Err(e) => json!({ "ok": false, "error": e }),
+    };
     let mut o = std::io::stdout().lock();
     let _ = writeln!(o, "{out}");
     let _ = o.flush();

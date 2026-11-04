@@ -4,6 +4,7 @@ import { $, h, icon, toast, confirmDialog, debounce, errText } from './util.js';
 import { t } from './i18n.js';
 import { bindAction, dispatchKey, keyHint, onKeymapChange } from './keymap.js';
 import { initSettings, openSettings, maybeAskLanguage, getSetting } from './settings.js';
+import { getPref, setPref, flushPrefs } from './prefs.js';
 import { initMediaPanel, importPaths, pickAndImport, restoreMedia } from './media.js';
 import { Preview, initTransport } from './preview.js';
 import { Timeline } from './timeline.js';
@@ -149,7 +150,8 @@ async function checkUpdates() {
     body.append(
       h('p', {}, t('Установлена версия {v}. Последний релиз: {latest}', { v: r.current, latest: r.latest || '—' })),
       r.available ? h('p', {}, t('Будет скачан {name}. Настройки и проекты не затрагиваются.', { name: r.asset.name }))
-        : h('p', { class: 'muted' }, r.newer ? t('Для этой системы в релизе нет готовой сборки.') : t('У вас последняя версия.')),
+        // r.message — причина от Rust (нет сборки для системы, релиз без подписи, неверный тег), уже на языке интерфейса
+        : h('p', { class: 'muted' }, r.newer ? (r.message || t('Для этой системы в релизе нет готовой сборки.')) : t('У вас последняя версия.')),
       r.notes ? h('pre', { class: 'update-log' }, r.notes) : null,
       logBox);
   }
@@ -172,11 +174,23 @@ async function saveProject(as) {
   if (p) { store.filePath = p; store.dirty = false; updateTitle(); autosave(); toast(t('Проект сохранён'), 'success', 2000); }
 }
 
+// a новее b (версии вида 0.4.0); если какой-то нет — false
+function newerVersion(a, b) {
+  if (typeof a !== 'string' || typeof b !== 'string') return false;
+  const p = (x) => x.split(/[.+-]/).slice(0, 3).map((n) => parseInt(n, 10) || 0);
+  const x = p(a); const y = p(b);
+  for (let i = 0; i < 3; i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0);
+  return false;
+}
+
 async function loadFromText(text, filePath) {
   const j = JSON.parse(text);
   const project = j.project || j;
   if (!project.videoClips || !project.audioTracks) throw new Error(t('Это не проект FF Montage'));
+  const newer = newerVersion(j.appVersion, store.appVersion);
   store.load(project, filePath);
+  if (newer) toast(t('Проект сохранён в FF Montage {v} — новее этой версии. Что-то из него может не показаться или потеряться при сохранении.', { v: j.appVersion }), 'error', 9000);
+  else if (filePath && (!j.appVersion || newerVersion('0.4.0', j.appVersion))) toast(t('Проект из прежней версии программы. При первом сохранении рядом останется копия «… (0.3).ffproj».'), 'info', 6000);
   await restoreMedia();
   timeline.autoFit = true; timeline.fit();
   updateTitle();
@@ -224,6 +238,7 @@ async function restoreAutosave() {
 // Перезагрузка окна (смена языка): проект — в автосохранение, вид и история отмен — в sessionStorage
 async function reloadUi() {
   try { await api.autosaveWrite(autosaveText()); } catch (e) { console.warn('autosave before reload', e); }
+  await flushPrefs().catch(() => {});
   const state = {
     time: store.time,
     pps: timeline.pps, autoFit: timeline.autoFit,
@@ -335,6 +350,7 @@ function initWindowDrop() {
 async function main() {
   await initSettings({ reload: reloadUi, checkUpdates, showMcp: showMcpDialog, beforeRestart: () => api.autosaveWrite(autosaveText()) });
   initTopbar();
+  api.info().then((i) => { store.appVersion = i.version; }).catch(() => {});
   timeline = new Timeline($('#timeline'));
   initEpisodes($('#timeline'));
   preview = new Preview($('#preview'));
@@ -397,7 +413,7 @@ function initResizers() {
   const grip = $('#tl-resizer');
   grip.title = t('Потяните, чтобы изменить высоту таймлайна');
   const app = $('#app');
-  const saved = Number(localStorage.getItem('ffm.tlHeight'));
+  const saved = Number(getPref('ui.tlHeight', 0));
   if (saved) app.style.setProperty('--tl-h', `${saved}px`);
   grip.addEventListener('pointerdown', (e) => {
     e.preventDefault();
@@ -410,7 +426,7 @@ function initResizers() {
     const up = () => {
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', up);
-      localStorage.setItem('ffm.tlHeight', String($('#timeline').offsetHeight));
+      setPref('ui.tlHeight', $('#timeline').offsetHeight);
     };
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up);

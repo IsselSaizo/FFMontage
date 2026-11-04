@@ -21,10 +21,22 @@ pub struct Plan {
 static RUNNING: Mutex<Option<tokio::sync::oneshot::Sender<()>>> = Mutex::new(None);
 static CANCELLED: AtomicBool = AtomicBool::new(false);
 
-pub fn busy() -> bool { RUNNING.lock().unwrap().is_some() }
+/// Отравленный Mutex (паника в другом потоке) не должен ронять экспорт и выход программы (R-7)
+fn running() -> std::sync::MutexGuard<'static, Option<tokio::sync::oneshot::Sender<()>>> {
+    RUNNING.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+pub fn busy() -> bool {
+    running().is_some()
+}
+
+/// Видеокодек плана (последний -c:v; -c:v перед -i выбирает декодер входа)
+fn video_codec(args: &[String]) -> Option<&str> {
+    args.windows(2).rfind(|w| w[0] == "-c:v").map(|w| w[1].as_str())
+}
 
 pub fn cancel() -> bool {
-    if let Some(tx) = RUNNING.lock().unwrap().take() {
+    if let Some(tx) = running().take() {
         CANCELLED.store(true, Ordering::SeqCst);
         let _ = tx.send(());
         true
@@ -39,7 +51,7 @@ pub async fn run(plan: Plan, inputs: crate::plancheck::Inputs, on_progress: impl
     crate::plancheck::check(&plan.args, &plan.filter, plan.duration, &plan.output, inputs).map_err(|e| err(e, false))?;
     let (tx, mut rx) = tokio::sync::oneshot::channel::<()>();
     {
-        let mut g = RUNNING.lock().unwrap();
+        let mut g = running();
         if g.is_some() {
             return Err(err(tr!("Экспорт уже идёт.", "An export is already running.").into(), false));
         }
@@ -48,9 +60,13 @@ pub async fn run(plan: Plan, inputs: crate::plancheck::Inputs, on_progress: impl
     CANCELLED.store(false, Ordering::SeqCst);
     struct Guard;
     impl Drop for Guard {
-        fn drop(&mut self) { RUNNING.lock().unwrap().take(); }
+        fn drop(&mut self) {
+            running().take();
+        }
     }
     let _guard = Guard;
+    // M0.4: экспорт идёт вне очереди, но на видеокарте занимает её слот — фоновые задачи NVENC подождут
+    let _gpu_slot = video_codec(&plan.args).filter(|c| crate::plancheck::gpu_codec(c)).map(|_| crate::queue::gpu().take_now());
 
     let p = paths::get();
     let output = PathBuf::from(&plan.output);
@@ -63,11 +79,15 @@ pub async fn run(plan: Plan, inputs: crate::plancheck::Inputs, on_progress: impl
     let filter_file = p.temp.join(format!("export-{stamp}.filter.txt"));
     std::fs::write(&filter_file, &plan.filter).map_err(|e| err(e.to_string(), false))?;
     let part = PathBuf::from(format!("{}.part", plan.output));
-    let args: Vec<String> = plan.args.iter().map(|a| match a.as_str() {
-        "@@FILTER@@" => filter_file.to_string_lossy().to_string(),
-        "@@OUT@@" => part.to_string_lossy().to_string(),
-        _ => a.clone(),
-    }).collect();
+    let args: Vec<String> = plan
+        .args
+        .iter()
+        .map(|a| match a.as_str() {
+            "@@FILTER@@" => filter_file.to_string_lossy().to_string(),
+            "@@OUT@@" => part.to_string_lossy().to_string(),
+            _ => a.clone(),
+        })
+        .collect();
 
     let bin = ff::find();
     let log_file = p.logs.join("last-export.log");
@@ -76,10 +96,15 @@ pub async fn run(plan: Plan, inputs: crate::plancheck::Inputs, on_progress: impl
 
     let started = Instant::now();
     let _part_guard = crate::procs::part(&part);
-    let mut child = ff::command(&bin.ffmpeg).args(&args).spawn().map_err(|e| err(tr!("Не удалось запустить FFmpeg: {}", "Cannot start FFmpeg: {}", e), false))?;
+    let mut child = ff::command(&bin.ffmpeg)
+        .args(&args)
+        .spawn()
+        .map_err(|e| err(tr!("Не удалось запустить FFmpeg: {}", "Cannot start FFmpeg: {}", e), false))?;
     let _tracked = crate::procs::track(&child);
-    let mut so = child.stdout.take().unwrap();
-    let mut se = child.stderr.take().unwrap();
+    let (Some(mut so), Some(mut se)) = (child.stdout.take(), child.stderr.take()) else {
+        let _ = child.kill().await;
+        return Err(err(tr!("Не удалось запустить FFmpeg: нет вывода", "Cannot start FFmpeg: no output pipes").into(), false));
+    };
     let duration = plan.duration.max(0.001);
 
     let read_out = async {
@@ -87,7 +112,10 @@ pub async fn run(plan: Plan, inputs: crate::plancheck::Inputs, on_progress: impl
         let mut text = String::new();
         let mut state: std::collections::HashMap<String, String> = Default::default();
         loop {
-            let n = match so.read(&mut buf).await { Ok(0) | Err(_) => break, Ok(n) => n };
+            let n = match so.read(&mut buf).await {
+                Ok(0) | Err(_) => break,
+                Ok(n) => n,
+            };
             text.push_str(&String::from_utf8_lossy(&buf[..n]));
             while let Some(i) = text.find('\n') {
                 let line: String = text.drain(..=i).collect();
@@ -118,8 +146,13 @@ pub async fn run(plan: Plan, inputs: crate::plancheck::Inputs, on_progress: impl
         let mut tail = String::new();
         let mut buf = vec![0u8; 16 * 1024];
         loop {
-            let n = match se.read(&mut buf).await { Ok(0) | Err(_) => break, Ok(n) => n };
-            if let Some(f) = f.as_mut() { let _ = f.write_all(&buf[..n]); }
+            let n = match se.read(&mut buf).await {
+                Ok(0) | Err(_) => break,
+                Ok(n) => n,
+            };
+            if let Some(f) = f.as_mut() {
+                let _ = f.write_all(&buf[..n]);
+            }
             tail.push_str(&String::from_utf8_lossy(&buf[..n]));
             if tail.len() > 8000 {
                 let cut = tail.len() - 4000;
@@ -149,10 +182,36 @@ pub async fn run(plan: Plan, inputs: crate::plancheck::Inputs, on_progress: impl
         let _ = std::fs::remove_file(&part);
         let lines: Vec<&str> = tail.trim().lines().filter(|l| !l.trim().is_empty()).collect();
         let last = lines[lines.len().saturating_sub(6)..].join("\n");
-        return Err(err(tr!("FFmpeg завершился с ошибкой (код {}).\n{}", "FFmpeg failed (code {}).\n{}", st.code().unwrap_or(-1), last), false));
+        return Err(err(
+            tr!("FFmpeg завершился с ошибкой (код {}).\n{}", "FFmpeg failed (code {}).\n{}", st.code().unwrap_or(-1), last),
+            false,
+        ));
     }
     let _ = std::fs::remove_file(&output);
     std::fs::rename(&part, &output).map_err(|e| err(e.to_string(), false))?;
     let size = std::fs::metadata(&output).map(|m| m.len()).unwrap_or(0);
     Ok(json!({ "output": plan.output, "size": size, "duration": plan.duration, "elapsed": started.elapsed().as_secs_f64() }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn codec_of_plan() {
+        let a: Vec<String> =
+            ["-c:v", "libvpx-vp9", "-i", "x.webm", "-c:v", "hevc_amf", "-f", "mp4"].iter().map(|s| s.to_string()).collect();
+        assert_eq!(video_codec(&a), Some("hevc_amf"));
+        assert!(crate::plancheck::gpu_codec(video_codec(&a).unwrap()));
+        assert_eq!(video_codec(&a[..4]), Some("libvpx-vp9"));
+        assert_eq!(video_codec(&[]), None);
+        // отравленный RUNNING не роняет busy/cancel
+        let _ = std::thread::spawn(|| {
+            let _g = RUNNING.lock().unwrap();
+            panic!("отравить");
+        })
+        .join(); // i18n-ignore — тест
+        assert!(!busy());
+        assert!(!cancel());
+    }
 }

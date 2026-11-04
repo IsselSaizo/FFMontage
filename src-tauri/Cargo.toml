@@ -1,6 +1,6 @@
 [package]
 name = "ff-montage"
-version = "0.3.1"
+version = "0.4.0"
 description = "FF Montage — видеоредактор с FFmpeg под капотом"
 license = "GPL-3.0-or-later"
 edition = "2021"
@@ -18,9 +18,10 @@ serde_json = "1"
 tokio = { version = "1", features = ["process", "io-util", "io-std", "net", "time", "sync", "macros", "rt-multi-thread", "fs"] }
 percent-encoding = "2"
 sha1 = "0.10"
-getrandom = "0.2"
+getrandom = "0.3"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 sha2 = "0.10"
+ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 webkit2gtk = "2.0"
@@ -39,6 +40,17 @@ custom-protocol = ["tauri/custom-protocol"]
 # В debug-сборке Tauri включает их сам.
 devtools = ["tauri/devtools"]
 
+# M0.11: маленький exe. panic = "abort" сознательно НЕ включён: сейчас паника в одной команде или задаче пула
+# media:// роняет только её (catch_unwind в protocol.rs), с abort закрылась бы вся программа.
 [profile.release]
 strip = true
-codegen-units = 4
+lto = true
+codegen-units = 1
+opt-level = "s"
+
+# Быстрая сборка для разработки и UI-тестов: cargo build --profile fast (тот же код, без LTO)
+[profile.fast]
+inherits = "release"
+lto = false
+codegen-units = 16
+opt-level = 3

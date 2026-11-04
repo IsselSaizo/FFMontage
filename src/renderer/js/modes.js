@@ -2,13 +2,14 @@
 // а модули режимов (аудиостойка, анимации) подписываются на событие 'mode'.
 import { store } from './store.js';
 import { h, t } from './util.js';
+import { getPref, setPref } from './prefs.js';
 
 export const MODES = [
   { id: 'video', name: t('Видео'), title: t('Монтаж') },
   { id: 'audio', name: t('Аудио'), title: t('Звук: эффекты клипов и дорожек') },
   { id: 'anim', name: t('Анимации'), title: t('Лёгкие анимации по пресетам') },
 ];
-const KEY = 'ffm.mode';
+const KEY = 'ui.mode'; // settings.json (js/prefs.js)
 let mode = 'video';
 export const currentMode = () => mode;
 
@@ -17,7 +18,7 @@ export function setMode(id) {
   if (id === mode && document.body.dataset.mode === id) return;
   mode = id;
   document.body.dataset.mode = id;
-  try { localStorage.setItem(KEY, id); } catch { /* ignore */ }
+  setPref(KEY, id);
   for (const b of document.querySelectorAll('.mode-tab')) b.classList.toggle('on', b.dataset.mode === id);
   store.emit('mode', id);
 }
@@ -30,8 +31,7 @@ export function modeTabs() {
 }
 
 export function initModes() {
-  let saved = 'video';
-  try { saved = localStorage.getItem(KEY) || 'video'; } catch { /* ignore */ }
+  const saved = getPref(KEY, 'video') || 'video';
   mode = null;
   setMode(saved);
 }

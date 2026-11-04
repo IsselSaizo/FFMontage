@@ -13,6 +13,7 @@ import { speedOf, tlLen, fmtSpeed, SPEED_PRESETS, MIN_SPEED, MAX_SPEED } from '.
 import { tfOf, cleanTransform, TF_DEFAULT } from './transform.js';
 import { isText } from './textModel.js';
 import { renderTextClip, renderCue, renderSubTrack } from './textInspector.js';
+import { getPref, setPref } from './prefs.js';
 
 // Число как есть, но с десятичным разделителем языка: 0,8 / 0.8 (без лишних нулей, в отличие от i18n num)
 const dec = (x) => (getLang() === 'ru' ? String(x).replace('.', ',') : String(x));
@@ -54,15 +55,15 @@ export function initInspector() {
 
   // Скорость ×0.1…×16: кнопки-пресеты, ползунок (логарифмический), поле ввода и «Сдвигать следующие клипы».
   // Ползунок применяет значение, когда его отпустили (иначе каждое движение затирало бы соседей).
-  const RIPPLE_KEY = 'ffm.speedRipple';
+  const RIPPLE_KEY = 'ui.speedRipple'; // settings.json (js/prefs.js)
   function speedSection(clip) {
     const cur = speedOf(clip);
-    const ripple = localStorage.getItem(RIPPLE_KEY) === '1';
+    const ripple = getPref(RIPPLE_KEY, false) === true;
     const apply = (v) => {
       const s = Math.min(MAX_SPEED, Math.max(MIN_SPEED, Math.round(v * 100) / 100));
       const f = store.findClip(clip.id);
       if (!f || Math.abs(s - speedOf(f.clip)) < 1e-6) { render(); return; }
-      store.setSpeed(clip.id, s, { ripple: localStorage.getItem(RIPPLE_KEY) === '1' });
+      store.setSpeed(clip.id, s, { ripple: getPref(RIPPLE_KEY, false) === true });
     };
     const toPos = (s) => Math.log2(s);
     const fromPos = (x) => 2 ** x;
@@ -80,7 +81,7 @@ export function initInspector() {
     inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); inp.blur(); } e.stopPropagation(); });
     const chk = h('input', { type: 'checkbox', id: 'speed-ripple' });
     chk.checked = ripple;
-    chk.addEventListener('change', () => localStorage.setItem(RIPPLE_KEY, chk.checked ? '1' : '0'));
+    chk.addEventListener('change', () => setPref(RIPPLE_KEY, chk.checked));
     const linked = store.linkedOf(clip.id).length;
     return h('div', { class: 'insp-section', dataset: { section: 'speed' } }, h('h3', {}, t('Скорость')),
       h('div', { class: 'presets' }, ...SPEED_PRESETS.map((s) => h('button', {

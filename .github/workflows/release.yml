@@ -1,7 +1,11 @@
-# Автосборка: тег v* (например v0.3.0) → готовые архивы в GitHub Releases.
-#   Windows: FF-Montage-<версия>-win-x64.zip   — распаковать и запустить «FF Montage.exe», FFmpeg внутри
-#   Linux:   FF-Montage-<версия>-linux-x64.tar.gz
-# Выпустить релиз: git tag v0.3.0 && git push origin v0.3.0  (или Actions → Release → Run workflow)
+# Автосборка: тег vX.Y.Z (например v0.4.0) → архивы в GitHub Releases + SHA256SUMS и подпись SHA256SUMS.sig.
+#   Windows: FF-Montage-<версия>-windows-x64.zip       — распаковать и запустить «FF Montage.exe», FFmpeg внутри
+#   Linux:   FF-Montage-<версия>-linux-x86_64.tar.gz
+#   Linux:   FF-Montage-<версия>-linux-x86_64.AppImage — только при переменной репозитория FFM_APPIMAGE=1 (см. appimage.yml)
+# Обновление из программы (update.rs) берёт ассет строго с таким именем и ставит его, только если подпись
+# SHA256SUMS верна (открытый ключ зашит в update.rs) и SHA-256 архива совпадает.
+# Нужен секрет FFM_SIGNING_KEY (закрытый ключ ed25519, PEM) — без него релиз не публикуется.
+# Выпустить релиз: git tag v0.4.0 && git push origin v0.4.0  (или Actions → Release → Run workflow)
 name: Release
 on:
   push:
@@ -9,33 +13,50 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Тег релиза (например v0.3.0)'
+        description: 'Тег релиза (например v0.4.0)'
         required: true
 
 permissions:
   contents: write
 
+env:
+  TAG: ${{ github.event.inputs.tag || github.ref_name }}
+
 jobs:
+  # Тег = версия в Cargo.toml / Cargo.lock / tauri.conf.json / package.json; иначе программа не предложит обновление
+  version:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.TAG }}
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - run: node tools/check-version.mjs "$TAG"
+
   build:
+    needs: version
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: windows-latest
-            target: win-x64
+            target: windows-x64
           - os: ubuntu-22.04
-            target: linux-x64
+            target: linux-x86_64
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
-    env:
-      TAG: ${{ github.event.inputs.tag || github.ref_name }}
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.TAG }}
+      # libayatana-appindicator не нужен: трея в программе нет
       - name: Библиотеки окна (Linux)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
@@ -43,42 +64,84 @@ jobs:
       - name: Сборка
         working-directory: src-tauri
         run: cargo build --release --locked
+      - name: Юнит-тесты Rust
+        working-directory: src-tauri
+        run: cargo test --release --locked
       - name: Архив (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $name = "FF-Montage-$($env:TAG.TrimStart('v'))-win-x64"
+          $name = "FF-Montage-$($env:TAG.TrimStart('v'))-${{ matrix.target }}"
           $d = "dist/$name"
-          New-Item -ItemType Directory -Force $d | Out-Null
+          New-Item -ItemType Directory -Force $d, dist/out | Out-Null
           Copy-Item src-tauri/target/release/ff-montage.exe "$d/FF Montage.exe"
           ./tools/fetch-ffmpeg.ps1 -Dest "$d/ffmpeg"
-          Copy-Item LICENSE, README.md $d
+          Copy-Item LICENSE, README.md, CHANGELOG.md $d
           Set-Content "$d/ПРОЧТИ.txt" -Encoding utf8 -Value @(
             'FF Montage — запуск: двойной щелчок по «FF Montage.exe».',
             'При первом запуске программа спросит, где хранить кэш, готовые видео и проекты.',
             'FFmpeg уже внутри (папка ffmpeg). Обновление: меню ☰ → «Проверить обновления…».',
             'Если Windows пишет «Система Windows защитила ваш компьютер» — «Подробнее» → «Выполнить в любом случае».')
-          Compress-Archive -Path $d -DestinationPath "dist/$name.zip"
+          Compress-Archive -Path $d -DestinationPath "dist/out/$name.zip"
       - name: Архив (Linux)
         if: runner.os == 'Linux'
         run: |
-          name="FF-Montage-${TAG#v}-linux-x64"
+          name="FF-Montage-${TAG#v}-${{ matrix.target }}"
           d="dist/$name"
-          mkdir -p "$d"
+          mkdir -p "$d" dist/out
           cp src-tauri/target/release/ff-montage "$d/ff-montage"
           bash tools/fetch-ffmpeg.sh "$d/ffmpeg"
-          cp LICENSE README.md "$d/"
+          cp LICENSE README.md CHANGELOG.md "$d/"
           printf 'FF Montage — запуск: ./ff-montage\nНужна библиотека WebKitGTK 4.1 (Ubuntu 22.04+: sudo apt install libwebkit2gtk-4.1-0).\n' > "$d/README.txt"
-          tar -czf "dist/$name.tar.gz" -C dist "$name"
+          tar -czf "dist/out/$name.tar.gz" -C dist "$name"
+      - uses: actions/upload-artifact@v5
+        with:
+          name: release-${{ matrix.target }}
+          path: dist/out/*
+          if-no-files-found: error
+
+  appimage:
+    needs: version
+    if: vars.FFM_APPIMAGE == '1'
+    uses: ./.github/workflows/appimage.yml
+    with:
+      ref: ${{ github.event.inputs.tag || github.ref_name }}
+
+  # Все файлы релиза → SHA256SUMS → подпись ed25519 (tools/sign-release.mjs) → GitHub Release
+  publish:
+    needs: [build, appimage]
+    if: ${{ !cancelled() && needs.build.result == 'success' && needs.appimage.result != 'failure' }}
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.TAG }}
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v5
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+      - name: SHA256SUMS и подпись
+        env:
+          FFM_SIGNING_KEY: ${{ secrets.FFM_SIGNING_KEY }}
+        run: |
+          ls -la dist
+          node tools/sign-release.mjs sign dist
+          node tools/sign-release.mjs verify dist
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.TAG }}
           name: FF Montage ${{ env.TAG }}
-          files: |
-            dist/*.zip
-            dist/*.tar.gz
+          files: dist/*
           body: |
-            **Windows:** скачайте `FF-Montage-…-win-x64.zip`, распакуйте и запустите `FF Montage.exe`. Ничего ставить не нужно — FFmpeg уже внутри.
-            **Linux:** `FF-Montage-…-linux-x64.tar.gz`, затем `./ff-montage` (нужен WebKitGTK 4.1).
+            **Windows:** скачайте `FF-Montage-…-windows-x64.zip`, распакуйте и запустите `FF Montage.exe`. Ничего ставить не нужно — FFmpeg уже внутри.
+            **Linux:** `FF-Montage-…-linux-x86_64.tar.gz`, затем `./ff-montage` (нужен WebKitGTK 4.1).
+
+            Что нового — в [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/${{ env.TAG }}/CHANGELOG.md).
+
+            Проверка файлов: `sha256sum -c SHA256SUMS --ignore-missing`. `SHA256SUMS.sig` — подпись ed25519; программа проверяет её сама перед обновлением.
 
             FFmpeg — сборка [BtbN](https://github.com/BtbN/FFmpeg-Builds) под лицензией GPL, исходники: https://github.com/FFmpeg/FFmpeg

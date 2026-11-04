@@ -27,7 +27,25 @@ export const QUALITY = {
   libx264: { high: 18, medium: 21, compact: 24 },
   libx265: { high: 20, medium: 24, compact: 28 },
   libsvtav1: { high: 28, medium: 33, compact: 38 },
+  // Intel Quick Sync: ICQ (-global_quality), 1–51
+  h264_qsv: { high: 20, medium: 23, compact: 27 },
+  hevc_qsv: { high: 22, medium: 25, compact: 29 },
+  av1_qsv: { high: 24, medium: 28, compact: 33 },
+  // AMD AMF: постоянный QP (-rc cqp); у av1_amf шкала QP 0–255
+  h264_amf: { high: 20, medium: 23, compact: 27 },
+  hevc_amf: { high: 22, medium: 26, compact: 30 },
+  av1_amf: { high: 100, medium: 130, compact: 160 },
+  // VAAPI (Linux, Steam Deck): постоянный QP (-rc_mode CQP)
+  h264_vaapi: { high: 20, medium: 24, compact: 28 },
+  hevc_vaapi: { high: 22, medium: 26, compact: 30 },
 };
+
+// Кодировщики видеокарты по производителям (порядок выбора: NVIDIA → Intel → AMD → VAAPI)
+export const GPU_FAMILIES = ['nvenc', 'qsv', 'amf', 'vaapi'];
+export const gpuFamily = (enc) => GPU_FAMILIES.find((f) => String(enc || '').endsWith(`_${f}`)) || null;
+// VAAPI кодирует кадры из памяти видеокарты: граф заканчивается format=nv12,hwupload, устройство — -vaapi_device
+export const VAAPI_DEVICE = '/dev/dri/renderD128';
+const isVaapi = (codec) => gpuFamily(codec) === 'vaapi';
 
 const n6 = (x) => Number(x).toFixed(6);
 const even = (x) => Math.max(2, Math.round(x / 2) * 2);
@@ -59,6 +77,28 @@ export function encoderArgs(codec, quality, fps) {
     case 'h264_nvenc':
       return ['-c:v', 'h264_nvenc', '-preset', 'p5', '-tune', 'hq', '-rc', 'vbr', '-cq', String(q), '-b:v', '0',
         '-spatial-aq', '1', '-temporal-aq', '1', '-rc-lookahead', '20', '-profile:v', 'high', '-g', gop];
+    // Intel Quick Sync: ICQ — -global_quality без битрейта и без look_ahead
+    case 'h264_qsv':
+      return ['-c:v', 'h264_qsv', '-preset', 'slow', '-global_quality', String(q), '-profile:v', 'high', '-g', gop];
+    case 'hevc_qsv':
+      return ['-c:v', 'hevc_qsv', '-preset', 'slow', '-global_quality', String(q), '-g', gop, '-tag:v', 'hvc1'];
+    case 'av1_qsv':
+      return ['-c:v', 'av1_qsv', '-preset', 'slow', '-global_quality', String(q), '-g', gop];
+    // AMD AMF: постоянный QP для I/P(/B) кадров
+    case 'h264_amf':
+      return ['-c:v', 'h264_amf', '-usage', 'transcoding', '-quality', 'quality', '-rc', 'cqp',
+        '-qp_i', String(q), '-qp_p', String(q + 2), '-qp_b', String(q + 4), '-profile:v', 'high', '-g', gop];
+    case 'hevc_amf':
+      return ['-c:v', 'hevc_amf', '-usage', 'transcoding', '-quality', 'quality', '-rc', 'cqp',
+        '-qp_i', String(q), '-qp_p', String(q + 2), '-g', gop, '-tag:v', 'hvc1'];
+    case 'av1_amf':
+      return ['-c:v', 'av1_amf', '-usage', 'transcoding', '-quality', 'quality', '-rc', 'cqp',
+        '-qp_i', String(q), '-qp_p', String(q + 8), '-g', gop];
+    // VAAPI (Linux): постоянный QP; кадры приходят из графа уже в памяти видеокарты (hwupload, см. exportCommand)
+    case 'h264_vaapi':
+      return ['-c:v', 'h264_vaapi', '-rc_mode', 'CQP', '-qp', String(q), '-profile:v', 'high', '-g', gop];
+    case 'hevc_vaapi':
+      return ['-c:v', 'hevc_vaapi', '-rc_mode', 'CQP', '-qp', String(q), '-g', gop, '-tag:v', 'hvc1'];
     case 'libx265':
       return ['-c:v', 'libx265', '-preset', 'medium', '-crf', String(q), '-g', gop, '-tag:v', 'hvc1'];
     case 'libsvtav1':
@@ -396,9 +436,12 @@ export function exportCommand(project, settings, ffMajor = 99) {
   // FFmpeg 7+: «-/filter_complex файл»; старые версии (Linux-дистрибутивы): -filter_complex_script
   const filterArgs = ffMajor >= 7 ? ['-/filter_complex', '@@FILTER@@'] : ['-filter_complex_script', '@@FILTER@@'];
   const cfrArgs = ffMajor >= 6 ? ['-fps_mode', 'cfr'] : ['-vsync', 'cfr'];
-  const args = ['-hide_banner', '-y', '-nostdin', ...plan.inputs,
+  // VAAPI: кадры — в память видеокарты (устройство задаёт -vaapi_device, оно же — для hwupload)
+  const vaapi = isVaapi(settings.codec);
+  const filter = vaapi ? `${plan.filter};\n[vout]format=nv12,hwupload[vhw]` : plan.filter;
+  const args = ['-hide_banner', '-y', '-nostdin', ...(vaapi ? ['-vaapi_device', VAAPI_DEVICE] : []), ...plan.inputs,
     ...filterArgs,
-    '-map', '[vout]', '-map', '[aout]',
+    '-map', vaapi ? '[vhw]' : '[vout]', '-map', '[aout]',
     ...subtitleArgs(plan.subtitles),
     ...encoderArgs(settings.codec, settings.quality, plan.F),
     ...cfrArgs,
@@ -406,5 +449,5 @@ export function exportCommand(project, settings, ffMajor = 99) {
     '-t', n6(plan.duration),
     '-movflags', '+faststart', '-f', 'mp4',
     '-progress', 'pipe:1', '-nostats', '@@OUT@@'];
-  return { args, filter: plan.filter, duration: plan.duration, output: settings.output };
+  return { args, filter, duration: plan.duration, output: settings.output };
 }

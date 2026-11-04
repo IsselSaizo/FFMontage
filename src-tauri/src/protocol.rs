@@ -8,14 +8,19 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tauri::http::{Request, Response, StatusCode};
 
-const KEEP: &AsciiSet = &NON_ALPHANUMERIC.remove(b'-').remove(b'_').remove(b'.').remove(b'!').remove(b'~').remove(b'*').remove(b'\'').remove(b'(').remove(b')');
+const KEEP: &AsciiSet =
+    &NON_ALPHANUMERIC.remove(b'-').remove(b'_').remove(b'.').remove(b'!').remove(b'~').remove(b'*').remove(b'\'').remove(b'(').remove(b')');
 const CHUNK: u64 = 4 * 1024 * 1024;
 
 static ALLOWED: Mutex<Option<HashSet<String>>> = Mutex::new(None);
 
 fn norm(p: &Path) -> String {
     let n = paths::normalize(p).to_string_lossy().to_string();
-    if cfg!(windows) { n.to_lowercase().replace('/', "\\") } else { n }
+    if cfg!(windows) {
+        n.to_lowercase().replace('/', "\\")
+    } else {
+        n
+    }
 }
 
 /// Разрешить окну читать файл
@@ -117,9 +122,14 @@ pub fn handle(req: &Request<Vec<u8>>) -> Response<Vec<u8>> {
     let typ = mime(&file);
     // HEAD — только заголовки (WebKit спрашивает размер перед воспроизведением)
     if req.method() == tauri::http::Method::HEAD {
-        return Response::builder().status(StatusCode::OK)
-            .header("Content-Type", typ).header("Accept-Ranges", "bytes").header("Content-Length", size.to_string())
-            .header("Access-Control-Allow-Origin", "*").body(vec![]).unwrap();
+        return Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", typ)
+            .header("Accept-Ranges", "bytes")
+            .header("Content-Length", size.to_string())
+            .header("Access-Control-Allow-Origin", "*")
+            .body(vec![])
+            .unwrap();
     }
     let range = req.headers().get("range").and_then(|v| v.to_str().ok()).map(str::to_string);
     // Без Range маленькие файлы отдаём целиком (200), большие — первым куском (206; Chromium/WebView2 для медиа всегда шлёт Range)
@@ -129,27 +139,38 @@ pub fn handle(req: &Request<Vec<u8>>) -> Response<Vec<u8>> {
         if f.read_to_end(&mut body).is_err() {
             return reply(StatusCode::INTERNAL_SERVER_ERROR, vec![]);
         }
-        return Response::builder().status(StatusCode::OK)
-            .header("Content-Type", typ).header("Accept-Ranges", "bytes").header("Content-Length", body.len().to_string())
-            .header("Access-Control-Allow-Origin", "*").body(body).unwrap();
+        return Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", typ)
+            .header("Accept-Ranges", "bytes")
+            .header("Content-Length", body.len().to_string())
+            .header("Access-Control-Allow-Origin", "*")
+            .body(body)
+            .unwrap();
     };
     let Some((start, end)) = parse_range(&range, size) else {
-        return Response::builder().status(StatusCode::RANGE_NOT_SATISFIABLE)
-            .header("Content-Range", format!("bytes */{size}")).header("Access-Control-Allow-Origin", "*").body(vec![]).unwrap();
+        return Response::builder()
+            .status(StatusCode::RANGE_NOT_SATISFIABLE)
+            .header("Content-Range", format!("bytes */{size}"))
+            .header("Access-Control-Allow-Origin", "*")
+            .body(vec![])
+            .unwrap();
     };
     let len = end - start + 1;
     let mut body = vec![0u8; len as usize];
     if f.seek(SeekFrom::Start(start)).is_err() || f.read_exact(&mut body).is_err() {
         return reply(StatusCode::INTERNAL_SERVER_ERROR, vec![]);
     }
-    Response::builder().status(StatusCode::PARTIAL_CONTENT)
+    Response::builder()
+        .status(StatusCode::PARTIAL_CONTENT)
         .header("Content-Type", typ)
         .header("Accept-Ranges", "bytes")
         .header("Content-Range", format!("bytes {start}-{end}/{size}"))
         .header("Content-Length", len.to_string())
         .header("Access-Control-Allow-Origin", "*")
         .header("Access-Control-Expose-Headers", "Content-Range, Content-Length, Accept-Ranges")
-        .body(body).unwrap()
+        .body(body)
+        .unwrap()
 }
 
 // ---- Пул потоков для протоколов media:// и plugin:// (R-6) ----
@@ -172,7 +193,9 @@ fn pool() -> &'static Mutex<std::sync::mpsc::Sender<Job>> {
                 };
                 match job {
                     // Паника в обработчике не должна убивать поток пула
-                    Ok(job) => { let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(job)); }
+                    Ok(job) => {
+                        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(job));
+                    }
                     Err(_) => break,
                 }
             });
@@ -222,11 +245,15 @@ mod tests {
         let (tx, rx) = std::sync::mpsc::channel();
         for i in 0..20 {
             let tx = tx.clone();
-            spawn(move || { let _ = tx.send(i); });
+            spawn(move || {
+                let _ = tx.send(i);
+            });
         }
         spawn(|| panic!("boom")); // поток пула переживает панику
         let tx2 = tx.clone();
-        spawn(move || { let _ = tx2.send(100); });
+        spawn(move || {
+            let _ = tx2.send(100);
+        });
         let mut got: Vec<i32> = (0..21).map(|_| rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap()).collect();
         got.sort();
         assert_eq!(got.last(), Some(&100));

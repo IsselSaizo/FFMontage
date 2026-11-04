@@ -1,4 +1,4 @@
-// Шрифты (M5): встроенные (assets/fonts окна), пользовательские (<app_dir>/user-fonts, для тестов — FFM_FONTS_DIR)
+// Шрифты (M5): встроенные (assets/fonts окна), пользовательские (<папка данных>/user-fonts — рядом с exe или в системной папке, см. paths.rs; для тестов — FFM_FONTS_DIR)
 // и папка для libass при экспорте субтитров (<app_cache>/fonts: копии встроенных и пользовательских).
 // Окно подключает шрифты через new FontFace(family, 'url(media-адрес)'), поэтому каждый файл — protocol::allow.
 use crate::{paths, protocol, tr};
@@ -17,28 +17,33 @@ pub const FONT_EXT: &[&str] = &["ttf", "otf", "ttc"];
 /// Один файл шрифта
 const MAX_FONT: u64 = 50 * 1024 * 1024;
 
-fn s(p: &Path) -> String { p.to_string_lossy().to_string() }
+fn s(p: &Path) -> String {
+    p.to_string_lossy().to_string()
+}
 
 async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> R<T> {
     tauri::async_runtime::spawn_blocking(f).await.map_err(|e| e.to_string())
 }
 
-/// Папка пользовательских шрифтов: FFM_FONTS_DIR (тесты) или <app_dir>/user-fonts
+/// Папка пользовательских шрифтов: FFM_FONTS_DIR (тесты) или <папка данных>/user-fonts (paths::user_fonts_dir)
 pub fn user_dir() -> PathBuf {
-    match std::env::var("FFM_FONTS_DIR") {
-        Ok(d) if !d.trim().is_empty() => paths::absolute(Path::new(d.trim()), &std::env::current_dir().unwrap_or_default()),
-        _ => paths::get().app_dir.join("user-fonts"),
-    }
+    paths::user_fonts_dir()
 }
 
 /// Папка шрифтов для libass (fontsdir фильтра ass): <app_cache>/fonts
-pub fn export_dir() -> PathBuf { paths::get().app_cache.join("fonts") }
+pub fn export_dir() -> PathBuf {
+    paths::get().app_cache.join("fonts")
+}
 
 // ---------------------------------------------------------------------------
 // Разбор sfnt (TTF/OTF/TTC): имя семейства из таблицы 'name'
 // ---------------------------------------------------------------------------
-fn u16at(b: &[u8], i: usize) -> Option<u16> { Some(u16::from_be_bytes([*b.get(i)?, *b.get(i + 1)?])) }
-fn u32at(b: &[u8], i: usize) -> Option<u32> { Some(u32::from_be_bytes([*b.get(i)?, *b.get(i + 1)?, *b.get(i + 2)?, *b.get(i + 3)?])) }
+fn u16at(b: &[u8], i: usize) -> Option<u16> {
+    Some(u16::from_be_bytes([*b.get(i)?, *b.get(i + 1)?]))
+}
+fn u32at(b: &[u8], i: usize) -> Option<u32> {
+    Some(u32::from_be_bytes([*b.get(i)?, *b.get(i + 1)?, *b.get(i + 2)?, *b.get(i + 3)?]))
+}
 
 /// Сигнатура sfnt: 0x00010000 (TrueType), 'OTTO' (CFF), 'true' (старый Apple), 'ttcf' (коллекция)
 pub fn is_sfnt(b: &[u8]) -> bool {
@@ -46,7 +51,7 @@ pub fn is_sfnt(b: &[u8]) -> bool {
 }
 
 fn utf16be(b: &[u8]) -> String {
-    let units: Vec<u16> = b.chunks_exact(2).map(|c| u16::from_be_bytes([c[0], c[1]])).collect();
+    let units: Vec<u16> = b.as_chunks::<2>().0.iter().map(|c| u16::from_be_bytes(*c)).collect();
     String::from_utf16_lossy(&units)
 }
 
@@ -58,11 +63,17 @@ pub fn family_name(b: &[u8]) -> Option<String> {
 
 /// Строка nameID из таблицы 'name' (выбор платформы — как в family_name)
 pub fn name_id(b: &[u8], want: u16) -> Option<String> {
-    if !is_sfnt(b) { return None; }
+    if !is_sfnt(b) {
+        return None;
+    }
     let face = if &b[..4] == b"ttcf" {
-        if u32at(b, 8)? == 0 { return None; }
+        if u32at(b, 8)? == 0 {
+            return None;
+        }
         u32at(b, 12)? as usize
-    } else { 0 };
+    } else {
+        0
+    };
     let num_tables = u16at(b, face + 4)? as usize;
     let mut name = None;
     for t in 0..num_tables.min(512) {
@@ -81,8 +92,13 @@ pub fn name_id(b: &[u8], want: u16) -> Option<String> {
     for r in 0..count {
         let rec = 6 + r * 12;
         let (Some(platform), Some(encoding), Some(lang), Some(id), Some(len), Some(off)) =
-            (u16at(tab, rec), u16at(tab, rec + 2), u16at(tab, rec + 4), u16at(tab, rec + 6), u16at(tab, rec + 8), u16at(tab, rec + 10)) else { break };
-        if id != want { continue; }
+            (u16at(tab, rec), u16at(tab, rec + 2), u16at(tab, rec + 4), u16at(tab, rec + 6), u16at(tab, rec + 8), u16at(tab, rec + 10))
+        else {
+            break;
+        };
+        if id != want {
+            continue;
+        }
         let Some(raw) = tab.get(strings + off as usize..strings + off as usize + len as usize) else { continue };
         let (prio, text) = match (platform, encoding) {
             (3, 0 | 1 | 10) => (if lang == 0x0409 { 0 } else { 1 }, utf16be(raw)),
@@ -91,8 +107,12 @@ pub fn name_id(b: &[u8], want: u16) -> Option<String> {
             _ => continue,
         };
         let text = text.trim_matches(|c: char| c.is_whitespace() || c == '\0').to_string();
-        if text.is_empty() { continue; }
-        if best.as_ref().is_none_or(|(p, _)| prio < *p) { best = Some((prio, text)); }
+        if text.is_empty() {
+            continue;
+        }
+        if best.as_ref().is_none_or(|(p, _)| prio < *p) {
+            best = Some((prio, text));
+        }
     }
     best.map(|(_, t)| t)
 }
@@ -113,7 +133,9 @@ fn mtime(m: &std::fs::Metadata) -> u128 {
 /// отличается от family у статических начертаний («Roboto Medium» при типографском «Roboto»).
 fn entry(p: &Path, builtin: bool) -> Option<Value> {
     let meta = std::fs::metadata(p).ok()?;
-    if !meta.is_file() || meta.len() > MAX_FONT { return None; }
+    if !meta.is_file() || meta.len() > MAX_FONT {
+        return None;
+    }
     let key = (s(p), meta.len(), mtime(&meta));
     let cached = NAMES.lock().unwrap_or_else(|e| e.into_inner()).as_ref().and_then(|m| m.get(&key).cloned());
     let (family, ass_family) = match cached {
@@ -128,14 +150,21 @@ fn entry(p: &Path, builtin: bool) -> Option<Value> {
     };
     protocol::allow(p);
     let file = p.file_name()?.to_string_lossy().to_string();
-    Some(json!({ "family": family, "assFamily": ass_family, "file": file, "path": s(p), "url": protocol::url(p), "builtin": builtin, "size": meta.len() }))
+    Some(
+        json!({ "family": family, "assFamily": ass_family, "file": file, "path": s(p), "url": protocol::url(p), "builtin": builtin, "size": meta.len() }),
+    )
 }
 
-fn has_font_ext(p: &Path) -> bool { FONT_EXT.contains(&crate::ff::ext_of(p).as_str()) }
+fn has_font_ext(p: &Path) -> bool {
+    FONT_EXT.contains(&crate::ff::ext_of(p).as_str())
+}
 
 /// Файлы шрифтов в папке (по имени)
 fn font_files(dir: &Path) -> Vec<PathBuf> {
-    let mut v: Vec<PathBuf> = std::fs::read_dir(dir).into_iter().flatten().flatten()
+    let mut v: Vec<PathBuf> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
         .filter(|e| e.file_type().map(|t| t.is_file()).unwrap_or(false))
         .map(|e| e.path())
         .filter(|p| has_font_ext(p) && !p.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.')))
@@ -144,7 +173,9 @@ fn font_files(dir: &Path) -> Vec<PathBuf> {
     v
 }
 
-fn is_builtin_name(name: &str) -> bool { BUILTIN.iter().any(|b| b.eq_ignore_ascii_case(name)) }
+fn is_builtin_name(name: &str) -> bool {
+    BUILTIN.iter().any(|b| b.eq_ignore_ascii_case(name))
+}
 
 // ---------------------------------------------------------------------------
 // Папка шрифтов для экспорта
@@ -155,15 +186,22 @@ static SYNC: Mutex<bool> = Mutex::new(false);
 /// asset_resolver при отсутствии файла отдаёт index.html — поэтому байты проверяются как шрифт.
 fn builtin_bytes(app: &AppHandle, name: &str) -> Option<Vec<u8>> {
     let ok = |b: Vec<u8>| if family_name(&b).is_some() { Some(b) } else { None };
-    app.asset_resolver().get(format!("assets/fonts/{name}")).and_then(|a| ok(a.bytes))
-        .or_else(|| std::fs::read(paths::get().app_dir.join("src").join("renderer").join("assets").join("fonts").join(name)).ok().and_then(ok))
+    app.asset_resolver().get(format!("assets/fonts/{name}")).and_then(|a| ok(a.bytes)).or_else(|| {
+        std::fs::read(paths::get().app_dir.join("src").join("renderer").join("assets").join("fonts").join(name)).ok().and_then(ok)
+    })
 }
 
 /// Записать через временный файл (rename атомарен)
 fn write_atomic(dest: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    let tmp = dest.with_file_name(format!(".{}.{}.tmp", dest.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default(), std::process::id()));
+    let tmp = dest.with_file_name(format!(
+        ".{}.{}.tmp",
+        dest.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default(),
+        std::process::id()
+    ));
     std::fs::write(&tmp, bytes)?;
-    std::fs::rename(&tmp, dest).inspect_err(|_| { let _ = std::fs::remove_file(&tmp); })
+    std::fs::rename(&tmp, dest).inspect_err(|_| {
+        let _ = std::fs::remove_file(&tmp);
+    })
 }
 
 fn copy_atomic(src: &Path, dest: &Path) -> std::io::Result<()> {
@@ -173,7 +211,11 @@ fn copy_atomic(src: &Path, dest: &Path) -> std::io::Result<()> {
 
 /// Имя копии пользовательского шрифта в папке экспорта (совпадение со встроенным — с префиксом user-)
 fn export_name(user_file: &str) -> String {
-    if is_builtin_name(user_file) { format!("user-{user_file}") } else { user_file.to_string() }
+    if is_builtin_name(user_file) {
+        format!("user-{user_file}")
+    } else {
+        user_file.to_string()
+    }
 }
 
 /// <app_cache>/fonts: встроенные шрифты + копии пользовательских (копируются, если нет или другой размер),
@@ -181,17 +223,23 @@ fn export_name(user_file: &str) -> String {
 pub fn ensure_export(app: &AppHandle) -> R<PathBuf> {
     let mut synced = SYNC.lock().unwrap_or_else(|e| e.into_inner());
     let dir = export_dir();
-    std::fs::create_dir_all(&dir).map_err(|e| tr!("Не удалось создать папку шрифтов {}: {}", "Cannot create the fonts folder {}: {}", dir.display(), e))?;
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| tr!("Не удалось создать папку шрифтов {}: {}", "Cannot create the fonts folder {}: {}", dir.display(), e))?;
     let mut keep: Vec<String> = vec![];
     let mut all_builtin = true;
     for name in BUILTIN {
         keep.push(name.to_lowercase());
         let dest = dir.join(name);
         // Первый раз за запуск — сверить размер с встроенным; потом — только наличие
-        if *synced && dest.is_file() { continue; }
+        if *synced && dest.is_file() {
+            continue;
+        }
         match builtin_bytes(app, name) {
             Some(b) => {
-                if std::fs::metadata(&dest).map(|m| m.len() != b.len() as u64).unwrap_or(true) && write_atomic(&dest, &b).is_err() && !dest.is_file() {
+                if std::fs::metadata(&dest).map(|m| m.len() != b.len() as u64).unwrap_or(true)
+                    && write_atomic(&dest, &b).is_err()
+                    && !dest.is_file()
+                {
                     all_builtin = false;
                 }
             }
@@ -205,7 +253,9 @@ pub fn ensure_export(app: &AppHandle) -> R<PathBuf> {
         keep.push(target.to_lowercase());
         let dest = dir.join(&target);
         let src_len = std::fs::metadata(&src).map(|m| m.len()).unwrap_or(0);
-        if src_len == 0 || src_len > MAX_FONT { continue; }
+        if src_len == 0 || src_len > MAX_FONT {
+            continue;
+        }
         if std::fs::metadata(&dest).map(|m| m.len() != src_len).unwrap_or(true) {
             let _ = copy_atomic(&src, &dest);
         }
@@ -232,10 +282,16 @@ fn list(app: &AppHandle) -> R<Vec<Value>> {
 /// Проверить файл как шрифт: расширение, размер, сигнатура, имя семейства → байты
 fn read_font(p: &Path) -> R<Vec<u8>> {
     let shown = p.display();
-    if !has_font_ext(p) { return Err(tr!("{}: нужен файл .ttf, .otf или .ttc", "{}: a .ttf, .otf or .ttc file is required", shown)); }
+    if !has_font_ext(p) {
+        return Err(tr!("{}: нужен файл .ttf, .otf или .ttc", "{}: a .ttf, .otf or .ttc file is required", shown));
+    }
     let meta = std::fs::metadata(p).map_err(|e| format!("{shown}: {e}"))?;
-    if !meta.is_file() { return Err(tr!("{}: это не файл", "{}: not a file", shown)); }
-    if meta.len() > MAX_FONT { return Err(tr!("{}: шрифт больше 50 МБ", "{}: the font is larger than 50 MB", shown)); }
+    if !meta.is_file() {
+        return Err(tr!("{}: это не файл", "{}: not a file", shown));
+    }
+    if meta.len() > MAX_FONT {
+        return Err(tr!("{}: шрифт больше 50 МБ", "{}: the font is larger than 50 MB", shown));
+    }
     let bytes = std::fs::read(p).map_err(|e| format!("{shown}: {e}"))?;
     if !is_sfnt(&bytes) || family_name(&bytes).is_none() {
         return Err(tr!("{}: не удалось прочитать шрифт", "{}: cannot read the font", shown));
@@ -246,9 +302,13 @@ fn read_font(p: &Path) -> R<Vec<u8>> {
 fn add_one(src: &Path) -> R<Value> {
     let bytes = read_font(src)?;
     let dir = user_dir();
-    std::fs::create_dir_all(&dir).map_err(|e| tr!("Не удалось создать папку шрифтов {}: {}", "Cannot create the fonts folder {}: {}", dir.display(), e))?;
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| tr!("Не удалось создать папку шрифтов {}: {}", "Cannot create the fonts folder {}: {}", dir.display(), e))?;
     let name = src.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-    let (stem, ext) = match name.rsplit_once('.') { Some((a, b)) => (a.to_string(), b.to_string()), None => (name.clone(), String::new()) };
+    let (stem, ext) = match name.rsplit_once('.') {
+        Some((a, b)) => (a.to_string(), b.to_string()),
+        None => (name.clone(), String::new()),
+    };
     let mut dest = dir.join(&name);
     let mut i = 2;
     loop {
@@ -257,13 +317,18 @@ fn add_one(src: &Path) -> R<Value> {
             match std::fs::read(&dest) {
                 Err(_) if !dest.exists() => break,
                 // Тот же файл уже добавлен — не копировать второй раз
-                Ok(b) if b == bytes => return entry(&dest, false).ok_or_else(|| tr!("{}: не удалось прочитать шрифт", "{}: cannot read the font", dest.display())),
+                Ok(b) if b == bytes => {
+                    return entry(&dest, false)
+                        .ok_or_else(|| tr!("{}: не удалось прочитать шрифт", "{}: cannot read the font", dest.display()))
+                }
                 _ => {}
             }
         }
         dest = dir.join(format!("{stem} ({i}).{ext}"));
         i += 1;
-        if i > 999 { return Err(tr!("{}: слишком много файлов с таким именем", "{}: too many files with this name", name)); }
+        if i > 999 {
+            return Err(tr!("{}: слишком много файлов с таким именем", "{}: too many files with this name", name));
+        }
     }
     write_atomic(&dest, &bytes).map_err(|e| tr!("Не удалось скопировать шрифт {}: {}", "Cannot copy the font {}: {}", name, e))?;
     entry(&dest, false).ok_or_else(|| tr!("{}: не удалось прочитать шрифт", "{}: cannot read the font", dest.display()))
@@ -271,7 +336,12 @@ fn add_one(src: &Path) -> R<Value> {
 
 /// Имя файла без папок: без разделителей, «..», управляющих символов
 fn plain_name(n: &str) -> bool {
-    !n.is_empty() && n.len() <= 255 && n != "." && n != ".." && !n.contains("..") && !n.chars().any(|c| c == '/' || c == '\\' || c == ':' || c.is_control())
+    !n.is_empty()
+        && n.len() <= 255
+        && n != "."
+        && n != ".."
+        && !n.contains("..")
+        && !n.chars().any(|c| c == '/' || c == '\\' || c == ':' || c.is_control())
 }
 
 // ---------------------------------------------------------------------------
@@ -290,7 +360,11 @@ pub async fn fonts_add(window: WebviewWindow, paths: Option<Vec<String>>) -> R<V
     let files: Vec<PathBuf> = match paths {
         Some(v) => v.into_iter().map(PathBuf::from).collect(),
         None => {
-            let d = window.dialog().file().set_title(tr!("Добавить шрифты", "Add fonts")).set_parent(&window)
+            let d = window
+                .dialog()
+                .file()
+                .set_title(tr!("Добавить шрифты", "Add fonts"))
+                .set_parent(&window)
                 .add_filter(tr!("Шрифты (TTF, OTF, TTC)", "Fonts (TTF, OTF, TTC)"), FONT_EXT);
             match tauri::async_runtime::spawn_blocking(move || d.blocking_pick_files()).await.ok().flatten() {
                 Some(v) => v.into_iter().filter_map(|f| f.into_path().ok()).collect(),
@@ -298,26 +372,41 @@ pub async fn fonts_add(window: WebviewWindow, paths: Option<Vec<String>>) -> R<V
             }
         }
     };
-    if files.is_empty() { return Ok(vec![]); }
+    if files.is_empty() {
+        return Ok(vec![]);
+    }
     blocking(move || {
         let (mut added, mut errors) = (vec![], vec![]);
         for f in &files {
-            match add_one(f) { Ok(e) => added.push(e), Err(e) => errors.push(e) }
+            match add_one(f) {
+                Ok(e) => added.push(e),
+                Err(e) => errors.push(e),
+            }
         }
-        if added.is_empty() && !errors.is_empty() { Err(errors.join("\n")) } else { Ok(added) }
-    }).await?
+        if added.is_empty() && !errors.is_empty() {
+            Err(errors.join("\n"))
+        } else {
+            Ok(added)
+        }
+    })
+    .await?
 }
 
 /// Удалить пользовательский шрифт по имени файла
 #[tauri::command]
 pub async fn fonts_remove(file: String) -> R<bool> {
     blocking(move || {
-        if !plain_name(&file) || !has_font_ext(Path::new(&file)) { return Err(tr!("Неверное имя файла шрифта: «{}»", "Invalid font file name: \"{}\"", file)); }
+        if !plain_name(&file) || !has_font_ext(Path::new(&file)) {
+            return Err(tr!("Неверное имя файла шрифта: «{}»", "Invalid font file name: \"{}\"", file));
+        }
         let p = user_dir().join(&file);
-        if !p.is_file() { return Err(tr!("Шрифт «{}» не найден", "Font \"{}\" not found", file)); }
+        if !p.is_file() {
+            return Err(tr!("Шрифт «{}» не найден", "Font \"{}\" not found", file));
+        }
         std::fs::remove_file(&p).map_err(|e| tr!("Не удалось удалить шрифт: {}", "Cannot remove the font: {}", e))?;
         Ok(true)
-    }).await?
+    })
+    .await?
 }
 
 /// Открыть папку пользовательских шрифтов в проводнике
@@ -328,7 +417,8 @@ pub async fn fonts_open_dir() -> R<bool> {
         std::fs::create_dir_all(&d).map_err(|e| e.to_string())?;
         tauri_plugin_opener::open_path(s(&d), None::<&str>).map_err(|e| e.to_string())?;
         Ok(true)
-    }).await?
+    })
+    .await?
 }
 
 /// Подготовить <app_cache>/fonts (для fontsdir фильтра ass) → путь к папке
@@ -353,7 +443,9 @@ mod tests {
         println!("Inter.ttf → {inter:?}; OpenSans.ttf → {open:?}");
         for n in ["Inter.ttf", "OpenSans.ttf"] {
             let b = builtin_file(n);
-            for id in [1u16, 2, 4, 6, 16] { println!("{n} nameID {id}: {:?}", name_id(&b, id)); }
+            for id in [1u16, 2, 4, 6, 16] {
+                println!("{n} nameID {id}: {:?}", name_id(&b, id));
+            }
         }
         // Inter 4 (вариативный) называется «Inter Variable»; nameID 16 у обоих нет
         assert_eq!(inter.as_deref(), Some("Inter Variable"));
@@ -368,7 +460,9 @@ mod tests {
         assert_eq!(family_name(b"<!DOCTYPE html><html></html>"), None);
         // обрезанный шрифт не паникует
         let b = builtin_file("Inter.ttf");
-        for n in [12, 100, 1000, 5000] { let _ = family_name(&b[..n]); }
+        for n in [12, 100, 1000, 5000] {
+            let _ = family_name(&b[..n]);
+        }
         // коллекция с одним шрифтом (смещение первого шрифта = 12 + 4) — то же имя
         let mut ttc = b"ttcf\x00\x01\x00\x00\x00\x00\x00\x01\x00\x00\x00\x10".to_vec();
         let mut face = b.clone();
