@@ -188,7 +188,8 @@ async fn call_tool(tool: &str, args: Value) -> Result<Value, String> {
 
 /// Всё, что нужно окну «ИИ-ассистент»: готовые настройки для MCP-клиентов
 pub fn info() -> Value {
-    let command = std::env::current_exe().map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
+    // AppImage: в настройки клиента — сам файл образа, папка /tmp/.mount_… исчезнет после закрытия программы
+    let command = std::env::current_exe().map(|p| paths::launch_exe(&p).to_string_lossy().to_string()).unwrap_or_default();
     let args = vec!["--mcp".to_string()];
     let mut env = serde_json::Map::new();
     for k in ["FFM_CONFIG", "FFM_APP_DIR"] {

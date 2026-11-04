@@ -141,12 +141,10 @@ async fn request_on(link: &Link, id: &str, method: &str, params: Value) -> Resul
 
 fn launch_app() -> Result<(), String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    log(&format!("starting FF Montage: {}", exe.display()));
-    let mut c = std::process::Command::new(exe);
-    c.current_dir(&paths::get().app_dir)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
+    // AppImage: запускается файл образа (окно переживёт MCP-сервер, чья папка образа исчезнет вместе с ним)
+    let mut c = paths::launch_command(&exe);
+    log(&format!("starting FF Montage: {}", c.get_program().to_string_lossy()));
+    c.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;

@@ -96,12 +96,14 @@ fn asset_name(version: &str, os: &str, arch: &str, appimage: bool) -> Option<Str
     Some(format!("FF-Montage-{version}-{plat}"))
 }
 
-/// Программа запущена из AppImage: обновлять надо сам файл $APPIMAGE
+/// Программа запущена из AppImage: обновлять надо сам файл $APPIMAGE (только если exe — из этого образа, paths::appimage)
 fn appimage_path() -> Option<PathBuf> {
-    if !cfg!(target_os = "linux") {
-        return None;
-    }
-    std::env::var_os("APPIMAGE").map(PathBuf::from).filter(|p| p.is_file())
+    paths::appimage().map(|a| a.file.clone()).filter(|p| p.is_file())
+}
+
+/// Какой ассет релиза взяло бы обновление для этой копии программы (для «--engine info»)
+pub fn current_asset(version: &str) -> Option<String> {
+    asset_name(version, std::env::consts::OS, std::env::consts::ARCH, appimage_path().is_some())
 }
 
 /// Ссылка на ассет релиза по точному имени
@@ -339,11 +341,12 @@ fn emit(app: &AppHandle, text: &str) {
     let _ = app.emit("update:log", json!({ "text": text }));
 }
 
-/// Перезапуск: новая копия программы стартует, эта закрывается
+/// Перезапуск: новая копия программы стартует, эта закрывается. В AppImage запускается файл образа ($APPIMAGE),
+/// а не exe из папки образа: та исчезнет вместе с этим процессом (paths::launch_command).
 pub fn relaunch(app: &AppHandle, exe: &Path) -> Result<(), String> {
-    let mut c = std::process::Command::new(exe);
+    let mut c = paths::launch_command(exe);
     // Новая копия подождёт, пока эта закроется (иначе сработает защита от второго экземпляра)
-    c.current_dir(&paths::get().app_dir).env("FFM_RELAUNCH", "1");
+    c.env("FFM_RELAUNCH", "1");
     c.spawn().map_err(|e| tr!("Не удалось запустить новую версию: {}", "Cannot start the new version: {}", e))?;
     app.exit(0);
     Ok(())
@@ -505,18 +508,33 @@ async fn download_verified(app: &AppHandle, p: &Plan, tmp: &Path) -> Result<Path
     Ok(archive)
 }
 
-/// AppImage: новый файл кладётся рядом с $APPIMAGE и подменяет его переименованием (запущенный образ это не ломает)
+/// Временный файл нового образа: рядом с $APPIMAGE (та же файловая система — rename атомарен), имя + «.new»
+#[cfg_attr(not(unix), allow(dead_code))]
+fn appimage_next(target: &Path) -> PathBuf {
+    let mut name = target.file_name().unwrap_or_default().to_os_string();
+    name.push(".new");
+    target.with_file_name(name)
+}
+
+/// Скопировать новый образ рядом с target (права 755) и подменить target переименованием; при ошибке target не тронут
+#[cfg(unix)]
+fn swap_appimage(file: &Path, target: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let next = appimage_next(target);
+    let r = std::fs::copy(file, &next)
+        .and_then(|_| std::fs::set_permissions(&next, std::fs::Permissions::from_mode(0o755)))
+        .and_then(|_| std::fs::rename(&next, target));
+    if r.is_err() {
+        let _ = std::fs::remove_file(&next);
+    }
+    r
+}
+
+/// AppImage: новый файл кладётся рядом с $APPIMAGE и подменяет его переименованием (запущенный образ это не ломает:
+/// он смонтирован из старого inode). Имя файла не меняется — ярлыки и «non-Steam game» в Steam продолжают работать.
 #[cfg(unix)]
 fn install_appimage(app: &AppHandle, file: &Path, target: &Path) -> Result<Value, String> {
-    use std::os::unix::fs::PermissionsExt;
-    let next = target.with_extension("AppImage.new");
-    let fail = |e: std::io::Error| tr!("Не удалось установить обновление: {}", "Cannot install the update: {}", e);
-    std::fs::copy(file, &next).map_err(fail)?;
-    std::fs::set_permissions(&next, std::fs::Permissions::from_mode(0o755)).map_err(fail)?;
-    if let Err(e) = std::fs::rename(&next, target) {
-        let _ = std::fs::remove_file(&next);
-        return Err(fail(e));
-    }
+    swap_appimage(file, target).map_err(|e| tr!("Не удалось установить обновление: {}", "Cannot install the update: {}", e))?;
     emit(app, tr!("Готово, перезапуск…", "Done, restarting…"));
     relaunch(app, target)?;
     Ok(json!({ "updated": true }))
@@ -679,6 +697,46 @@ mod tests {
         assert_eq!(plan(&release("v0.4.0", &ALL), "garbage", "windows", "x86_64", false), Err(Skip::NotNewer));
         assert_eq!(plan(&release("v0.4.0", &ALL[..4]), "0.3.1", "windows", "x86_64", false), Err(Skip::Unsigned));
         assert_eq!(plan(&release("v0.4.0", &[ALL[0], ALL[4]]), "0.3.1", "windows", "x86_64", false), Err(Skip::Unsigned));
+    }
+
+    #[test]
+    fn appimage_replaced_in_place() {
+        // Имя образа сохраняется (ярлык Steam указывает на него), временный файл — рядом, с «.new»
+        let t = Path::new("/home/deck/Applications/FF-Montage-0.4.2-linux-x86_64.AppImage");
+        assert_eq!(appimage_next(t), Path::new("/home/deck/Applications/FF-Montage-0.4.2-linux-x86_64.AppImage.new"));
+        // Переименованный пользователем образ (без расширения, с точками в имени)
+        assert_eq!(appimage_next(Path::new("/opt/ff-montage")), Path::new("/opt/ff-montage.new"));
+        assert_eq!(appimage_next(Path::new("/opt/FF.Montage.v1")), Path::new("/opt/FF.Montage.v1.new"));
+        // Из AppImage обновление берёт именно AppImage-ассет
+        assert_eq!(asset_name("0.4.2", "linux", "x86_64", true).unwrap(), "FF-Montage-0.4.2-linux-x86_64.AppImage");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn appimage_swap_keeps_old_inode_readable() {
+        // Подмена переименованием: открытый (смонтированный) старый файл остаётся читаемым, по пути — уже новый,
+        // исполняемый; временного .new не остаётся
+        use std::io::Read;
+        use std::os::unix::fs::PermissionsExt;
+        let dir = paths::test_dir("appimage-swap");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("FF-Montage-0.4.1-linux-x86_64.AppImage");
+        let download = dir.join("download.AppImage");
+        std::fs::write(&target, b"old").unwrap();
+        std::fs::write(&download, b"new").unwrap();
+        let mut running = std::fs::File::open(&target).unwrap();
+        swap_appimage(&download, &target).unwrap();
+        let mut s = String::new();
+        running.read_to_string(&mut s).unwrap();
+        assert_eq!(s, "old");
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "new");
+        assert_eq!(std::fs::metadata(&target).unwrap().permissions().mode() & 0o777, 0o755);
+        assert!(!appimage_next(&target).exists());
+        // Ошибка (нет скачанного файла) — старый образ на месте
+        assert!(swap_appimage(&dir.join("nope"), &target).is_err());
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "new");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

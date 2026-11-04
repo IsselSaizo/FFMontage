@@ -39,21 +39,30 @@ fn bin_in(dir: &Path) -> Option<Bin> {
     None
 }
 
-/// Порядок поиска: папка из настроек → $FFMONTAGE_FFMPEG_DIR → ffmpeg рядом с программой → ffmpeg-* рядом с программой →
-/// vendor/ffmpeg (старые установки 0.2) → PATH
+/// Порядок поиска: папка из настроек → $FFMONTAGE_FFMPEG_DIR → FFmpeg внутри AppImage ($APPDIR/usr/bin/ffmpeg) →
+/// ffmpeg рядом с программой → ffmpeg-* рядом с программой → vendor/ffmpeg (старые установки 0.2) → PATH
 pub fn search_binaries(configured: Option<&Path>) -> Option<Bin> {
     if let Some(c) = configured {
         return bin_in(c);
     }
     let p = paths::get();
+    let env_dir = std::env::var("FFMONTAGE_FFMPEG_DIR").ok();
+    let cands = candidate_dirs(env_dir.as_deref(), paths::appimage().map(|a| a.dir.as_path()), &p.app_dir, &p.vendor_dir);
+    first_bin(&cands, std::env::var_os("PATH").as_deref())
+}
+
+/// Папки, где искать FFmpeg (без PATH), по порядку — см. search_binaries
+fn candidate_dirs(env_dir: Option<&str>, appimage_dir: Option<&Path>, app_dir: &Path, vendor_dir: &Path) -> Vec<PathBuf> {
     let mut cands: Vec<PathBuf> = vec![];
-    if let Ok(e) = std::env::var("FFMONTAGE_FFMPEG_DIR") {
-        if !e.is_empty() {
-            cands.push(PathBuf::from(e));
-        }
+    if let Some(e) = env_dir.filter(|e| !e.is_empty()) {
+        cands.push(PathBuf::from(e));
     }
-    cands.push(p.app_dir.join("ffmpeg"));
-    if let Some(parent) = p.app_dir.parent() {
+    // AppImage: FFmpeg кладёт в образ .github/appimage.conf.json — usr/bin/ffmpeg/bin/ffmpeg
+    if let Some(d) = appimage_dir {
+        cands.push(d.join("usr").join("bin").join("ffmpeg"));
+    }
+    cands.push(app_dir.join("ffmpeg"));
+    if let Some(parent) = app_dir.parent() {
         if let Ok(rd) = std::fs::read_dir(parent) {
             let mut names: Vec<PathBuf> =
                 rd.flatten().filter(|e| e.file_name().to_string_lossy().to_lowercase().starts_with("ffmpeg")).map(|e| e.path()).collect();
@@ -61,20 +70,21 @@ pub fn search_binaries(configured: Option<&Path>) -> Option<Bin> {
             cands.extend(names);
         }
     }
-    cands.push(p.vendor_dir.join("ffmpeg"));
-    for d in cands {
-        if let Some(b) = bin_in(&d) {
-            return Some(b);
-        }
+    cands.push(vendor_dir.join("ffmpeg"));
+    cands
+}
+
+/// Первая папка с ffmpeg и ffprobe: сначала кандидаты, потом PATH
+fn first_bin(cands: &[PathBuf], path: Option<&std::ffi::OsStr>) -> Option<Bin> {
+    cands.iter().find_map(|d| bin_in(d)).or_else(|| path.and_then(|p| std::env::split_paths(p).find_map(|d| bin_in(&d))))
+}
+
+/// FFmpeg взят из самого AppImage (для «--engine info» и дымового теста CI)
+pub fn bundled_in_appimage(bin: &Bin) -> bool {
+    match (paths::appimage(), &bin.dir) {
+        (Some(a), Some(d)) => d.starts_with(&a.dir),
+        _ => false,
     }
-    if let Some(path) = std::env::var_os("PATH") {
-        for d in std::env::split_paths(&path) {
-            if let Some(b) = bin_in(&d) {
-                return Some(b);
-            }
-        }
-    }
-    None
 }
 
 pub fn find() -> Bin {
@@ -265,6 +275,24 @@ const BROWSER_CONTAINERS: &[&str] =
     &[".mp4", ".m4v", ".mov", ".webm", ".mkv", ".mp3", ".m4a", ".aac", ".wav", ".ogg", ".oga", ".opus", ".flac"];
 pub const IMAGE_EXT: &[&str] = &["png", "jpg", "jpeg", "bmp", "webp", "gif", "tif", "tiff"];
 
+/// Нужен ли прокси, чтобы окно сыграло файл в <video> (ext — без точки). linux — окно WebKitGTK: видео декодирует
+/// GStreamer (в AppImage — свой, с gst-libav: H.264, AAC, MP3; VP8/VP9 — libvpx), а HEVC и AV1 есть не везде
+/// (нет патентного декодера / dav1d в образе, VA-API GStreamer не кладём) — для них сразу прокси, как и для H.264
+/// не 8 бит 4:2:0. Если окно всё же не сыграет файл, media.js переспросит <video> и перейдёт на прокси сам.
+fn browser_needs_proxy(ext: &str, vcodec: Option<&str>, acodec: Option<&str>, pix: Option<&str>, linux: bool) -> bool {
+    let ext = format!(".{}", ext.to_lowercase());
+    if !BROWSER_CONTAINERS.contains(&ext.as_str()) {
+        return true;
+    }
+    if vcodec.is_some_and(|c| !BROWSER_VIDEO_CODECS.contains(&c)) || acodec.is_some_and(|c| !BROWSER_AUDIO_CODECS.contains(&c)) {
+        return true;
+    }
+    if linux && matches!(vcodec, Some("hevc" | "av1")) {
+        return true;
+    }
+    vcodec == Some("h264") && pix.is_some_and(|p| !matches!(p, "yuv420p" | "yuvj420p" | "nv12"))
+}
+
 fn parse_rate(r: Option<&str>) -> f64 {
     let r = match r {
         Some(r) if r != "0/0" => r,
@@ -362,29 +390,7 @@ pub async fn probe(file: &Path) -> Res<Value> {
         duration = 0.0;
         fps = 0.0;
     }
-    let dot_ext = format!(".{ext}");
-    let mut needs_proxy = !BROWSER_CONTAINERS.contains(&dot_ext.as_str());
-    if let Some(c) = &vcodec {
-        if !BROWSER_VIDEO_CODECS.contains(&c.as_str()) {
-            needs_proxy = true;
-        }
-    }
-    if let Some(c) = &acodec {
-        if !BROWSER_AUDIO_CODECS.contains(&c.as_str()) {
-            needs_proxy = true;
-        }
-    }
-    // На Linux окно (WebKitGTK/GStreamer) не всегда умеет HEVC и AV1
-    if cfg!(target_os = "linux") && matches!(vcodec.as_deref(), Some("hevc" | "av1")) {
-        needs_proxy = true;
-    }
-    if vcodec.as_deref() == Some("h264") {
-        if let Some(p) = &pix {
-            if !matches!(p.as_str(), "yuv420p" | "yuvj420p" | "nv12") {
-                needs_proxy = true;
-            }
-        }
-    }
+    let mut needs_proxy = browser_needs_proxy(&ext, vcodec.as_deref(), acodec.as_deref(), pix.as_deref(), cfg!(target_os = "linux"));
     if still {
         needs_proxy = false; // картинка показывается как <img>
     }
@@ -1354,6 +1360,62 @@ mod tests {
             run_t(Path::new("echo"), &sv(&["ok"]), Limits::total(PROBE_TIMEOUT)).await
         };
         assert!(String::from_utf8_lossy(&ok.unwrap().stdout).contains("ok"));
+    }
+
+    #[test]
+    fn ffmpeg_from_appimage_first() {
+        // Образ AppImage (usr/bin/ffmpeg/bin) и подставной ffmpeg в PATH: берётся из образа
+        let base = paths::test_dir("ffsearch");
+        let _ = std::fs::remove_dir_all(&base);
+        let appdir = base.join("mount_FF");
+        let img_bin = appdir.join("usr").join("bin").join("ffmpeg").join("bin");
+        let decoy = base.join("decoy");
+        for d in [&img_bin, &decoy] {
+            std::fs::create_dir_all(d).unwrap();
+            for n in ["ffmpeg", "ffprobe"] {
+                std::fs::write(d.join(format!("{n}{EXE}")), b"").unwrap();
+            }
+        }
+        let app_dir = appdir.join("usr").join("bin");
+        let path = std::env::join_paths([&decoy]).unwrap();
+        let c = candidate_dirs(None, Some(&appdir), &app_dir, &base.join("vendor"));
+        let b = first_bin(&c, Some(&path)).unwrap();
+        assert_eq!(b.dir.as_deref(), Some(img_bin.as_path()));
+        assert_eq!(b.ffprobe, img_bin.join(format!("ffprobe{EXE}")));
+        // Без сведений об AppImage тот же образ находится как «ffmpeg рядом с программой»
+        let c = candidate_dirs(Some(""), None, &app_dir, &base.join("vendor"));
+        assert_eq!(first_bin(&c, Some(&path)).unwrap().dir.as_deref(), Some(img_bin.as_path()));
+        // FFMONTAGE_FFMPEG_DIR сильнее образа
+        let c = candidate_dirs(Some(decoy.to_str().unwrap()), Some(&appdir), &app_dir, &base.join("vendor"));
+        assert_eq!(first_bin(&c, None).unwrap().dir.as_deref(), Some(decoy.as_path()));
+        // Нигде нет — только PATH
+        let c = candidate_dirs(None, None, &base.join("nope").join("bin"), &base.join("vendor"));
+        assert_eq!(first_bin(&c, Some(&path)).unwrap().dir.as_deref(), Some(decoy.as_path()));
+        assert!(first_bin(&c, None).is_none());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn proxy_decision() {
+        let np = |ext, v, a, pix, linux| browser_needs_proxy(ext, v, a, pix, linux);
+        // H.264 8 бит + AAC в MP4/MKV играет и в WebView2, и в WebKitGTK (gst-libav в AppImage)
+        for linux in [false, true] {
+            assert!(!np("mp4", Some("h264"), Some("aac"), Some("yuv420p"), linux));
+            assert!(!np("MKV", Some("h264"), Some("opus"), Some("yuvj420p"), linux));
+            assert!(!np("webm", Some("vp9"), Some("opus"), Some("yuv420p"), linux));
+            assert!(!np("mp3", None, Some("mp3"), None, linux));
+            // H.264 10 бит / 4:2:2, чужой контейнер или кодек — прокси везде
+            assert!(np("mp4", Some("h264"), None, Some("yuv420p10le"), linux));
+            assert!(np("mp4", Some("h264"), None, Some("yuv422p"), linux));
+            assert!(np("avi", Some("h264"), None, Some("yuv420p"), linux));
+            assert!(np("mp4", Some("mpeg4"), None, None, linux));
+            assert!(np("mp4", Some("h264"), Some("ac3"), Some("yuv420p"), linux));
+        }
+        // HEVC и AV1: Windows (WebView2) — напрямую, Linux (WebKitGTK) — через прокси
+        for v in ["hevc", "av1"] {
+            assert!(!np("mp4", Some(v), Some("aac"), Some("yuv420p"), false), "{v}");
+            assert!(np("mp4", Some(v), Some("aac"), Some("yuv420p"), true), "{v}");
+        }
     }
 
     #[test]

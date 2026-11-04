@@ -63,21 +63,39 @@ fn gst_hint() -> &'static str {
         "Install it: sudo apt install gstreamer1.0-plugins-good (Ubuntu/Debian), sudo dnf install gstreamer1-plugins-good (Fedora), sudo pacman -S gst-plugins-good (Arch), then restart the program.")
 }
 
+/// Папки плагинов GStreamer, которые он сам просмотрит: GST_PLUGIN_PATH(_1_0) и GST_PLUGIN_SYSTEM_PATH(_1_0); если
+/// системный путь задан (так делает AppImage — apprun-hooks GStreamer указывают в образ), стандартные папки
+/// системы GStreamer не смотрит — и мы тоже.
+pub fn gst_plugin_dirs(env: &dyn Fn(&str) -> Option<String>) -> Vec<std::path::PathBuf> {
+    let split = |k: &str| env(k).filter(|v| !v.is_empty()).map(|v| std::env::split_paths(&v).collect::<Vec<_>>());
+    let mut dirs: Vec<std::path::PathBuf> = ["GST_PLUGIN_PATH_1_0", "GST_PLUGIN_PATH"].iter().filter_map(|k| split(k)).flatten().collect();
+    match split("GST_PLUGIN_SYSTEM_PATH_1_0").or_else(|| split("GST_PLUGIN_SYSTEM_PATH")) {
+        Some(sys) => dirs.extend(sys),
+        None => {
+            for lib in ["/usr/lib", "/usr/lib64", "/usr/local/lib", "/usr/lib/x86_64-linux-gnu", "/usr/lib/aarch64-linux-gnu"] {
+                dirs.push(std::path::Path::new(lib).join("gstreamer-1.0"));
+            }
+        }
+    }
+    dirs
+}
+
+/// Плагины GStreamer, без которых окно на Linux не играет медиа: autodetect — autoaudiosink, playback — playbin,
+/// isomp4 — MP4/MOV, libav — декодеры H.264/AAC/MP3 (в AppImage кладутся из gstreamer1.0-libav)
+pub const GST_NEEDED: [&str; 7] = ["coreelements", "autodetect", "playback", "typefindfunctions", "app", "isomp4", "libav"];
+
+/// Каких плагинов из GST_NEEDED нет в папках dirs
+pub fn gst_missing(dirs: &[std::path::PathBuf]) -> Vec<&'static str> {
+    GST_NEEDED.iter().copied().filter(|p| !dirs.iter().any(|d| d.join(format!("libgst{p}.so")).exists())).collect()
+}
+
 /// Linux: WebKitGTK выводит звук через autoaudiosink (gst-plugins-good). Ищем плагин рядом с базовыми плагинами GStreamer;
 /// если не нашли и базовых — путь нестандартный, молчим, чтобы не пугать зря.
 #[cfg(target_os = "linux")]
 pub fn gst_audio_sink_missing() -> bool {
     static MISSING: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *MISSING.get_or_init(|| {
-        let mut dirs: Vec<std::path::PathBuf> =
-            ["GST_PLUGIN_SYSTEM_PATH_1_0", "GST_PLUGIN_SYSTEM_PATH", "GST_PLUGIN_PATH_1_0", "GST_PLUGIN_PATH"]
-                .iter()
-                .filter_map(std::env::var_os)
-                .flat_map(|v| std::env::split_paths(&v).collect::<Vec<_>>())
-                .collect();
-        for lib in ["/usr/lib", "/usr/lib64", "/usr/local/lib", "/usr/lib/x86_64-linux-gnu", "/usr/lib/aarch64-linux-gnu"] {
-            dirs.push(std::path::Path::new(lib).join("gstreamer-1.0"));
-        }
+        let dirs = gst_plugin_dirs(&|k| std::env::var(k).ok());
         let has = |f: &str| dirs.iter().any(|d| d.join(f).exists());
         has("libgstcoreelements.so") && !has("libgstautodetect.so")
     })
@@ -86,6 +104,16 @@ pub fn gst_audio_sink_missing() -> bool {
 #[cfg(not(target_os = "linux"))]
 pub fn gst_audio_sink_missing() -> bool {
     false
+}
+
+/// Сведения о GStreamer для «ff-montage --engine info» (дымовой тест AppImage в CI)
+pub fn gst_info() -> serde_json::Value {
+    if !cfg!(target_os = "linux") {
+        return serde_json::json!({ "used": false, "dirs": [], "missing": [], "audioSinkMissing": false });
+    }
+    let dirs = gst_plugin_dirs(&|k| std::env::var(k).ok());
+    let found: Vec<String> = dirs.iter().filter(|d| d.is_dir()).map(|d| d.to_string_lossy().to_string()).collect();
+    serde_json::json!({ "used": true, "dirs": found, "missing": gst_missing(&dirs), "audioSinkMissing": gst_audio_sink_missing() })
 }
 
 /// Процесс окна упал: команды ИИ-ассистента сразу получают ошибку (а не ждут до таймаута).
@@ -222,5 +250,54 @@ pub fn on_page_load(webview: &Webview, payload: &PageLoadPayload<'_>) {
                 selftest::on_loaded(webview.app_handle().clone(), label);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn gst_dirs_follow_appimage_env() {
+        let sep = if cfg!(windows) { ";" } else { ":" };
+        // AppImage: системный путь — только образ, стандартные папки системы не смотрятся
+        let img = format!("/tmp/.mount_FF/usr/lib/gstreamer-1.0{sep}/tmp/.mount_FF/usr/lib/extra");
+        let env = |k: &str| match k {
+            "GST_PLUGIN_SYSTEM_PATH_1_0" => Some(img.clone()),
+            "GST_PLUGIN_PATH_1_0" => Some("/opt/gst".to_string()),
+            _ => None,
+        };
+        let d = gst_plugin_dirs(&env);
+        assert_eq!(
+            d,
+            vec![
+                PathBuf::from("/opt/gst"),
+                PathBuf::from("/tmp/.mount_FF/usr/lib/gstreamer-1.0"),
+                PathBuf::from("/tmp/.mount_FF/usr/lib/extra")
+            ]
+        );
+        // Без переменных — стандартные папки (Ubuntu/Debian, Arch/SteamOS, Fedora)
+        let d = gst_plugin_dirs(&|_| None);
+        assert!(d.contains(&PathBuf::from("/usr/lib/x86_64-linux-gnu/gstreamer-1.0")));
+        assert!(d.contains(&PathBuf::from("/usr/lib/gstreamer-1.0")));
+        assert!(d.contains(&PathBuf::from("/usr/lib64/gstreamer-1.0")));
+        // Пустой GST_PLUGIN_SYSTEM_PATH не отменяет стандартные папки
+        assert_eq!(gst_plugin_dirs(&|k| (k == "GST_PLUGIN_SYSTEM_PATH").then(String::new)).len(), d.len());
+    }
+
+    #[test]
+    fn gst_missing_plugins() {
+        let dir = paths::test_dir("gst");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(gst_missing(std::slice::from_ref(&dir)), GST_NEEDED.to_vec());
+        for p in GST_NEEDED.iter().filter(|p| **p != "libav") {
+            std::fs::write(dir.join(format!("libgst{p}.so")), b"").unwrap();
+        }
+        assert_eq!(gst_missing(std::slice::from_ref(&dir)), vec!["libav"]);
+        std::fs::write(dir.join("libgstlibav.so"), b"").unwrap();
+        assert!(gst_missing(&[PathBuf::from("/nope"), dir.clone()]).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -467,6 +467,94 @@ pub fn info() -> Value {
     })
 }
 
+// ---------------------------------------------------------------------------
+// AppImage (0.4.2). Образ монтируется в /tmp/.mount_XXXX (или распаковывается во временную папку) — эта папка
+// существует, только пока жив запустивший её процесс. Поэтому перезапуск, обновление и настройки MCP-клиентов
+// запускают сам файл образа ($APPIMAGE), а не exe внутри него. Данные — в папках XDG (detect_mode: Linux → system).
+// ---------------------------------------------------------------------------
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct AppImage {
+    /// Файл образа ($APPIMAGE) — его подменяет обновление (update.rs install_appimage)
+    pub file: PathBuf,
+    /// Папка образа ($APPDIR): FFmpeg в usr/bin/ffmpeg, GStreamer в usr/lib/gstreamer-1.0
+    pub dir: PathBuf,
+}
+
+/// Запуск из AppImage: заданы $APPIMAGE и $APPDIR и сам exe лежит внутри $APPDIR. Последнее важно: переменные
+/// наследуются, и программа из tar.gz, запущенная, например, из терминала-AppImage, иначе приняла бы чужой образ за свой.
+pub fn appimage_from(appimage: Option<&str>, appdir: Option<&str>, exe: &Path) -> Option<AppImage> {
+    let (file, dir) = (PathBuf::from(appimage?), PathBuf::from(appdir?));
+    if !file.is_absolute() || !dir.is_absolute() || !under(exe, &dir) || under(&file, &dir) {
+        return None;
+    }
+    Some(AppImage { file, dir })
+}
+
+/// Программа запущена из AppImage (только Linux)
+pub fn appimage() -> Option<&'static AppImage> {
+    static A: OnceLock<Option<AppImage>> = OnceLock::new();
+    A.get_or_init(|| {
+        if !cfg!(target_os = "linux") {
+            return None;
+        }
+        let exe = std::env::current_exe().ok()?;
+        appimage_from(env_var("APPIMAGE").as_deref(), env_var("APPDIR").as_deref(), &exe).filter(|a| a.file.is_file())
+    })
+    .as_ref()
+}
+
+/// Что запускать, чтобы стартовала эта же программа: в AppImage — файл образа, иначе — сам exe
+pub fn launch_exe(exe: &Path) -> PathBuf {
+    match appimage() {
+        Some(a) if under(exe, &a.dir) => a.file.clone(),
+        _ => exe.to_path_buf(),
+    }
+}
+
+/// Окружение новой копии программы, запускаемой из AppImage: переменные, указывающие внутрь папки старого образа
+/// ($APPDIR, пути GStreamer и GTK из apprun-hooks, PATH, LD_LIBRARY_PATH…), чистятся — новый образ задаст их сам,
+/// а старая папка исчезнет вместе с этим процессом. Списки через «:» чистятся поэлементно.
+/// Возвращает (имя, Some(новое значение)) или (имя, None) — убрать переменную.
+pub fn env_without_appdir(vars: impl IntoIterator<Item = (String, String)>, dir: &Path) -> Vec<(String, Option<String>)> {
+    let d = dir.to_string_lossy().trim_end_matches('/').to_string();
+    if d.is_empty() {
+        return vec![];
+    }
+    let inside = |part: &str| part == d || part.starts_with(&format!("{d}/"));
+    vars.into_iter()
+        .filter(|(_, v)| v.contains(&d))
+        .map(|(k, v)| {
+            let joined = v.split(':').filter(|p| !inside(p)).collect::<Vec<_>>().join(":");
+            (k, (!joined.is_empty()).then_some(joined))
+        })
+        .collect()
+}
+
+/// Команда запуска новой копии программы (перезапуск, обновление, MCP): в AppImage — файл образа без путей
+/// в старый образ, папка — рядом с образом; иначе — exe из папки программы.
+pub fn launch_command(exe: &Path) -> std::process::Command {
+    // exe внутри образа (перезапуск, MCP) или сам файл образа (после обновления)
+    let img = appimage().filter(|a| under(exe, &a.dir) || exe == a.file);
+    let target = img.map(|a| a.file.clone()).unwrap_or_else(|| exe.to_path_buf());
+    let mut c = std::process::Command::new(&target);
+    match img {
+        Some(a) => {
+            c.current_dir(a.file.parent().unwrap_or(Path::new("/")));
+            let vars = std::env::vars_os().filter_map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?)));
+            for (k, v) in env_without_appdir(vars, &a.dir) {
+                match v {
+                    Some(v) => c.env(k, v),
+                    None => c.env_remove(k),
+                };
+            }
+        }
+        None => {
+            c.current_dir(&get().app_dir);
+        }
+    }
+    c
+}
+
 /// Папка для юнит-тестов: src-tauri/target/ffm-unit-tests/<имя>-<pid> (не %TEMP%, который лежит в %LOCALAPPDATA%)
 #[cfg(test)]
 pub fn test_dir(name: &str) -> PathBuf {
@@ -548,6 +636,59 @@ mod tests {
         assert_eq!(detect_mode(&base, "linux", &env_of(&[("FFM_PORTABLE", "0")])), (Mode::System, "env"));
         assert_eq!(detect_mode(&base.join("nope"), "linux", &env_of(&[("FFM_PORTABLE", "1")])), (Mode::Portable, "env"));
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn appimage_detection() {
+        if cfg!(windows) {
+            return; // пути Unix на Windows не абсолютные
+        }
+        let exe = Path::new("/tmp/.mount_FFabc/usr/bin/ff-montage");
+        let a = appimage_from(Some("/home/deck/Apps/FF.AppImage"), Some("/tmp/.mount_FFabc"), exe).unwrap();
+        assert_eq!(a.file, PathBuf::from("/home/deck/Apps/FF.AppImage"));
+        assert_eq!(a.dir, PathBuf::from("/tmp/.mount_FFabc"));
+        // Переменные унаследованы от чужого AppImage: exe не внутри $APPDIR
+        assert_eq!(appimage_from(Some("/a/Other.AppImage"), Some("/tmp/.mount_Other"), exe), None);
+        assert_eq!(appimage_from(Some("/a/Other.AppImage"), Some("/tmp/.mount_FF"), exe), None, "name prefix is not a folder");
+        // Не заданы / относительные пути / образ внутри собственной папки
+        assert_eq!(appimage_from(None, Some("/tmp/.mount_FFabc"), exe), None);
+        assert_eq!(appimage_from(Some("/a/FF.AppImage"), None, exe), None);
+        assert_eq!(appimage_from(Some("FF.AppImage"), Some("/tmp/.mount_FFabc"), exe), None);
+        assert_eq!(appimage_from(Some("/tmp/.mount_FFabc/x.AppImage"), Some("/tmp/.mount_FFabc"), exe), None);
+        // Режим путей в AppImage — системный (XDG), даже если бы папка образа была доступна на запись (D7)
+        assert_eq!(detect_mode(Path::new("/tmp/.mount_FFabc/usr/bin"), "linux", &env_of(&[])), (Mode::System, "platform"));
+    }
+
+    #[test]
+    fn appimage_relaunch_env() {
+        let vars = |pairs: &[(&str, &str)]| pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect::<Vec<_>>();
+        let mut r = env_without_appdir(
+            vars(&[
+                ("APPDIR", "/tmp/.mount_FFabc"),
+                ("APPIMAGE", "/home/deck/FF.AppImage"),
+                ("PATH", "/tmp/.mount_FFabc/usr/bin:/usr/bin:/bin"),
+                ("GST_PLUGIN_SYSTEM_PATH_1_0", "/tmp/.mount_FFabc/usr/lib/gstreamer-1.0"),
+                ("LD_LIBRARY_PATH", "/tmp/.mount_FFabc/usr/lib:/opt/lib"),
+                ("XDG_DATA_DIRS", "/tmp/.mount_FFabc/usr/share/:/usr/share"),
+                ("HOME", "/home/deck"),
+                ("OTHER", "/tmp/.mount_FFabcdef/usr/lib"),
+            ]),
+            Path::new("/tmp/.mount_FFabc/"),
+        );
+        r.sort();
+        assert_eq!(
+            r,
+            vec![
+                ("APPDIR".to_string(), None),
+                ("GST_PLUGIN_SYSTEM_PATH_1_0".to_string(), None),
+                ("LD_LIBRARY_PATH".to_string(), Some("/opt/lib".to_string())),
+                // Чужая папка с тем же префиксом не трогается (значение остаётся прежним)
+                ("OTHER".to_string(), Some("/tmp/.mount_FFabcdef/usr/lib".to_string())),
+                ("PATH".to_string(), Some("/usr/bin:/bin".to_string())),
+                ("XDG_DATA_DIRS".to_string(), Some("/usr/share".to_string())),
+            ]
+        );
+        assert!(env_without_appdir(vars(&[("PATH", "/usr/bin")]), Path::new("")).is_empty());
     }
 
     #[test]

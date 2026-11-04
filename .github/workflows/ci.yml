@@ -35,9 +35,15 @@ jobs:
         working-directory: src-tauri
         run: cargo fmt --check
       # type_complexity — стилистика (типы колбэков в control/ff/fonts), остальное — ошибка
+      # Ошибки — ещё и в аннотации (их видно через API без входа: check-runs/<id>/annotations)
       - name: Clippy
         working-directory: src-tauri
-        run: cargo clippy --locked --all-targets -- -D warnings -A clippy::type_complexity
+        run: |
+          set -o pipefail
+          cargo clippy --locked --all-targets --message-format=short -- -D warnings -A clippy::type_complexity 2>&1 | tee clippy.log || {
+            grep -E '^[^ ]+\.rs:[0-9]+:[0-9]+: (error|warning)' clippy.log | head -n 10 | sed 's/^/::error title=Clippy::/'
+            exit 1
+          }
       - name: Перевод интерфейса (i18n)
         run: node tests/i18n-check.js
       - name: Таблица горячих клавиш (docs/HOTKEYS.md) актуальна
@@ -128,7 +134,14 @@ jobs:
         run: cargo build --release --locked
       - name: Юнит-тесты Rust (план экспорта, плагины, обновления)
         working-directory: src-tauri
-        run: cargo test --release --locked
+        run: |
+          set -o pipefail
+          cargo test --release --locked 2>&1 | tee test.log || {
+            grep -E '^test .* FAILED|^error' test.log | head -n 8 | sed 's/^/::error title=cargo test::/'
+            grep -A4 'panicked at' test.log | head -n 30 | tr '\n' ' ' | cut -c1-1500 | sed 's/^/::error title=cargo test (паника)::/'
+            echo
+            exit 1
+          }
       - name: Тест движка (процессор)
         run: node tests/engine-test.js
       - name: Экранирование для графа FFmpeg

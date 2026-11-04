@@ -2,6 +2,7 @@
 //   ff-montage --engine <команда>   (параметры — JSON в stdin, ответ — JSON в stdout)
 // Команды: probe {file} | thumbs {info} | peaks {info} | proxy {info} | reverse {info,a,b} | freeze {info,at}
 //          silence {file,threshold,min} | frame {file,t,width} | encoders {reset?} | queue | version | export {plan} | checkplan {plan} | paths
+//          info (AppImage, режим путей, откуда FFmpeg, плагины GStreamer, ассет обновления)
 //          vst-list | vst-scan {force?} | vst-info {uid,state?,ctrl?,params?} | vst-render {job}
 use crate::{commands, export, ff, paths, tr};
 use serde_json::{json, Value};
@@ -22,6 +23,28 @@ pub fn main(cmd: &str) {
         let noop = |_: f64| {};
         match cmd {
             "paths" => Ok(serde_json::to_value(paths::get()).unwrap_or_default()),
+            // Где программа и что нашла: AppImage, режим путей, FFmpeg (из образа ли), GStreamer, ассет обновления —
+            // для дымового теста AppImage (tools/appimage-smoke.sh) и диагностики на Steam Deck
+            "info" => {
+                let p = paths::get();
+                let version = env!("CARGO_PKG_VERSION");
+                Ok(json!({
+                    "version": version,
+                    "os": std::env::consts::OS,
+                    "arch": std::env::consts::ARCH,
+                    "exe": std::env::current_exe().map(|e| e.to_string_lossy().to_string()).unwrap_or_default(),
+                    "appDir": p.app_dir.to_string_lossy(),
+                    "appimage": paths::appimage(),
+                    "paths": { "mode": p.mode.as_str(), "reason": p.mode_reason, "configDir": p.config_dir.to_string_lossy(),
+                        "dataDir": p.data_dir.to_string_lossy(), "cacheDir": p.cache_dir.to_string_lossy() },
+                    "ffmpeg": {
+                        "path": bin.ffmpeg.to_string_lossy(), "ffprobe": bin.ffprobe.to_string_lossy(), "missing": bin.missing,
+                        "bundled": ff::bundled_in_appimage(&bin), "version": ff::version_info(&bin).await,
+                    },
+                    "gst": crate::windows::gst_info(),
+                    "update": { "asset": crate::update::current_asset(version) },
+                }))
+            }
             "version" => {
                 Ok(json!({ "ffmpeg": bin.ffmpeg.to_string_lossy(), "missing": bin.missing, "version": ff::version_info(&bin).await }))
             }
