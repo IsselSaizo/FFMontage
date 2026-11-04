@@ -73,6 +73,8 @@ window.api = {
     try { plan = exportCommand(project, settings, i.ffMajor); } catch (e) { return { ok: false, error: String(e?.message || e) }; }
     return invoke('export_start', { plan });
   },
+  // Готовый план FFmpeg (запекание анимаций): { args, filter, duration, output }
+  runPlan: (plan) => invoke('export_start', { plan: { args: plan.args, filter: plan.filter, duration: plan.duration, output: plan.output } }),
   cancelExport: () => invoke('export_cancel'),
   onExportProgress: (fn) => on('export:progress', fn),
   saveProject: (args) => invoke('project_save', { args }),

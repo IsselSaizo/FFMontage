@@ -68,6 +68,9 @@ export function normalizeProject(p) {
     }
   };
   p.videoClips.forEach(fix);
+  // Дорожка «Наложения» (временная, до многодорожечного видео): анимации с прозрачностью поверх ролика
+  p.overlayClips = Array.isArray(p.overlayClips) ? p.overlayClips : [];
+  p.overlayClips.forEach(fix);
   fixTracks(p.audioTracks);
   // Эпизоды (кроме открытого) хранят своё содержимое сами
   if (Array.isArray(p.episodes) && p.episodes.length) {
@@ -326,7 +329,8 @@ class Store {
   validateSelection() {
     const s = this.selection;
     if (!s) return;
-    let ok = s.kind === 'track' ? this.project.audioTracks.some((t) => t.id === s.id) : !!this.findClip(s.id);
+    let ok = s.kind === 'track' ? this.project.audioTracks.some((t) => t.id === s.id)
+      : s.kind === 'overlay' ? !!this.findOverlay(s.id) : !!this.findClip(s.id);
     if (ok && s.kind === 'transition') ok = !!this.junctionBefore(s.id);
     if (!ok) { this.selection = null; this.emit('selection'); }
   }
@@ -357,7 +361,32 @@ class Store {
     for (const t of this.project.audioTracks) for (const c of t.clips) e = Math.max(e, end(c));
     return e;
   }
-  duration() { return Math.max(this.videoEnd(), this.audioEnd()); }
+  duration() { return Math.max(this.videoEnd(), this.audioEnd(), this.overlayEnd()); }
+  overlayEnd() { return (this.project.overlayClips || []).reduce((s, c) => Math.max(s, end(c)), 0); }
+
+  // --- Дорожка «Наложения»: клипы не перекрываются; новый клип встаёт в ближайшее свободное место ---
+  findOverlay(id) { return (this.project.overlayClips || []).find((c) => c.id === id) || null; }
+  overlayFree(start, dur, exclude = null) {
+    const list = (this.project.overlayClips || []).filter((c) => c.id !== exclude).sort(byStart);
+    let s = Math.max(0, start);
+    for (const c of list) if (s < end(c) - ADJ && s + dur > c.start + ADJ) s = end(c);
+    return s;
+  }
+  addOverlayClip(mediaId, at = this.time) {
+    const m = this.media(mediaId);
+    if (!m) return null;
+    const clip = { ...this.newClip(mediaId), muted: true };
+    clip.start = this.overlayFree(at, len(clip));
+    this.mutate((p) => { p.overlayClips = [...(p.overlayClips || []), clip]; });
+    this.select({ kind: 'overlay', id: clip.id });
+    return clip;
+  }
+  setOverlay(id, patch, opts) {
+    this.mutate((p) => { const c = (p.overlayClips || []).find((x) => x.id === id); if (c) Object.assign(c, patch); }, opts);
+  }
+  removeOverlay(id) {
+    this.mutate((p) => { p.overlayClips = (p.overlayClips || []).filter((c) => c.id !== id); });
+  }
 
   // Название клипа для показа: своё имя → имя исходного файла (у реверса/стоп-кадра — имя оригинала)
   clipName(c) {
@@ -470,6 +499,7 @@ class Store {
       for (const s of [p, ...(p.episodes || []).filter((e) => e.videoClips)]) {
         s.videoClips = s.videoClips.filter((c) => !ids.has(c.mediaId));
         for (const t of s.audioTracks || []) t.clips = t.clips.filter((c) => !ids.has(c.mediaId));
+        if (s.overlayClips) s.overlayClips = s.overlayClips.filter((c) => !ids.has(c.mediaId));
       }
     });
   }
@@ -480,6 +510,7 @@ class Store {
     for (const s of [this.project, ...(this.project.episodes || []).filter((e) => e.videoClips)]) {
       n += s.videoClips.filter((c) => ids.has(c.mediaId)).length;
       for (const t of s.audioTracks || []) n += t.clips.filter((c) => ids.has(c.mediaId)).length;
+      n += (s.overlayClips || []).filter((c) => ids.has(c.mediaId)).length;
     }
     return n;
   }
@@ -501,13 +532,14 @@ class Store {
   // Убрать открытый эпизод в хранилище, достать другой
   swapIn(p, id) {
     const cur = p.episodes.find((e) => e.id === p.activeEpisode);
-    if (cur) { cur.videoClips = p.videoClips; cur.audioTracks = p.audioTracks; cur.videoName = p.videoName; cur.time = this.time; }
+    if (cur) { cur.videoClips = p.videoClips; cur.audioTracks = p.audioTracks; cur.overlayClips = p.overlayClips || []; cur.videoName = p.videoName; cur.time = this.time; }
     const next = p.episodes.find((e) => e.id === id);
     p.videoClips = next.videoClips || [];
     p.audioTracks = next.audioTracks && next.audioTracks.length ? next.audioTracks : [newTrack()];
+    p.overlayClips = next.overlayClips || [];
     if (next.videoName) p.videoName = next.videoName; else delete p.videoName;
     const t = next.time || 0;
-    delete next.videoClips; delete next.audioTracks; delete next.videoName; delete next.time;
+    delete next.videoClips; delete next.audioTracks; delete next.overlayClips; delete next.videoName; delete next.time;
     p.activeEpisode = id;
     return t;
   }

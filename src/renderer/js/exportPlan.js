@@ -230,7 +230,8 @@ export function buildExport(project, settings) {
     }
   });
 
-  const total = Math.max(videoEnd, audioEnd);
+  const ovEnd = (project.overlayClips || []).reduce((s, c) => (media[c.mediaId] ? Math.max(s, c.start + clipDuration(c)) : s), 0);
+  const total = Math.max(videoEnd, audioEnd, ovEnd);
   if (total <= 0.01) throw new Error('Таймлайн пуст — нечего экспортировать.');
 
   // Если звук длиннее видео — добиваем чёрным кадром
@@ -239,8 +240,22 @@ export function buildExport(project, settings) {
     pieces.push('[vtail]');
   }
   // xfade может отдать 4:4:4 (FFmpeg 9) — high-профиль H.264 его не принимает, поэтому на выходе всегда 4:2:0
-  if (pieces.length === 1) filters.push(`${pieces[0]}format=yuv420p[vout]`);
-  else filters.push(`${pieces.join('')}concat=n=${pieces.length}:v=1:a=0,format=yuv420p[vout]`);
+  // Дорожка «Наложения»: видео с прозрачностью поверх ролика (VP9 alpha читает только libvpx-vp9 — он ставится перед -i)
+  const ovs = (project.overlayClips || []).filter((c) => media[c.mediaId] && clipDuration(c) > 0.001 && c.start < total - 0.001);
+  const vbase = ovs.length ? '[vbase]' : '[vout]';
+  if (pieces.length === 1) filters.push(`${pieces[0]}format=yuv420p${vbase}`);
+  else filters.push(`${pieces.join('')}concat=n=${pieces.length}:v=1:a=0,format=yuv420p${vbase}`);
+  let cur = vbase;
+  ovs.forEach((c, i) => {
+    const m = media[c.mediaId];
+    const dur = Math.min(clipDuration(c), total - c.start);
+    if (/\.webm$/i.test(m.path || '')) inputs.push('-c:v', 'libvpx-vp9');
+    const k = addInput(m, c.in, dur);
+    const out = i === ovs.length - 1 ? '[vout]' : `[vo${i}]`;
+    filters.push(`[${k}:v]trim=duration=${n6(dur)},setpts=PTS-STARTPTS+${n6(c.start)}/TB,fps=${F},scale=${W}:${H},format=yuva420p[ov${i}]`);
+    filters.push(`${cur}[ov${i}]overlay=0:0:format=auto:eof_action=pass:enable='between(t,${n6(c.start)},${n6(c.start + dur)})',format=yuv420p${out}`);
+    cur = out;
+  });
 
   const tail = `apad,atrim=duration=${n6(total)},alimiter=limit=0.98:attack=5:release=50:level=0[aout]`;
   if (!audio.length) filters.push(`anullsrc=r=48000:cl=stereo,atrim=duration=${n6(total)}[aout]`);

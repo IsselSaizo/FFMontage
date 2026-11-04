@@ -46,7 +46,10 @@ export class Preview {
     this.imgSlots = [0, 1].map(() => h('img', { class: 'slot img', draggable: 'false', alt: '' }));
     this.overlay = h('div', { class: 'stage-overlay' });
     this.msg = h('div', { class: 'stage-msg' });
-    this.stage.append(...this.slots, ...this.imgSlots, this.overlay, this.msg);
+    // Дорожка «Наложения» (анимации с прозрачностью) — свой <video> поверх всего
+    this.ovEl = h('video', { class: 'slot ov', preload: 'auto', playsinline: true, disablepictureinpicture: true, crossorigin: 'anonymous' });
+    this.ovEl.muted = true;
+    this.stage.append(...this.slots, ...this.imgSlots, this.overlay, this.ovEl, this.msg);
     store.on('preview-transition', (info) => this.hoverTransition(info));
     store.on('preview-effect', (info) => this.hoverEffect(info));
     this.frame = h('div', { class: 'stage-frame' }, this.stage);
@@ -346,6 +349,7 @@ export class Preview {
       x.el.style.filter = cssEffects(ov, shownW, tf ? [tf] : []);
     }
     if (!this.override) this.preload(t);
+    this.syncOverlay(t, force);
     this.updateMessage();
   }
 
@@ -399,6 +403,24 @@ export class Preview {
     const c = f.clip; const e = clipEnd(c);
     const t = store.time >= c.start && store.time < e ? store.time : (c.start + e) / 2;
     this.present(t, true);
+  }
+
+  // Наложение в момент t: показываем, перематываем и запускаем вместе с роликом.
+  // hideOverlay — редактор анимаций рисует свой холст и прячет готовое наложение
+  syncOverlay(t, force) {
+    const el = this.ovEl;
+    const c = this.hideOverlay ? null : (store.project.overlayClips || []).find((x) => t >= x.start - EPS && t < clipEnd(x) - 0.01);
+    const url = c ? playUrl(c.mediaId) : null;
+    if (!url) { el.classList.remove('on'); if (!el.paused) el.pause(); return; }
+    const mt = srcAt(c, t);
+    if (el.dataset.url !== url) { el.dataset.url = url; el.src = url; el.currentTime = mt; }
+    el.classList.add('on');
+    if (this.playing) {
+      if (el.paused) { el.currentTime = mt; el.play().catch(() => {}); } else if (force || Math.abs(el.currentTime - mt) > 0.15) el.currentTime = mt;
+    } else {
+      if (!el.paused) el.pause();
+      if (Math.abs(el.currentTime - mt) > 0.03) el.currentTime = mt;
+    }
   }
 
   // Заранее грузим следующий клип в свободный элемент
@@ -463,6 +485,7 @@ export class Preview {
     store.playing = false;
     cancelAnimationFrame(this.raf);
     for (const s of this.slots) s.pause();
+    this.ovEl.pause();
     for (const { el } of this.audio.values()) el.pause();
     store.emit('playstate', false);
     this.seek(store.time);

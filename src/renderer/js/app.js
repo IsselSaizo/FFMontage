@@ -13,6 +13,7 @@ import { closeMenu, menuOpen } from './contextMenu.js';
 import { initViewbar } from './viewbar.js';
 import { initCropMode } from './cropMode.js';
 import { initAudioRack } from './audioRack.js';
+import { initAnim } from './anim.js';
 import { modeTabs, initModes } from './modes.js';
 import { closePopover, popoverOpen } from './popover.js';
 
@@ -206,8 +207,6 @@ async function restoreAutosave() {
 // Заглушки режимов «Аудио» и «Анимации», пока их модули не подключены
 function initModePlaceholders() {
   const ph = (sel, title, text) => { const el = $(sel); if (el && !el.childElementCount) el.append(h('div', { class: 'mode-placeholder' }, h('h2', {}, title), h('p', {}, text))); };
-  ph('#anim-presets', 'Анимации', 'Пресеты лёгких анимаций (например, «Дождь» из своей картинки).');
-  ph('#anim-params', 'Параметры', 'Настройки выбранного пресета.');
 }
 
 // Справка: горячие клавиши (раньше — таблица в правой панели)
@@ -338,6 +337,7 @@ async function main() {
   initViewbar();
   const crop = initCropMode(preview);
   initAudioRack();
+  const anim = initAnim(preview);
   initModePlaceholders();
   initModes();
   initMediaPanel({ addToTimeline: (id) => timeline.addMedia(id) });
@@ -350,7 +350,7 @@ async function main() {
   initResizers();
   await restoreAutosave();
   updateTitle();
-  window.__ffm = { store, preview, timeline, importPaths, openExport, browser, crop };
+  window.__ffm = { store, preview, timeline, importPaths, openExport, browser, crop, anim };
   const bridge = await mcpReady;
   if (bridge) bridge.initMcpBridge({
     loadProjectText: (text, filePath) => loadFromText(text, filePath),

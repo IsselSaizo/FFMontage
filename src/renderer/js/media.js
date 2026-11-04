@@ -185,7 +185,7 @@ export async function pickAndImport() {
 export async function restoreMedia() {
   store.runtime = {};
   const all = Object.values(store.project.media);
-  const keep = (m, info) => Object.assign(m, normalizeInfo(info), { id: m.id, hidden: m.hidden, derived: m.derived });
+  const keep = (m, info) => Object.assign(m, normalizeInfo(info), { id: m.id, hidden: m.hidden, derived: m.derived, anim: m.anim, name: m.anim ? m.name : normalizeInfo(info).name });
   // Сначала исходные файлы
   await Promise.all(all.filter((m) => !m.derived).map(async (m) => {
     try {

@@ -48,6 +48,7 @@ export class Timeline {
     store.on('media', rerender);
     store.on('selection', rerender);
     store.on('busy', rerender);
+    store.on('mode', rerender);
     store.on('time', () => this.updatePlayhead());
     this.scroll.addEventListener('scroll', rafThrottle(() => this.render()));
     // Во время перетаскивания масштаб не трогаем: иначе клип «уезжает» из-под мыши
@@ -170,6 +171,7 @@ export class Timeline {
   deleteAction(ripple = false) {
     const s = store.selection;
     if (!s || s.kind === 'track') return;
+    if (s.kind === 'overlay') { store.removeOverlay(s.id); return; }
     if (s.kind === 'transition') { store.setTransition(s.id, null); return; }
     store.deleteClip(s.id, { ripple });
   }
@@ -236,6 +238,9 @@ export class Timeline {
     const rulerLane = h('div', { class: 'tl-lane ruler-lane', style: { width: `${laneW}px` } });
     this.content.append(h('div', { class: 'tl-row ruler' }, h('div', { class: 'tl-head corner' }), rulerLane));
     this.drawRuler(rulerLane);
+
+    // Наложения (анимации) — временная отдельная дорожка над видео
+    if ((store.project.overlayClips || []).length || document.body.dataset.mode === 'anim') this.content.append(this.overlayRow(laneW));
 
     // Видео
     const vLane = h('div', { class: 'tl-lane video-lane', dataset: { lane: 'video' }, style: { width: `${laneW}px`, height: `${VIDEO_H}px` } });
@@ -514,6 +519,47 @@ export class Timeline {
     el.append(this.clipLabel(c, m, streams > 1 ? h('span', { class: 'ci stream', title: 'Звуковой поток файла' }, `#${(c.stream || 0) + 1}`) : null));
     this.decorate(el, c, width, el.classList.contains('selected'));
     return el;
+  }
+
+  // Дорожка «Наложения»: щелчок — выбрать, перетаскивание — перенести (без наложения друг на друга),
+  // двойной щелчок — открыть анимацию в редакторе
+  overlayRow(laneW) {
+    const lane = h('div', { class: 'tl-lane overlay-lane', dataset: { lane: 'overlay' }, style: { width: `${laneW}px`, height: '34px' } });
+    const head = h('div', { class: 'tl-head overlay-head' }, h('span', { class: 'th-ic', html: icon('media', 15) }), h('span', { class: 'th-name' }, 'Наложения'));
+    const list = store.project.overlayClips || [];
+    if (!list.length) lane.append(h('div', { class: 'lane-hint' }, 'Сохранённые анимации появятся здесь'));
+    for (const c of list) {
+      const m = store.media(c.mediaId) || {};
+      const sel = store.selection && store.selection.kind === 'overlay' && store.selection.id === c.id;
+      const el = h('div', {
+        class: `ov-clip${sel ? ' selected' : ''}`, dataset: { id: c.id },
+        title: `${store.clipName(c)}\n${fmtTime(tlLen(c))}\nДвойной щелчок — изменить анимацию, Delete — убрать`,
+        style: { left: `${c.start * this.pps}px`, width: `${Math.max(6, tlLen(c) * this.pps)}px` },
+      }, h('span', { class: 'ov-name' }, m.anim ? `✦ ${store.clipName(c)}` : store.clipName(c)));
+      el.addEventListener('pointerdown', (e) => {
+        if (e.button !== 0) return;
+        e.stopPropagation(); e.preventDefault();
+        store.select({ kind: 'overlay', id: c.id });
+        const x0 = e.clientX; const s0 = c.start; const before = store.snapshot();
+        let moved = false;
+        const move = (ev) => {
+          const dx = ev.clientX - x0;
+          if (!moved && Math.abs(dx) < DRAG_THRESHOLD) return;
+          moved = true;
+          const want = Math.max(0, s0 + dx / this.pps);
+          const free = store.overlayFree(want, tlLen(c), c.id);
+          store.live((p) => { const cc = p.overlayClips.find((x) => x.id === c.id); if (cc && Math.abs(free - want) < tlLen(c) / 2) cc.start = free; });
+        };
+        const up = () => {
+          window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up);
+          if (moved) store.commitFrom(before);
+        };
+        window.addEventListener('pointermove', move); window.addEventListener('pointerup', up);
+      });
+      el.addEventListener('dblclick', (e) => { e.stopPropagation(); store.emit('anim-edit', c.id); });
+      lane.append(el);
+    }
+    return h('div', { class: 'tl-row overlay' }, head, lane);
   }
 
   // Волна звука: рисуем только видимую часть клипа

@@ -1,4 +1,4 @@
-# Запуск автотеста интерфейса в отдельной папке кэша (ваш проект и автосохранение не трогаются).
+﻿# Запуск автотеста интерфейса в отдельной папке кэша (ваш проект и автосохранение не трогаются).
 #   powershell -ExecutionPolicy Bypass -File tests\run-ui.ps1 ui-selftest3
 # Нужны тестовые файлы: сначала node tests\engine-test.js
 param([string]$Test = 'ui-selftest3', [int]$TimeoutSec = 240, [switch]$KeepAutosave)
@@ -8,7 +8,7 @@ $App = Split-Path -Parent $PSScriptRoot
 $src = Join-Path $App '.test-cache\tmp\engine-test'
 $T = Join-Path $App '.test-cache\tmp\uitest'
 New-Item -ItemType Directory -Force "$T\cache\tmp\engine-test", "$T\out", "$T\proj" | Out-Null
-foreach ($f in 'a_av1_1440p60.mp4', 'b_h264_1080p30.mp4', 'c_music.mp3', 'd_old.avi', 'e_2audio.mp4', 'f_photo.png', 'g_anim.gif') {
+foreach ($f in 'a_av1_1440p60.mp4', 'b_h264_1080p30.mp4', 'c_music.mp3', 'd_old.avi', 'e_2audio.mp4', 'f_photo.png', 'g_anim.gif', 's_sprite.png') {
   $p = Join-Path $src $f
   if (Test-Path $p) { Copy-Item $p "$T\cache\tmp\engine-test\" -Force }
 }

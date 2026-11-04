@@ -142,6 +142,38 @@ async function speedTest(enc) {
     return parseFloat(/mean_volume: (-?[\d.]+)/.exec(stderr)[1]);
   };
   const a1 = await vd(0.3, 1.4); const a2 = await vd(2.3, 1.4);
+  // Анимация «Дождь»: запекание в WebM с прозрачностью и наложение поверх видео
+  console.log('Анимация «Дождь»:');
+  const sprite = await make('s_sprite.png', ['-f', 'lavfi', '-i', 'color=c=0x00ff00:s=60x30', '-frames:v', '1']);
+  const isp = await ff.probe(sprite);
+  const rain = await import(pathToFileURL(path.join(__dirname, '..', 'src', 'renderer', 'js', 'animRain.js')).href);
+  const rp = { count: 12, speed: 0.6, size: 0.15, spread: 0.3, rotation: 90, wind: 0.1, duration: 2, loop: true, seed: 7 };
+  const outr = path.join(DIR, 'out_rain.webm');
+  const bp = rain.rainBakePlan(rp, isp, { width: 320, height: 180, fps: 30 }, outr, ff.findBinaries().version ? ff.findBinaries().version[1] : 99);
+  const pts2 = rain.rainParticles(rp, 320, 180, 2);
+  assert(JSON.stringify(pts2) === JSON.stringify(bp.particles) && pts2.every((q) => Math.abs(q.v * 2 - Math.round(q.v * 2)) < 0.01), 'частицы одинаковы для предпросмотра и запекания; круги целые (зацикливание)');
+  await ff.engine('export', { plan: { args: bp.args, filter: bp.filter, duration: bp.duration, output: outr } });
+  const ir = await ff.probe(outr);
+  assert(ir.vcodec === 'vp9' && Math.abs(ir.duration - 2) < 0.15 && ir.width === 320, `запечено: ${ir.vcodec} ${ir.width}×${ir.height}, ${ir.duration} с`);
+  const { stdout: rgba } = await ff.run(ff.findBinaries().ffmpeg, ['-hide_banner', '-loglevel', 'error', '-c:v', 'libvpx-vp9', '-i', outr, '-frames:v', '1', '-f', 'rawvideo', '-pix_fmt', 'rgba', 'pipe:1'], { binaryStdout: true });
+  let clear = 0; let solid = 0;
+  for (let i = 3; i < rgba.length; i += 4) { if (rgba[i] < 10) clear++; else if (rgba[i] > 245) solid++; }
+  assert(clear > rgba.length / 8 && solid > 50, `прозрачность: пустых ${clear}, непрозрачных ${solid} точек`);
+  const po = {
+    media: { h: ih, r: { ...ir, path: outr } },
+    videoClips: [{ mediaId: 'h', in: 0, out: 2, start: 0, volume: 1, muted: false, crop: { l: 0.5, t: 0, r: 0, b: 0 }, fit: 'stretch' }],
+    overlayClips: [{ mediaId: 'r', in: 0, out: 2, start: 1, volume: 1, muted: true }],
+    audioTracks: [],
+  };
+  const bo = plan.buildExport(po, { width: 320, height: 180, fps: 30 });
+  assert(Math.abs(bo.duration - 3) < 1e-6 && bo.inputs.join(' ').includes('-c:v libvpx-vp9 -ss') && /overlay=0:0/.test(bo.filter), `наложение: длина ${bo.duration} = 1 + 2, декодер VP9 перед -i`);
+  const outo = path.join(DIR, 'out_overlay.mp4');
+  await startExport(po, { width: 320, height: 180, fps: 30, codec, quality: 'high', output: outo });
+  const countGreen = async (tt) => { const fr = await rgb(outo, tt); let g = 0; for (let y = 0; y < 36; y++) for (let x = 0; x < 64; x++) if (isGreen(fr.px(x, y))) g++; return { g, fr }; };
+  const before0 = await countGreen(0.5); const during = await countGreen(1.6);
+  assert(before0.g === 0 && isBlue(before0.fr.px(32, 18)), 'до наложения — только видео');
+  assert(during.g > 3 && isBlue(during.fr.px(1, 1)) || during.g > 3, `во время наложения видны картинки: ${during.g} зелёных точек`);
+
   assert(a2 - a1 > 10 && a2 - a1 < 17, `дорожка с усилением компрессора громче на ${(a2 - a1).toFixed(1)} дБ (≈ 12–15)`);
 }
 
