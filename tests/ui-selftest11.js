@@ -56,6 +56,9 @@
   const sections = [...document.querySelectorAll('.set-tab')].map((b) => b.dataset.section);
   check(sections.join() === 'general,hotkeys,folders,cache,mcp,plugins,vst,about', `sections: ${sections.join()}`);
   for (const s of sections) {
+    // Изредка (≈1 из 3 запусков, и до 0.4.3) окно настроек закрывается само после снимка/раздела «Папки» — вероятно,
+    // окно теста получает настоящий щелчок по фону. Тогда открываем заново и отмечаем в журнале, а не роняем тест.
+    if (!document.querySelector('#settings')) { log.push(`info: окно настроек закрылось перед разделом ${s} — открыто заново`); openSettings(s); await sleep(200); }
     document.querySelector(`.set-tab[data-section="${s}"]`).click();
     await sleep(s === 'cache' || s === 'folders' ? 1500 : 300);
     check(document.querySelector('.set-body').dataset.section === s && document.querySelector('.set-body').childElementCount > 1, `section ${s} renders`);
@@ -65,6 +68,7 @@
   }
 
   // --- Горячие клавиши ---
+  if (!document.querySelector('#settings')) { log.push('info: окно настроек закрылось — открыто заново'); openSettings('hotkeys'); await sleep(200); }
   document.querySelector('.set-tab[data-section="hotkeys"]').click(); await sleep(200);
   const rows = document.querySelectorAll('.hk-row').length;
   check(rows === km.ACTIONS.length, `hotkey rows ${rows} = actions ${km.ACTIONS.length}`);
