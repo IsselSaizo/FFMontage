@@ -331,6 +331,13 @@ kbd {
 .modal-body.pauses { display: flex; flex-direction: column; gap: 10px; }
 .pauses-field { display: grid; grid-template-columns: 130px 1fr 64px; align-items: center; gap: 10px; font-size: 13px; }
 .pauses-field .vol-val { text-align: right; }
+/* Тач (0.4.2, Steam Deck): перетаскивание клипов, краёв, линейки и курсора пальцем — без прокрутки страницы браузером */
+.clip, .clip .handle, .clip .fade-knob, .ruler-lane, .tl-playhead, .cue, #tl-resizer { touch-action: none; }
+@media (pointer: coarse) {
+  .clip .handle { width: 16px; }
+  .icon-btn { min-width: 34px; min-height: 34px; }
+  .icon-btn.tiny { min-width: 26px; min-height: 26px; }
+}
 .tb-sep.small { height: 16px; margin: 0 3px; }
 .monitor { display: flex; align-items: center; gap: 4px; margin-right: 8px; }
 .monitor-slider { width: 90px; accent-color: var(--accent); }

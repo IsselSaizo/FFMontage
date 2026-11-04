@@ -56,4 +56,6 @@ export default {
   'Ripple — конец клипа': 'Ripple — clip end',
   'пусто': 'empty',
   'Подготовка файла…': 'Preparing the file…',
+  // --- геймпад (0.4.2, Steam Deck) ---
+  'Геймпад подключён: A — пуск, X — разрезать, B — отменить, LT / RT — шаттл, стик — прокрутка': 'Gamepad connected: A — play, X — split, B — undo, LT / RT — shuttle, stick — scrub',
 };

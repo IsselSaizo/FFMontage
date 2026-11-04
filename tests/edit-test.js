@@ -134,6 +134,30 @@ const section = (s) => console.log(s);
     ok(near(clip(p, 'mus').start, 0) && near(E(clip(p, 'mus')), 40), 'музыка поперёк — не тронута');
   }
 
+  section('Геймпад (0.4.2): кнопки → действия');
+  {
+    const gp = await load('gamepad.js');
+    const btn = (on) => Array.from({ length: 16 }, (_, i) => ({ pressed: on.includes(i), value: on.includes(i) ? 1 : 0 }));
+    const s = {};
+    let r = gp.stepPad(s, { buttons: btn([0]), axes: [0] }, 0, 16);
+    ok(r.actions.length === 1 && r.actions[0].id === 'play.toggle' && !r.scrub, 'A — пуск/пауза');
+    r = gp.stepPad(s, { buttons: btn([0]), axes: [0] }, 500, 16);
+    ok(r.actions.length === 0, 'A зажата — не повторяется');
+    gp.stepPad(s, { buttons: btn([]), axes: [0] }, 600, 16);
+    gp.stepPad(s, { buttons: btn([5]), axes: [0] }, 1000, 16);
+    r = gp.stepPad(s, { buttons: btn([5]), axes: [0] }, 1450, 16);
+    ok(r.actions.length === 1 && r.actions[0].id === 'play.frameFwd' && r.actions[0].repeat, 'RB зажата — кадр вперёд с повтором');
+    const tr = btn([]); tr[7] = { pressed: true, value: 0.3 };
+    r = gp.stepPad({}, { buttons: tr, axes: [0] }, 0, 16);
+    ok(r.actions.length === 0, 'курок нажат слабо — не считается');
+    r = gp.stepPad({}, { buttons: btn([]), axes: [0.1] }, 0, 1000);
+    ok(r.scrub === 0, 'мёртвая зона стика');
+    r = gp.stepPad({}, { buttons: btn([]), axes: [1] }, 0, 1000);
+    ok(near(r.scrub, gp.SCRUB_SPEED), `стик до упора — ${gp.SCRUB_SPEED} с/с: ${r.scrub}`);
+    const km = await load('keymap.js');
+    ok(Object.values(gp.BUTTONS).every((id) => km.ACTIONS.some((a) => a.id === id)), 'все действия геймпада есть в keymap');
+  }
+
   section('Привязка ко кадрам');
   ok(near(op.snapFrame(1.013, 25), 1.0) && near(op.snapFrame(1.03, 25), 1.04) && op.snapFrame(1.013, 0) === 1.013, 'snapFrame');
 

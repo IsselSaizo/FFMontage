@@ -27,6 +27,7 @@ import { installDropped } from './vst.js';
 import * as edit from './edit.js';
 import { initShuttle } from './shuttle.js';
 import { initTrimPreview } from './trimPreview.js';
+import { initGamepad } from './gamepad.js';
 
 // Мост для ИИ-ассистента грузим отдельно: если с ним что-то не так, редактор всё равно запустится
 const mcpReady = import('./mcpBridge.js').catch((e) => { console.error('mcpBridge', e); return null; });
@@ -393,6 +394,7 @@ async function main() {
   initInspector({ onSplit: () => timeline.splitAction(), onDelete: () => timeline.deleteAction() });
   const browser = initBrowser();
   initKeys();
+  initGamepad();
   initWindowDrop();
   store.on('request-pause', () => preview.pause());
   store.on('project', () => { autosave(); updateTitle(); });
