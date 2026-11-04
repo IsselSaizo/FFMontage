@@ -607,6 +607,26 @@ pub fn check(args: &[String], filter: &str, duration: f64, output: &str, inputs:
     check_inner(args, filter, duration, output, inputs).map_err(|e| tr!("План экспорта отклонён: {}", "Export plan rejected: {}", e))
 }
 
+/// План звука дорожки для аудиоплагинов (vst/mod.rs render): как экспорт, но выход — сырой PCM в stdout,
+/// поэтому -f не допускается (формат выхода ставит программа), а @@OUT@@ заменяется на pipe:1.
+pub fn check_pcm(args: &[String], filter: &str, duration: f64, inputs: Inputs) -> Result<(), String> {
+    if args.iter().any(|a| a == "-f") {
+        return Err(tr!("План экспорта отклонён: {}", "Export plan rejected: {}", tr!("-f не разрешён", "-f is not allowed")));
+    }
+    let out = crate::cache::audiofx_dir().join("pipe.mkv");
+    check(args, filter, duration, &out.to_string_lossy(), inputs)
+}
+
+/// Цепочка фильтров одной стадии рендера (встроенные эффекты между плагинами): те же правила, что у графа экспорта
+pub fn check_chain(af: &str, inputs: Inputs) -> Result<(), String> {
+    check_graph(af, inputs).map_err(|e| tr!("План экспорта отклонён: {}", "Export plan rejected: {}", e))
+}
+
+/// Входной файл, разрешённый окну (или любой — у движка без окна)
+pub fn input_allowed(v: &str, inputs: Inputs) -> Result<PathBuf, String> {
+    input_ok(v, inputs)
+}
+
 fn check_inner(args: &[String], filter: &str, duration: f64, output: &str, inputs: Inputs) -> Result<(), String> {
     let out = PathBuf::from(output);
     let ext = crate::ff::ext_of(&out);

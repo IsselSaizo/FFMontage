@@ -13,7 +13,7 @@
 
 import { ffEffects, unknownEffects } from './effects.js';
 import { speedOf, atempoChain } from './clipTime.js';
-import { ffAudioFx, unknownFx } from './audioFx.js';
+import { ffAudioFx, unknownFx, hasVst, missingVst } from './audioFx.js';
 import { TRANSITIONS } from './transitions.js';
 import { t } from './i18n.js';
 import { tfOf, isIdentity } from './transform.js';
@@ -63,6 +63,81 @@ const clipDuration = (c) => Math.max(0, (c.out - c.in) / speedOf(c));
 // Скорость в графе: кадры — setpts (потом fps= выравнивает частоту), звук — atempo (тон сохраняется)
 const vSpeed = (sp) => (sp === 1 ? 'setpts=PTS-STARTPTS' : `setpts=(PTS-STARTPTS)/${n6(sp)}`);
 const aSpeed = (sp) => (sp === 1 ? '' : `,${atempoChain(sp)}`);
+const AUDIO_FMT = 'aresample=48000,aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo';
+const aFades = (c, head, len) => {
+  let s = '';
+  if (c.fadeIn > 0.001) s += `,afade=t=in:st=${n6(head)}:d=${n6(Math.min(c.fadeIn, len))}`;
+  if (c.fadeOut > 0.001) s += `,afade=t=out:st=${n6(head + len - Math.min(c.fadeOut, len))}:d=${n6(Math.min(c.fadeOut, len))}`;
+  return s;
+};
+const nInputs = (inputs) => inputs.filter((x) => x === '-i').length;
+
+// Звук клипов одной аудиодорожки (общий код экспорта и графа дорожки для vst_render):
+//   громкость клипа × gain, эффекты клипа (или WAV рендера VST3/CLAP — эффекты и скорость в нём уже есть),
+//   затухания, adelay на своё место. o = { media, gain, addInput(m, ss, dur) → k, addWav(path) → k,
+//   clipWav(c) → путь | null, warn(c), label() → '[m0]' }. Возвращает { list: [{ label, filter }], end }.
+function trackClips(tr, o) {
+  const list = [];
+  let end = 0;
+  for (const c of tr.clips || []) {
+    const m = o.media[c.mediaId];
+    const dur = clipDuration(c);
+    if (!m || !m.hasAudio || dur <= 0.001) continue;
+    end = Math.max(end, c.start + dur);
+    if (tr.muted || c.muted || !(c.volume > 0) || !(o.gain > 0)) continue;
+    o.warn(c);
+    const delayMs = Math.max(0, Math.round(c.start * 1000));
+    const label = o.label();
+    const wav = o.clipWav(c);
+    const tail = `,asetpts=PTS-STARTPTS,apad,atrim=duration=${n6(dur)}${aFades(c, 0, dur)},adelay=delays=${delayMs}:all=1${label}`;
+    if (wav) {
+      const k = o.addWav(wav);
+      list.push({ label, filter: `[${k}:a]${AUDIO_FMT},volume=${n6(c.volume * o.gain)}${tail}` });
+      continue;
+    }
+    const sp = speedOf(c);
+    const k = o.addInput(m, c.in, dur * sp);
+    const nStreams = (m.audioStreams && m.audioStreams.length) || 1;
+    const st = Math.min(Math.max(0, c.stream | 0), nStreams - 1);
+    list.push({ label, filter: `[${k}:a:${st}]${AUDIO_FMT}${aSpeed(sp)},volume=${n6(c.volume * o.gain)}${ffAudioFx(c.afx)}${tail}` });
+  }
+  return { list, end };
+}
+
+/**
+ * Граф микса клипов одной аудиодорожки — вход kind:'graph' для vst_render (эффекты дорожки сюда не входят:
+ * они — стадии рендера). Громкости и затухания клипов — в графе; громкость дорожки — нет (её применяет
+ * экспорт/плеер после рендера). Выход [aout] (48 кГц стерео) → '@@OUT@@' последним аргументом — формат вывода
+ * (-f f32le -ar 48000 -ac 2 pipe:1) подставляет Rust; длина = конец последнего клипа.
+ * clipWavs: { [clipId]: путь } — готовые рендеры клипов с VST3/CLAP. null — на дорожке нет звука.
+ */
+export function trackGraph(project, trackId, { clipWavs = {}, ffMajor = 99 } = {}) {
+  const tr = (project.audioTracks || []).find((x) => x.id === trackId);
+  if (!tr) return null;
+  const media = project.media || {};
+  const inputs = [];
+  const filters = [];
+  let j = 0;
+  const r = trackClips({ ...tr, muted: false }, {
+    media, gain: 1,
+    addInput: (m, ss, dur) => { inputs.push('-ss', n6(Math.max(0, ss)), '-t', n6(dur + 0.5), '-i', m.path); return nInputs(inputs) - 1; },
+    addWav: (p) => { inputs.push('-i', p); return nInputs(inputs) - 1; },
+    clipWav: (c) => (hasVst(c.afx) && clipWavs[c.id]) || null,
+    warn: () => {},
+    label: () => `[m${j++}]`,
+  });
+  const D = r.end;
+  if (D <= 0.001) return null;
+  for (const x of r.list) filters.push(x.filter);
+  const tail = `apad,atrim=duration=${n6(D)}[aout]`;
+  if (!r.list.length) filters.push(`anullsrc=r=48000:cl=stereo,atrim=duration=${n6(D)}[aout]`);
+  else if (r.list.length === 1) filters.push(`${r.list[0].label}${tail}`);
+  else filters.push(`${r.list.map((x) => x.label).join('')}amix=inputs=${r.list.length}:duration=longest:dropout_transition=0:normalize=0,${tail}`);
+  const filterArgs = ffMajor >= 7 ? ['-/filter_complex', '@@FILTER@@'] : ['-filter_complex_script', '@@FILTER@@'];
+  // Формат выхода (-f f32le -ar 48000 -ac 2 pipe:1) ставит Rust (vst_render) вместо @@OUT@@
+  const args = ['-hide_banner', '-nostdin', ...inputs, ...filterArgs, '-map', '[aout]', '@@OUT@@'];
+  return { args, filter: filters.join(';\n'), duration: Number(D.toFixed(6)) };
+}
 
 export function encoderArgs(codec, quality, fps) {
   const q = (QUALITY[codec] || QUALITY.h264_nvenc)[quality] ?? QUALITY.h264_nvenc.medium;
@@ -143,6 +218,18 @@ export function buildExport(project, settings) {
   // Подготовленные окном файлы (js/exportAssets.js): картинки текстов { [clipId]: { path, w, h, roll } }, субтитры
   const assets = settings.assets || null;
   const textImg = (assets && assets.texts) || {};
+  // Рендеры VST3/CLAP (exportAssets.js → vst_render): { clips: { [clipId]: { path } }, tracks: { [trackId]: { path } } }.
+  // WAV рендера уже содержит эффекты цепочки и скорость клипа; громкость, затухания и место на таймлайне — как обычно.
+  const vstA = (assets && assets.vst) || {};
+  const warnVst = (list) => { for (const name of missingVst(list)) warnings.add(t('Аудиоплагин «{name}» не найден — пропущен', { name })); };
+  const vstWav = (kind, id, list) => {
+    if (!hasVst(list)) return null;
+    const a = vstA[kind] && vstA[kind][id];
+    if (a && a.path) return a.path;
+    if (assets) warnings.add(t('Звук с аудиоплагинами не подготовлен к экспорту — плагины пропущены'));
+    return null;
+  };
+  const addWav = (p) => { inputs.push('-i', p); return nInputs(inputs) - 1; };
   const warnText = (c) => { if (assets) warnings.add(t('Текст «{name}» не подготовлен к экспорту — пропущен', { name: String((c.text && c.text.content) || '').split('\n')[0].slice(0, 30) })); };
   // Текстовый клип → картинка PNG W×H (или полоса титров W×h) с альфой; трансформ уже нарисован в ней
   const asMedia = (c) => {
@@ -190,7 +277,7 @@ export function buildExport(project, settings) {
     const tf = tfOf(c);
     return `x=${n6(W / 2 + tf.x * W)}-overlay_w/2:y=${n6(H / 2 + tf.y * H)}-overlay_h/2`;
   };
-  const audioFmt = 'aresample=48000,aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo';
+  const audioFmt = AUDIO_FMT;
   const black = (dur) => `color=c=0x${bg}:s=${W}x${H}:r=${F},format=yuv420p,setsar=1,trim=duration=${n6(dur)},setpts=PTS-STARTPTS`;
   // alpha — на верхних дорожках клип проявляется из прозрачности, а не из цвета фона
   const vFades = (c, head, len, alpha = false) => {
@@ -198,12 +285,6 @@ export function buildExport(project, settings) {
     let s = '';
     if (c.fadeIn > 0.001) s += `,fade=t=in:st=${n6(head)}:d=${n6(Math.min(c.fadeIn, len))}${how}`;
     if (c.fadeOut > 0.001) s += `,fade=t=out:st=${n6(head + len - Math.min(c.fadeOut, len))}:d=${n6(Math.min(c.fadeOut, len))}${how}`;
-    return s;
-  };
-  const aFades = (c, head, len) => {
-    let s = '';
-    if (c.fadeIn > 0.001) s += `,afade=t=in:st=${n6(head)}:d=${n6(Math.min(c.fadeIn, len))}`;
-    if (c.fadeOut > 0.001) s += `,afade=t=out:st=${n6(head + len - Math.min(c.fadeOut, len))}:d=${n6(Math.min(c.fadeOut, len))}`;
     return s;
   };
 
@@ -264,7 +345,9 @@ export function buildExport(project, settings) {
       // noAudio — звук клипа вынесен на аудиодорожки (связанные клипы)
       const hasSound = m.hasAudio && !c.noAudio && !c.muted && c.volume > 0;
       const showVideo = m.hasVideo && !L.hidden;
-      const k = (showVideo || hasSound) ? addInput(m, ss, (head + len + t) * sp, alpha && showVideo) : -1;
+      // Звук клипа с VST3/CLAP — из WAV рендера (в нём только сам клип: in…out, без «запаса» для перехода)
+      const wav = hasSound ? vstWav('clips', c.id, c.afx) : null;
+      const k = (showVideo || (hasSound && !wav)) ? addInput(m, ss, (head + len + t) * sp, alpha && showVideo) : -1;
       // Одиночный клип верхней дорожки (без переходов) накладывается сам, со своим x/y — без холста во весь кадр
       const direct = alpha && !tin[i] && !tout[i];
       const tail = (freezeHead > 0.0005 ? `,tpad=start_mode=clone:start_duration=${n6(freezeHead)}` : '') +
@@ -319,8 +402,18 @@ export function buildExport(project, settings) {
       if (L.main) videoEnd = Math.max(videoEnd, cursor); else upperEnd = Math.max(upperEnd, cursor);
 
       // Звук клипа: со «ступеньками» для перехода, на своём месте
-      if (hasSound) {
-        warnAfx(c.afx);
+      if (hasSound && wav) {
+        warnAfx(c.afx); warnVst(c.afx);
+        // Переход: появление за половину перехода от начала клипа, уход — за половину до конца
+        let af = `[${addWav(wav)}:a]${audioFmt},volume=${n6(c.volume)},asetpts=PTS-STARTPTS,apad,atrim=duration=${n6(len)}`;
+        if (tin[i]) af += `,afade=t=in:st=0:d=${n6(h)}`;
+        af += aFades(c, 0, len);
+        if (t > 0) af += `,afade=t=out:st=${n6(len - t)}:d=${n6(t)}`;
+        af += `,adelay=delays=${Math.max(0, Math.round(c.start * 1000))}:all=1[${P}va${i}]`;
+        filters.push(af);
+        audio.push(`[${P}va${i}]`);
+      } else if (hasSound) {
+        warnAfx(c.afx); warnVst(c.afx);
         const L2 = head + len + t;
         let af = `[${k}:a]${audioFmt}${aSpeed(sp)},volume=${n6(c.volume)}${ffAudioFx(c.afx)},asetpts=PTS-STARTPTS,apad,atrim=duration=${n6(L2)}`;
         if (tin[i]) af += `,afade=t=in:st=0:d=${n6(head + h)}`;
@@ -341,27 +434,31 @@ export function buildExport(project, settings) {
   (project.audioTracks || []).forEach((tr) => {
     // Громкость дорожки умножается на громкость клипа; «Соло» — только для предпросмотра
     const tv = tr.volume === undefined ? 1 : Number(tr.volume);
+    if (!tr.muted) { warnAfx(tr.afx); warnVst(tr.afx); }
+    // VST3/CLAP в эффектах дорожки: один WAV всей дорожки (микс клипов с их громкостями и эффектами →
+    // эффекты дорожки), стоит с нуля таймлайна; громкость дорожки — после рендера (как фейдер)
+    const trWav = !tr.muted && tv > 0 ? vstWav('tracks', tr.id, tr.afx) : null;
+    if (trWav) {
+      const r = trackClips(tr, { media, gain: tv, addInput: () => -1, addWav: () => -1, clipWav: () => null, warn: (c) => { warnAfx(c.afx); warnVst(c.afx); }, label: () => '' });
+      audioEnd = Math.max(audioEnd, r.end);
+      if (r.list.length) {
+        const tk = `[tk${audio.length}_${j}]`;
+        filters.push(`[${addWav(trWav)}:a]${audioFmt},volume=${n6(tv)},asetpts=PTS-STARTPTS,adelay=delays=0:all=1${tk}`);
+        audio.push(tk);
+      }
+      return;
+    }
     // Эффекты дорожки: её клипы сначала смешиваются между собой, потом — общая цепочка эффектов
     const trFx = tr.muted ? '' : ffAudioFx(tr.afx);
-    if (!tr.muted) warnAfx(tr.afx);
     const trLabels = [];
-    (tr.clips || []).forEach((c) => {
-      const m = media[c.mediaId];
-      const dur = clipDuration(c);
-      if (!m || !m.hasAudio || dur <= 0.001) return;
-      audioEnd = Math.max(audioEnd, c.start + dur);
-      if (tr.muted || c.muted || !(c.volume > 0) || !(tv > 0)) return;
-      const sp = speedOf(c);
-      const k = addInput(m, c.in, dur * sp);
-      warnAfx(c.afx);
-      const delayMs = Math.max(0, Math.round(c.start * 1000));
-      const nStreams = (m.audioStreams && m.audioStreams.length) || 1;
-      const st = Math.min(Math.max(0, c.stream | 0), nStreams - 1);
-      filters.push(`[${k}:a:${st}]${audioFmt}${aSpeed(sp)},volume=${n6(c.volume * tv)}${ffAudioFx(c.afx)},asetpts=PTS-STARTPTS,apad,atrim=duration=${n6(dur)}` +
-        `${aFades(c, 0, dur)},adelay=delays=${delayMs}:all=1[m${j}]`);
-      (trFx ? trLabels : audio).push(`[m${j}]`);
-      j++;
+    const r = trackClips(tr, {
+      media, gain: tv, addInput: (m, ss, dur) => addInput(m, ss, dur), addWav,
+      clipWav: (c) => vstWav('clips', c.id, c.afx),
+      warn: (c) => { warnAfx(c.afx); warnVst(c.afx); },
+      label: () => `[m${j++}]`,
     });
+    audioEnd = Math.max(audioEnd, r.end);
+    for (const x of r.list) { filters.push(x.filter); (trFx ? trLabels : audio).push(x.label); }
     if (trLabels.length) {
       const tk = `[tk${audio.length}_${j}]`;
       filters.push(trLabels.length === 1

@@ -139,6 +139,10 @@ pub fn media_cat(name: &str, is_dir: bool) -> &'static str {
 fn anim_dir() -> PathBuf {
     paths::get().cache_dir.join("anim")
 }
+/// Звук после аудиоплагинов VST3/CLAP (vst/mod.rs render)
+pub fn audiofx_dir() -> PathBuf {
+    paths::get().cache_dir.join("audio-fx")
+}
 fn meta_file() -> PathBuf {
     paths::get().media_cache.join("meta.json")
 }
@@ -298,6 +302,7 @@ pub fn stats() -> Value {
     let fonts = dir_size(&crate::fonts::export_dir());
     let media_total = dir_size(&p.media_cache);
     let anim = dir_size(&anim_dir());
+    let audiofx = dir_size(&audiofx_dir());
     let logs = dir_size(&p.logs);
     let webview = dir_size(&p.webview);
     let limit_gb = settings::cache_limit_gb();
@@ -307,6 +312,7 @@ pub fn stats() -> Value {
         "proxy": get(&by, "proxy"),
         "fx": get(&by, "fx"),
         "anim": anim,
+        "audiofx": audiofx,
         "assets": assets,
         "fonts": fonts,
         "temp": tmp + media_other,
@@ -316,7 +322,7 @@ pub fn stats() -> Value {
         "mediaItems": dirs.len(),
         // Что учитывается в лимите автоочистки
         "auto": media_total + assets + fonts,
-        "total": media_total + assets + fonts + tmp + anim + logs + webview,
+        "total": media_total + assets + fonts + tmp + anim + audiofx + logs + webview,
         "limitGb": limit_gb,
         "limitMin": settings::CACHE_LIMIT_MIN,
         "limitMax": settings::CACHE_LIMIT_MAX,
@@ -336,7 +342,7 @@ pub fn clear(cats: &[String], keep: &[String]) -> Value {
     for c in cats {
         match c.as_str() {
             "media" => want.extend(["thumbs", "peaks", "proxy", "fx", "media-other"]),
-            "thumbs" | "peaks" | "proxy" | "fx" | "anim" | "assets" | "fonts" | "logs" => {
+            "thumbs" | "peaks" | "proxy" | "fx" | "anim" | "audiofx" | "assets" | "fonts" | "logs" => {
                 want.insert(c.as_str());
             }
             "temp" => want.extend(["temp", "media-other"]),
@@ -373,6 +379,15 @@ pub fn clear(cats: &[String], keep: &[String]) -> Value {
     }
     if want.contains("anim") {
         for f in files_in(&anim_dir()) {
+            if keep.file(&f) {
+                kept += 1;
+            } else {
+                rm(&f, &mut freed, &mut failed);
+            }
+        }
+    }
+    if want.contains("audiofx") {
+        for f in files_in(&audiofx_dir()) {
             if keep.file(&f) {
                 kept += 1;
             } else {

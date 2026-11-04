@@ -16,6 +16,7 @@ import { isText } from './textModel.js';
 import { drawText } from './textRender.js';
 import { fontsVersion, onFontsChange } from './fonts.js';
 import { getPref, setPref } from './prefs.js';
+import * as vst from './vst.js';
 
 const monitorVol = () => { const v = Number(getPref('ui.monitorVol', 1)); return isFinite(v) ? Math.max(0, Math.min(1, v)) : 1; };
 
@@ -54,6 +55,15 @@ export class Preview {
     this.routes = new Map();     // element -> { g, nodes, sig, dest } — цепочка эффектов клипа
     this.buses = new Map();      // trackId -> { input, nodes, sig } — эффекты дорожки
     this.audio = new Map();      // clipId -> { el, url }
+    // Аудиоплагины VST3 / CLAP (js/vst.js): цепочка с плагином играет WAV офлайн-рендера (эффекты уже в нём)
+    this.trackAudio = new Map(); // trackId -> { el, url } — рендер всей дорожки (плагины в эффектах дорожки)
+    this.vstVideo = new Map();   // clipId -> { el, url } — рендер звука видеоклипа (сам <video> тогда молчит)
+    this.vMix = new Map();       // clipId -> доля видеоклипа на переходе (для громкости его рендера)
+    this.vstBadge = h('div', { class: 'vst-badge' });
+    this.stage.append(this.vstBadge);
+    vst.initVst();
+    // Рендер готов / окно плагина открыто или закрыто — пересобрать звук (без перемотки играющего)
+    vst.onVstChange((kind) => { if (kind === 'render' || kind === 'session' || kind === 'list') this.syncAudio(store.time, false); });
     this.master = null;          // { el, clip } — по нему идут часы воспроизведения
     this.masterTrans = false;    // часы-мастер сейчас на переходе (время берём с часов, а не с видео)
     this.current = null;         // что показано на основной дорожке: результат layersAt()
@@ -158,13 +168,14 @@ export class Preview {
     }
     return b.input;
   }
-  route(el, clip, track) {
+  // bare — без узлов эффектов клипа (играет WAV рендера с плагинами: эффекты клипа уже в нём)
+  route(el, clip, track, bare = false) {
     const r = this.routes.get(el);
     if (!r) return;
     const dest = this.trackBus(track);
-    const sig = `${JSON.stringify(activeFx(clip && clip.afx))}|${track ? track.id : ''}`;
+    const sig = `${bare ? 'bare' : JSON.stringify(activeFx(clip && clip.afx))}|${track ? track.id : ''}`;
     if (r.sig === sig && r.dest === dest) return;
-    const nodes = this.fxNodes(clip && clip.afx);
+    const nodes = bare ? [] : this.fxNodes(clip && clip.afx);
     this.rewire(r.g, r.nodes, nodes, dest);
     r.nodes = nodes; r.sig = sig; r.dest = dest;
   }
@@ -393,7 +404,11 @@ export class Preview {
       if (x.role === L.master) v.master = { el, clip: x.clip };
       const fade = fadeFactor(x.clip, t);
       const mix = L.trans ? (x.role === 'A' ? 1 - L.trans.p : L.trans.p) : 1;
-      this.setGain(el, this.clipGain(x.clip) * fade * mix);
+      // Звук клипа с аудиоплагином: играет рендер (syncVideoWav) или окно плагина — сам <video> молчит
+      const vr = vst.clipRender(x.clip, false);
+      const viaVst = !!vr && (vr.status === 'ready' || vr.status === 'live');
+      this.vMix.set(x.clip.id, mix);
+      this.setGain(el, viaVst ? 0 : this.clipGain(x.clip) * fade * mix);
       x.el = el; x.fade = fade;
     });
 
@@ -567,6 +582,8 @@ export class Preview {
     cancelAnimationFrame(this.raf);
     for (const s of this.allSlots()) s.pause();
     for (const { el } of this.audio.values()) el.pause();
+    for (const { el } of this.trackAudio.values()) el.pause();
+    for (const { el } of this.vstVideo.values()) el.pause();
     store.emit('playstate', false);
     this.seek(store.time);
   }
@@ -616,55 +633,134 @@ export class Preview {
   }
 
   // --- музыка и прочие аудиодорожки ---
+  newAudio() {
+    const el = new Audio();
+    el.crossOrigin = 'anonymous'; // медиа идут с media.localhost — без CORS Web Audio дал бы тишину
+    el.preload = 'auto';
+    this.attach(el);
+    return el;
+  }
+
+  // Элемент звука: позиция expected (с), скорость sp, громкость gain
+  playEl(el, expected, sp, gain, force) {
+    if (el.defaultPlaybackRate !== sp) el.defaultPlaybackRate = sp;
+    if (el.playbackRate !== sp) el.playbackRate = sp;
+    this.setGain(el, gain);
+    if (this.playing) {
+      if (el.paused) { el.currentTime = expected; el.play().catch(() => {}); }
+      else if (force || Math.abs(el.currentTime - expected) > 0.25) el.currentTime = expected;
+    } else {
+      if (!el.paused) el.pause();
+      if (Math.abs(el.currentTime - expected) > 0.05) el.currentTime = expected;
+    }
+  }
+
   syncAudio(t, force) {
+    // Аудиоплагины: что показать в значке — идёт обработка, ошибка, звук идёт через окно плагина
+    const badge = { pending: 0, error: 0, live: 0 };
+    const note = (r) => {
+      if (!r) return;
+      if (r.status === 'live') badge.live++;
+      else if (r.status === 'error') badge.error++;
+      else if (r.status !== 'ready') badge.pending++;
+    };
     for (const track of store.project.audioTracks) {
       const tg = this.trackGain(track);
+      const at = (c) => t >= c.start - EPS && t < clipEnd(c) - 0.02;
+      // Плагины в эффектах дорожки: один элемент с рендером всей дорожки, клипы сами не играют
+      const tr = tg > 0 ? vst.trackRender(track) : null;
+      if (tr && track.clips.some(at)) note(tr);
+      const trWav = tr && tr.status === 'ready' ? tr : null;
+      const trLive = !!tr && tr.status === 'live';
+      this.syncTrackWav(track, trWav, tg, t, force);
       for (const c of track.clips) {
-        const url = audioUrl(c.mediaId, c.stream || 0);
-        const active = tg > 0 && t >= c.start - EPS && t < clipEnd(c) - 0.02;
+        const active = tg > 0 && at(c) && !trWav && !trLive;
         let rec = this.audio.get(c.id);
         if (!active) { if (rec && !rec.el.paused) rec.el.pause(); continue; }
+        // Плагины в эффектах клипа: WAV рендера (позиция — от начала клипа, скорость уже в нём);
+        // пока его нет — сухой звук (встроенные эффекты — Web Audio), открыто окно плагина — молчим
+        const cr = vst.clipRender(c, true);
+        note(cr);
+        if (cr && cr.status === 'live') { if (rec && !rec.el.paused) rec.el.pause(); continue; }
+        const wav = cr && cr.status === 'ready' ? cr.url : null;
+        const url = wav || audioUrl(c.mediaId, c.stream || 0);
         if (!url) continue;
-        if (!rec) {
-          const el = new Audio();
-          el.crossOrigin = 'anonymous'; // медиа идут с media.localhost — без CORS Web Audio дал бы тишину
-          el.preload = 'auto';
-          rec = { el, url: null };
-          this.audio.set(c.id, rec);
-          this.attach(el);
-        }
+        if (!rec) { rec = { el: this.newAudio(), url: null }; this.audio.set(c.id, rec); }
         if (this.ctx && !this.gains.has(rec.el)) this.attach(rec.el);
-        if (this.ctx) this.route(rec.el, c, track);
+        if (this.ctx) this.route(rec.el, c, track, !!wav);
         if (rec.url !== url) { rec.url = url; rec.el.src = url; }
-        const expected = srcAt(c, t);
-        const sp = speedOf(c);
-        if (rec.el.defaultPlaybackRate !== sp) rec.el.defaultPlaybackRate = sp;
-        if (rec.el.playbackRate !== sp) rec.el.playbackRate = sp;
-        this.setGain(rec.el, c.muted ? 0 : c.volume * tg * fadeFactor(c, t));
-        if (this.playing) {
-          if (rec.el.paused) { rec.el.currentTime = expected; rec.el.play().catch(() => {}); }
-          else if (force || Math.abs(rec.el.currentTime - expected) > 0.25) rec.el.currentTime = expected;
-        } else {
-          if (!rec.el.paused) rec.el.pause();
-          if (Math.abs(rec.el.currentTime - expected) > 0.05) rec.el.currentTime = expected;
-        }
+        this.playEl(rec.el, wav ? Math.max(0, t - c.start) : srcAt(c, t), wav ? 1 : speedOf(c),
+          c.muted ? 0 : c.volume * tg * fadeFactor(c, t), force);
+      }
+    }
+    this.syncVideoWav(t, force, note);
+    // Открытое окно плагина: транспорт плеера → хост (он сам играет звук через плагин)
+    vst.syncLive(t, this.playing, force);
+    this.showVstBadge(badge);
+  }
+
+  showVstBadge(badge) {
+    const b = this.vstBadge;
+    const text = badge.live ? t('Звук идёт через окно плагина')
+      : badge.error ? t('Аудиоплагины: ошибка обработки — слышно без них')
+        : badge.pending ? t('Аудиоплагины: обработка звука… пока слышно без них') : '';
+    if (b.textContent !== text) b.textContent = text;
+    b.classList.toggle('on', !!text);
+    b.classList.toggle('live', !!badge.live);
+    b.classList.toggle('error', !badge.live && !!badge.error);
+  }
+
+  // Рендер всей дорожки (граф её клипов + эффекты дорожки): время WAV = время таймлайна, громкость дорожки — здесь
+  syncTrackWav(track, r, tg, t, force) {
+    let a = this.trackAudio.get(track.id);
+    const dur = r && r.job && Number.isFinite(r.job.dur) ? r.job.dur : Infinity;
+    if (!r || t >= dur - 0.02) { if (a && !a.el.paused) a.el.pause(); return; }
+    if (!a) { a = { el: this.newAudio(), url: null }; this.trackAudio.set(track.id, a); }
+    if (this.ctx && !this.gains.has(a.el)) this.attach(a.el);
+    if (this.ctx) this.route(a.el, null, null, true);
+    if (a.url !== r.url) { a.url = r.url; a.el.src = r.url; }
+    this.playEl(a.el, Math.max(0, t), 1, tg, force);
+  }
+
+  // Звук видеоклипов с аудиоплагинами: отдельный элемент с рендером, <video> этого клипа молчит (presentLane)
+  syncVideoWav(t, force, note) {
+    for (const lane of store.vlanes()) {
+      for (const c of lane.clips) {
+        if (!Array.isArray(c.afx) || !c.afx.length) continue;
+        const r = vst.clipRender(c, false);
+        if (!r) continue;
+        const active = t >= c.start - EPS && t < clipEnd(c) - 0.02;
+        if (active) note(r);
+        let a = this.vstVideo.get(c.id);
+        if (!active || r.status !== 'ready') { if (a && !a.el.paused) a.el.pause(); continue; }
+        if (!a) { a = { el: this.newAudio(), url: null }; this.vstVideo.set(c.id, a); }
+        if (this.ctx && !this.gains.has(a.el)) this.attach(a.el);
+        if (this.ctx) this.route(a.el, null, null, true);
+        if (a.url !== r.url) { a.url = r.url; a.el.src = r.url; }
+        const mix = this.vMix.has(c.id) ? this.vMix.get(c.id) : 1;
+        this.playEl(a.el, Math.max(0, t - c.start), 1, this.clipGain(c) * fadeFactor(c, t) * mix, force);
       }
     }
   }
 
   cleanupAudio() {
-    const ids = new Set();
-    for (const t of store.project.audioTracks) for (const c of t.clips) ids.add(`${c.id}`);
-    for (const [id, rec] of this.audio) {
-      if (!ids.has(id)) {
+    const drop = (map, ids) => {
+      for (const [id, rec] of map) {
+        if (ids.has(id)) continue;
         rec.el.pause();
         rec.el.removeAttribute('src');
         rec.el.load();
         const g = this.gains.get(rec.el);
-        if (g) { g.disconnect(); this.gains.delete(rec.el); }
-        this.audio.delete(id);
+        if (g) { g.disconnect(); this.gains.delete(rec.el); this.routes.delete(rec.el); }
+        map.delete(id);
       }
-    }
+    };
+    const ids = new Set();
+    for (const t of store.project.audioTracks) for (const c of t.clips) ids.add(`${c.id}`);
+    drop(this.audio, ids);
+    drop(this.trackAudio, new Set(store.project.audioTracks.map((x) => x.id)));
+    drop(this.vstVideo, new Set(store.allVideo().map((c) => c.id)));
+    for (const id of [...this.vMix.keys()]) if (!this.vstVideo.has(id) && !store.findClip(id)) this.vMix.delete(id);
   }
 
   fullscreen() {

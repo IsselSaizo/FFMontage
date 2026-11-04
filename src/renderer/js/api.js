@@ -137,4 +137,22 @@ window.api = {
   // Субтитры: открыть (null — окно выбора) → { path, name, text } | null; сохранить → путь | null
   subtitleRead: (path = null) => invoke('subtitle_file_read', { path }),
   subtitleWrite: (path, defaultName, text) => invoke('subtitle_file_write', { path, defaultName, text }),
+  // Аудиоплагины VST3 / CLAP (.agent/vst3-contract.md; js/vst.js — список, рендер, окна плагинов)
+  vstSupported: () => invoke('vst_supported'),
+  vstList: () => invoke('vst_list'),
+  vstScan: (force = false) => invoke('vst_scan', { force: !!force }),
+  vstFoldersSet: (folders) => invoke('vst_folders_set', { folders }),
+  vstPickFolder: () => invoke('vst_pick_folder'),
+  vstInstall: (path = null) => invoke('vst_install', { path }),
+  vstInfo: (uid, state = null, ctrl = null) => invoke('vst_info', { uid, state, ctrl }),
+  // tag — метка задания (в ключ кэша не входит): события прогресса vst:render { tag, fraction }
+  vstRender: (job, tag = null) => invoke('vst_render', { job: tag ? { ...job, tag } : job }),
+  vstEditorOpen: (args) => invoke('vst_editor_open', args),
+  vstEditorCmd: (session, cmd) => invoke('vst_editor_cmd', { session, cmd }),
+  onVstScan: (fn) => on('vst:scan', fn),
+  onVstRender: (fn) => on('vst:render', fn),
+  onVstState: (fn) => on('vst:state', fn),
+  onVstClosed: (fn) => on('vst:closed', fn),
+  onVstEditor: (fn) => on('vst:editor', fn),
+  onVstError: (fn) => on('vst:error', fn),
 };

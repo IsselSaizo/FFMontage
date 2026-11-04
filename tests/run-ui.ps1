@@ -36,6 +36,19 @@ if ($Plugins -or $Test -eq 'ui-selftest13') {
 if ($Test -eq 'ui-selftest14') {
   Copy-Item (Join-Path $App 'examples\plugins\layouts') $plg -Recurse -Force
 }
+# Аудиоплагины VST3/CLAP: только тестовые (FFM_AUDIO_PLUGIN_PATH отключает системные папки), для ui-selftest17 —
+# собранные примеры (cargo build --profile fast --example vst3_test_gain --example clap_test_gain)
+$aplg = Join-Path $T 'audio-plugins'
+if ((Test-Path $aplg) -and $aplg.StartsWith((Join-Path $App '.test-cache'))) { Remove-Item $aplg -Recurse -Force }
+New-Item -ItemType Directory -Force $aplg | Out-Null
+Remove-Item "$T\audio-plugins.json" -ErrorAction SilentlyContinue
+if ($Test -eq 'ui-selftest17') {
+  foreach ($n in @(@('vst3_test_gain', 'FFM Test Gain.vst3'), @('clap_test_gain', 'FFM Test Gain.clap'))) {
+    $dll = @('fast', 'release', 'debug') | ForEach-Object { Join-Path $App "src-tauri\target\$_\examples\$($n[0]).dll" } | Where-Object { Test-Path $_ } | Select-Object -First 1
+    if ($dll) { Copy-Item $dll (Join-Path $aplg $n[1]) -Force }
+  }
+}
+$env:FFM_AUDIO_PLUGIN_PATH = $aplg
 $env:FFM_PLUGINS_DIR = $plg
 $env:FFM_CONFIG = "$T\config.json"
 $env:FFM_SELFTEST = Join-Path $App "tests\$Test.js"

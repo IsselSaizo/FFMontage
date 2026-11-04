@@ -113,7 +113,8 @@
   const slider = document.querySelector('#cache-limit');
   check(!!slider && slider.min === '1' && slider.max === '50' && slider.step === '1' && slider.value === '1', `slider 1..50 step 1, value ${slider?.value}`);
   check(/1/.test(document.querySelector('#cache-limit-val')?.textContent || '') && !!document.querySelector('#cache-used')?.textContent, `limit label: ${document.querySelector('#cache-limit-val')?.textContent} · ${document.querySelector('#cache-used')?.textContent}`);
-  check(document.querySelectorAll('.cache-row').length === 10, `cache rows: ${document.querySelectorAll('.cache-row').length}`);
+  check(document.querySelectorAll('.cache-row').length === 11, // + «Звук после аудиоплагинов»
+    `cache rows: ${document.querySelectorAll('.cache-row').length}`);
   slider.value = '3';
   slider.dispatchEvent(new Event('input', { bubbles: true }));
   check(/3/.test(document.querySelector('#cache-limit-val').textContent), 'label follows slider');

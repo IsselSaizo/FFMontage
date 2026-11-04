@@ -195,3 +195,6 @@ CI также проверяет `cargo fmt --check`, `cargo clippy`, актуа
 
 FF Montage — GPL-3.0. FFmpeg — GPL (сборки [BtbN](https://github.com/BtbN/FFmpeg-Builds) `gpl`), Tauri — MIT/Apache-2.0.
 Шрифты Inter и Open Sans (папка `fonts/`) — SIL OFL 1.1.
+Аудиоплагины: привязки [vst3](https://github.com/coupler-rs/vst3-rs) (MIT/Apache-2.0, по VST 3 SDK — MIT) и
+[clap-sys](https://github.com/micahrj/clap-sys) (MIT/Apache-2.0, CLAP — MIT). VST — товарный знак Steinberg Media Technologies GmbH;
+логотип VST программа не использует. Сами плагины пользователь ставит отдельно, со своими лицензиями; программа их не распространяет.

@@ -8,6 +8,50 @@ import { isText } from './textModel.js';
 import { renderTextImage, ensureFonts } from './textRender.js';
 import { toAss, toSrt } from './subtitles.js';
 import { fontFile } from './fonts.js';
+import { hasVst } from './audioFx.js';
+import { allVideoClips, videoSoundOn, clipJob, trackJob, trackVstClips } from './vstJobs.js';
+import { t } from './i18n.js';
+import { errText } from './util.js';
+
+/**
+ * Звук с аудиоплагинами VST3 / CLAP (контракт .agent/vst3-contract.md): рендер каждой такой цепочки — WAV в кэше
+ * (vst_render, готовый файл возвращается сразу). → { clips: { [clipId]: { path } }, tracks: { [trackId]: { path } } }.
+ * Клипы дорожки с плагинами рендерятся первыми — их WAV входят в граф дорожки. Ошибка рендера — ошибка экспорта.
+ */
+export async function prepareVstAssets(project, api) {
+  const out = { clips: {}, tracks: {} };
+  const vst = await import('./vst.js');
+  if (!vst.projectUsesVst(project)) return out;
+  await vst.initVst();
+  await vst.refreshVst().catch(() => {});
+  const info = await api.info().catch(() => null);
+  const ffMajor = (info && Number(info.ffMajor)) || 99;
+  const media = project.media || {};
+  const nameOf = (c) => String(c.name || (media[c.mediaId] && media[c.mediaId].name) || c.id);
+  const run = async (job, name) => {
+    try { return { path: (await vst.render(job)).path }; } catch (e) {
+      throw new Error(t('Аудиоплагины: не удалось обработать звук «{name}»: {e}', { name, e: errText(e) }));
+    }
+  };
+  for (const c of allVideoClips(project)) {
+    if (!videoSoundOn(project, c) || !hasVst(c.afx)) continue;
+    const job = clipJob(project, c, { audio: false });
+    if (job) out.clips[c.id] = await run(job, nameOf(c));
+  }
+  for (const tr of project.audioTracks || []) {
+    const tv = tr.volume === undefined ? 1 : Number(tr.volume);
+    if (tr.muted || !(tv > 0)) continue;
+    for (const c of trackVstClips(project, tr)) {
+      const job = clipJob(project, c, { audio: true });
+      if (job) out.clips[c.id] = await run(job, nameOf(c));
+    }
+    if (!hasVst(tr.afx)) continue;
+    const clipWavs = Object.fromEntries((tr.clips || []).filter((c) => out.clips[c.id]).map((c) => [c.id, out.clips[c.id].path]));
+    const job = trackJob(project, tr.id, { clipWavs, ffMajor });
+    if (job) out.tracks[tr.id] = await run(job, String(tr.name || t('Аудиодорожка')));
+  }
+  return out;
+}
 
 const visibleLanes = (p) => [
   { clips: p.videoClips || [], hidden: !!p.videoHidden },
@@ -33,7 +77,7 @@ export const exportableSubs = (p) => (p.subtitleTracks || []).filter((tr) => !tr
 export async function prepareExportAssets(project, settings, api) {
   const W = Math.max(2, Math.round(settings.width / 2) * 2);
   const H = Math.max(2, Math.round(settings.height / 2) * 2);
-  const assets = { texts: {}, subtitles: null };
+  const assets = { texts: {}, subtitles: null, vst: await prepareVstAssets(project, api) };
   const texts = visibleLanes(project).filter((l) => !l.hidden).flatMap((l) => l.clips.filter(isText));
   if (texts.length) {
     await ensureFonts(texts);

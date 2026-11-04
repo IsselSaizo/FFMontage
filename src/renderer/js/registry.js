@@ -423,7 +423,8 @@ export function missingIds(project) {
   const known = (list) => new Set(list.map((x) => x.id));
   const fx = known(EFFECTS); const tr = known(TRANSITIONS); const afx = known(AUDIO_FX);
   const out = { effects: new Set(), transitions: new Set(), audioEffects: new Set() };
-  const audio = (list) => { if (Array.isArray(list)) for (const x of list) if (x && typeof x.type === 'string' && !afx.has(x.type)) out.audioEffects.add(x.type); };
+  // vst3 / clap — аудиоплагины ядра (js/vst.js), не регистрируются в реестре; пропавший файл плагина показывает стойка
+  const audio = (list) => { if (Array.isArray(list)) for (const x of list) if (x && typeof x.type === 'string' && x.type !== 'vst3' && x.type !== 'clap' && !afx.has(x.type)) out.audioEffects.add(x.type); };
   const video = (clips) => {
     for (const c of Array.isArray(clips) ? clips : []) {
       if (!c) continue;

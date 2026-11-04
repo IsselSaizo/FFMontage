@@ -225,8 +225,16 @@ export async function openExport() {
       if (p.eta !== null && p.eta !== undefined) parts.push(t('осталось ≈ {eta}', { eta: fmtDur(Math.max(0, p.eta)) }));
       stats.textContent = parts.join(' · ');
     });
+    // Пока готовится звук с аудиоплагинами (VST3 / CLAP) — его прогресс; потом его сменит прогресс FFmpeg
+    let ffStarted = false;
+    const offExp = off;
+    const offVst = typeof api.onVstRender === 'function' ? api.onVstRender((p) => {
+      if (ffStarted || !p || !Number.isFinite(p.fraction)) return;
+      stats.textContent = t('Обработка звука аудиоплагинами… {p}%', { p: Math.round(p.fraction * 100) });
+    }) : () => {};
+    const offFf = api.onExportProgress(() => { ffStarted = true; });
     const r = await api.startExport(JSON.parse(JSON.stringify(store.project)), settings);
-    off();
+    offExp(); offVst(); offFf();
 
     modal.innerHTML = '';
     modal.classList.remove('busy');

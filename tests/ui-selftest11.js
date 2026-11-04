@@ -54,13 +54,13 @@
   await sleep(200);
   check(!!document.querySelector('#settings'), 'settings window opens');
   const sections = [...document.querySelectorAll('.set-tab')].map((b) => b.dataset.section);
-  check(sections.join() === 'general,hotkeys,folders,cache,mcp,plugins,about', `sections: ${sections.join()}`);
+  check(sections.join() === 'general,hotkeys,folders,cache,mcp,plugins,vst,about', `sections: ${sections.join()}`);
   for (const s of sections) {
     document.querySelector(`.set-tab[data-section="${s}"]`).click();
     await sleep(s === 'cache' || s === 'folders' ? 1500 : 300);
     check(document.querySelector('.set-body').dataset.section === s && document.querySelector('.set-body').childElementCount > 1, `section ${s} renders`);
     if (s === 'cache' || s === 'general') await window.api.testShot(`settings-${s}-${lang}`).catch(() => {});
-    if (s === 'cache') check(document.querySelectorAll('.cache-row').length === 10 && !!document.querySelector('#cache-limit'), `cache rows: ${document.querySelectorAll('.cache-row').length}`);
+    if (s === 'cache') check(document.querySelectorAll('.cache-row').length === 11 && !!document.querySelector('#cache-limit'), `cache rows: ${document.querySelectorAll('.cache-row').length}`);
     scan(document.querySelector('#settings'));
   }
 

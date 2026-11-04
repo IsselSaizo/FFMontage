@@ -23,6 +23,7 @@ mod queue;
 mod selftest;
 mod settings;
 mod update;
+mod vst;
 mod windows;
 
 fn main() {
@@ -39,6 +40,13 @@ fn main() {
         }
     }));
     let args: Vec<String> = std::env::args().collect();
+    // Процесс-хост аудиоплагинов VST3/CLAP (vst/host.rs) — до всего остального: только плагин и stdin/stdout
+    if args.get(1).map(String::as_str) == Some("--vst-host") {
+        #[cfg(windows)]
+        vst::host::main(&args[2..]);
+        #[cfg(not(windows))]
+        std::process::exit(2);
+    }
     if args.iter().any(|a| a == "--mcp") {
         mcp::main();
         return;
@@ -152,6 +160,16 @@ fn run() {
             assets::export_asset_save,
             assets::subtitle_file_read,
             assets::subtitle_file_write,
+            vst::vst_supported,
+            vst::vst_list,
+            vst::vst_scan,
+            vst::vst_folders_set,
+            vst::vst_pick_folder,
+            vst::vst_install,
+            vst::vst_info,
+            vst::vst_render,
+            vst::vst_editor_open,
+            vst::vst_editor_cmd,
         ])
         .setup(|app| {
             let h = app.handle().clone();
@@ -183,6 +201,7 @@ fn run() {
         tauri::RunEvent::Exit => {
             arm_exit_watchdog();
             export::cancel();
+            vst::close_all();
             procs::kill_all();
             control::stop();
         }

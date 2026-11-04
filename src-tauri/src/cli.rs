@@ -2,6 +2,7 @@
 //   ff-montage --engine <команда>   (параметры — JSON в stdin, ответ — JSON в stdout)
 // Команды: probe {file} | thumbs {info} | peaks {info} | proxy {info} | reverse {info,a,b} | freeze {info,at}
 //          silence {file,threshold,min} | frame {file,t,width} | encoders {reset?} | queue | version | export {plan} | checkplan {plan} | paths
+//          vst-list | vst-scan {force?} | vst-info {uid,state?,ctrl?,params?} | vst-render {job}
 use crate::{commands, export, ff, paths, tr};
 use serde_json::{json, Value};
 use std::io::{Read, Write};
@@ -64,6 +65,11 @@ pub fn main(cmd: &str) {
                 crate::plancheck::check(&plan.args, &plan.filter, plan.duration, &plan.output, crate::plancheck::Inputs::Engine)
                     .map(|_| json!(true))
             }
+            // Аудиоплагины (папки — стандартные, settings.json vst.folders и FFM_AUDIO_PLUGIN_PATH)
+            "vst-list" => Ok(crate::vst::list()),
+            "vst-scan" => Ok(crate::vst::scan(args["force"].as_bool() == Some(true), |_, _, _| {}).await),
+            "vst-info" => crate::vst::info(args["uid"].as_str().unwrap_or_default(), &args["state"], &args["ctrl"], &args["params"]).await,
+            "vst-render" => crate::vst::render(&args["job"], crate::plancheck::Inputs::Engine, |_| {}).await,
             other => Err(tr!("неизвестная команда: {}", "unknown command: {}", other)),
         }
     });

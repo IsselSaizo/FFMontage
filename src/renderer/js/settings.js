@@ -11,6 +11,7 @@ import {
 } from './keymap.js';
 import { foldersForm } from './folders.js';
 import { store } from './store.js';
+import { renderPaths } from './vst.js';
 
 const api = window.api;
 // Действия главного окна: перезагрузка с сохранением проекта, обновления, диалог MCP, сохранение перед перезапуском
@@ -67,6 +68,7 @@ const SECTIONS = () => [
   { id: 'cache', title: t('Кэш'), icon: 'trash', render: renderCache },
   { id: 'mcp', title: t('ИИ-ассистент'), icon: 'ai', render: renderMcp },
   { id: 'plugins', title: t('Плагины'), icon: 'link', render: renderPlugins },
+  { id: 'vst', title: t('Аудиоплагины (VST3, CLAP)'), icon: 'music', render: renderVst },
   { id: 'about', title: t('О программе'), icon: 'info', render: renderAbout },
 ];
 
@@ -318,6 +320,8 @@ function dataPlaces(p) {
 export function projectCacheKeep() {
   const keep = [];
   for (const m of Object.values(store.project.media || {})) { if (m.key) keep.push(m.key); if (m.path) keep.push(m.path); }
+  // Рендеры аудиоплагинов (категория audiofx), готовые в этом сеансе
+  keep.push(...renderPaths());
   return keep;
 }
 
@@ -372,6 +376,7 @@ async function renderCache(body) {
       { id: 'fx', title: t('Реверс и стоп-кадры'), desc: t('Пересоздаются по проекту, но долго. Файлы открытого проекта не трогаем.'), size: s.fx, on: false },
       { id: 'assets', title: t('Тексты и субтитры для экспорта'), desc: t('Картинки и файлы субтитров, которые готовятся перед каждым экспортом.'), size: s.assets, on: true },
       { id: 'fonts', title: t('Шрифты для субтитров'), desc: t('Копии шрифтов для экспорта субтитров (libass).'), size: s.fonts, on: true },
+      ...(s.audiofx !== undefined ? [{ id: 'audiofx', title: t('Звук после аудиоплагинов'), desc: t('Результаты VST3 / CLAP для плеера и экспорта. Пересоздаются сами. Файлы открытого проекта не трогаем.'), size: s.audiofx, on: true }] : []),
       { id: 'temp', title: t('Прочее'), desc: t('Временные файлы экспорта и окна, неопознанные файлы кэша.'), size: s.temp, on: true },
       { id: 'anim', title: t('Сохранённые анимации'), desc: t('Это материалы ваших проектов: удаляйте, только если они больше не нужны. Анимации открытого проекта не трогаем.'), size: s.anim, on: false },
       { id: 'logs', title: t('Журналы'), desc: t('Нужны, только если вы сообщаете об ошибке.'), size: s.logs, on: false },
@@ -572,6 +577,105 @@ async function renderPlugins(body) {
     status,
     listBox,
     dirBox);
+  draw();
+}
+
+// --- Аудиоплагины VST3 / CLAP (js/vst.js; Rust — src-tauri/src/vst) ---
+async function renderVst(body) {
+  const vst = await import('./vst.js');
+  await vst.initVst();
+  const s = vst.vstStatus();
+  if (!s.supported) {
+    body.append(h('p', { class: 'muted' }, t('Аудиоплагины VST3 / CLAP работают только в Windows (x64).')));
+    return;
+  }
+  const status = h('p', { class: 'muted small', id: 'vst-scan-status' });
+  const err = h('p', { class: 'setup-error' });
+  const folderBox = h('div', { class: 'vst-list', id: 'vst-folders' });
+  const listBox = h('div', { id: 'vst-plugins' });
+  const failBox = h('div', { class: 'vst-failed', id: 'vst-failed' });
+  const btns = [];
+  const btn = (label, iconName, fn, cls = 'btn ghost small', id = null) => {
+    const b = h('button', { class: cls, id, onclick: async () => {
+      err.textContent = '';
+      for (const x of btns) x.disabled = true;
+      try { await fn(); } catch (e) { err.textContent = errText(e); } finally { for (const x of btns) x.disabled = false; draw(); }
+    } }, iconName ? h('span', { html: icon(iconName, 15) }) : null, label);
+    btns.push(b);
+    return b;
+  };
+  const showScan = () => {
+    const p = s.scanning;
+    status.textContent = p ? (p.total ? t('Сканирование: {done} из {total} — {path}', { done: p.done || 0, total: p.total, path: p.path || '' }) : t('Сканирование…')) : '';
+  };
+  const folderRow = (path, removable) => h('div', { class: 'vst-row' },
+    h('span', { class: 'sel cfg-path', title: path }, path),
+    removable ? h('span') : h('span', { class: 'muted small' }, t('стандартная')),
+    removable
+      ? h('button', { class: 'icon-btn small', title: t('Убрать папку'), html: icon('trash', 15), onclick: async () => {
+        try { await vst.setVstFolders(s.folders.filter((x) => x !== path)); } catch (e) { err.textContent = errText(e); }
+        draw();
+      } })
+      : h('span'));
+
+  function draw() {
+    if (!listBox.isConnected && body.isConnected === false) return;
+    folderBox.innerHTML = '';
+    for (const f of s.defaults) folderBox.append(folderRow(f, false));
+    for (const f of s.folders) folderBox.append(folderRow(f, true));
+    if (!s.defaults.length && !s.folders.length) folderBox.append(h('p', { class: 'muted small' }, t('Папок нет.')));
+    listBox.innerHTML = '';
+    const all = s.plugins;
+    listBox.append(h('p', { class: 'muted small' }, all.length ? t('Найдено плагинов: {n}', { n: all.length }) : t('Плагины не найдены. Добавьте папку или плагин и запустите сканирование.')));
+    const groups = new Map();
+    for (const p of all) { const v = String(p.vendor || '') || t('Без производителя'); if (!groups.has(v)) groups.set(v, []); groups.get(v).push(p); }
+    for (const v of [...groups.keys()].sort((a, b) => a.localeCompare(b))) {
+      listBox.append(h('div', { class: 'vst-vendor' }, v));
+      const box = h('div', { class: 'vst-list' });
+      for (const p of groups.get(v).sort((a, b) => String(a.name).localeCompare(String(b.name)))) {
+        const kind = [p.category, p.sub].filter(Boolean).join(' · ');
+        box.append(h('div', { class: 'vst-row', dataset: { vstUid: String(p.uid) }, title: p.path || '' },
+          h('span', { class: 'set-label' },
+            h('b', {}, String(p.name || p.uid)),
+            h('span', { class: 'muted small cfg-path' }, [p.version ? t('версия {v}', { v: String(p.version) }) : '', kind, p.instrument ? t('инструмент — в стойку эффектов не ставится') : ''].filter(Boolean).join(' · '))),
+          h('span', { class: 'fmt-tag' }, vst.formatLabel(vst.pluginFormat(p))),
+          h('span', { class: 'muted small cfg-path', title: p.path || '' }, String(p.path || '').split(/[\\/]/).pop())));
+      }
+      listBox.append(box);
+    }
+    failBox.innerHTML = '';
+    if (s.failed.length) {
+      failBox.append(h('b', {}, t('Не загрузились ({n})', { n: s.failed.length })),
+        h('p', { class: 'muted small' }, t('Эти файлы не сканируются повторно, пока не изменятся. «Пересканировать всё» проверит их снова.')),
+        h('div', { class: 'vst-list' }, ...s.failed.map((f) => h('div', { class: 'vst-row' },
+          h('span', { class: 'sel cfg-path', title: f.path }, f.path),
+          h('span', { class: 'setup-error small' }, String(f.error || '')),
+          h('span')))));
+    }
+    if (s.error) err.textContent = s.error;
+    showScan();
+  }
+  const off = vst.onVstChange((kind) => {
+    if (!body.isConnected || body.dataset.section !== 'vst') { off(); return; }
+    if (kind === 'scan') showScan(); else if (kind === 'list') draw();
+  });
+
+  body.append(
+    h('p', { class: 'muted small' }, t('Эффекты VST3 и CLAP из папок ниже можно ставить в стойку эффектов клипа или дорожки (вкладка «Аудио»). Плагины работают в отдельном процессе: если плагин упадёт, программа продолжит работу.')),
+    h('div', { class: 'row gap set-actions' },
+      btn(t('Сканировать'), 'refresh', () => vst.scanVst(false), 'btn primary small', 'vst-scan'),
+      btn(t('Пересканировать всё'), 'refresh', () => vst.scanVst(true), 'btn ghost small', 'vst-rescan'),
+      btn(t('Добавить плагин…'), 'plus', () => vst.installVst(null), 'btn ghost small', 'vst-install'),
+      btn(t('Добавить папку…'), 'folder', async () => {
+        const dir = await vst.pickVstFolder();
+        if (dir && !s.folders.includes(dir)) await vst.setVstFolders([...s.folders, dir]);
+      }, 'btn ghost small', 'vst-add-folder')),
+    status, err,
+    h('b', {}, t('Папки с плагинами')),
+    folderBox,
+    h('b', { style: { display: 'block', marginTop: '14px' } }, t('Найденные плагины')),
+    listBox,
+    failBox);
   draw();
 }
 

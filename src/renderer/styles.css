@@ -644,6 +644,32 @@ body.cropping #viewbar .vb-crop { background: var(--accent-soft); color: var(--t
 .fx-param .slider { flex: 1; min-width: 0; }
 .fx-param .vol-val { min-width: 58px; text-align: right; font-size: 11.5px; }
 .rack-add { display: flex; flex-direction: column; gap: 4px; margin-top: 14px; }
+/* Аудиоплагины VST3 / CLAP (audioRack.js, settings.js «Аудиоплагины») */
+.fmt-tag { font-size: 9.5px; font-weight: 700; letter-spacing: .04em; padding: 1px 5px; border-radius: 5px; border: 1px solid var(--line-2); color: var(--text-2); margin-left: 6px; white-space: nowrap; }
+.btn.tiny { padding: 2px 7px; font-size: 11px; gap: 4px; min-height: 0; }
+.btn.tiny.on { background: var(--accent-soft); }
+.fx-card.vst .fx-card-head .row.gap { gap: 4px; align-items: center; }
+.vst-status { margin-top: 6px; color: var(--text-2); display: flex; align-items: center; gap: 8px; }
+.vst-status[data-state="run"], .vst-status[data-state="wait"] { color: #9fe3ff; }
+.vst-status[data-state="error"] { color: #ff8f9c; }
+.vst-status[data-state="live"] { color: #b6f0a0; }
+.vst-pop { width: 320px; }
+.vst-pop-body { display: flex; flex-direction: column; gap: 8px; }
+.vst-pop-list { max-height: 340px; overflow: auto; display: flex; flex-direction: column; gap: 1px; }
+.vst-pop-vendor { font-size: 10.5px; font-weight: 700; text-transform: uppercase; color: var(--text-2); margin: 8px 4px 2px; }
+.vst-pop-item { display: flex; align-items: center; gap: 6px; width: 100%; text-align: left; padding: 6px 8px; border-radius: 6px; border: 0; background: transparent; color: var(--text); cursor: pointer; }
+.vst-pop-item:hover { background: var(--accent-soft); }
+.vst-pop-item .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vst-badge { position: absolute; left: 10px; top: 10px; z-index: 40; padding: 3px 8px; border-radius: 7px; font-size: 11.5px;
+  background: rgba(20,20,26,.85); border: 1px solid var(--line-2); color: #9fe3ff; pointer-events: none; display: none; }
+.vst-badge.on { display: block; }
+.vst-badge.live { color: #b6f0a0; }
+.vst-badge.error { color: #ff8f9c; }
+.vst-list { display: flex; flex-direction: column; gap: 2px; }
+.vst-row { display: grid; grid-template-columns: 1fr auto auto; gap: 10px; align-items: center; padding: 5px 8px; border-radius: 7px; background: var(--panel-2); }
+.vst-row .cfg-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vst-vendor { font-size: 11px; font-weight: 700; color: var(--text-2); margin: 10px 0 2px; }
+.vst-failed .vst-row { border: 1px solid #5a2630; }
 .tl-head.audio-head { cursor: pointer; }
 .tl-head.audio-head.selected { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
 .th-fx { font-size: 10px; font-weight: 700; color: #9fe3ff; margin-left: 2px; }
