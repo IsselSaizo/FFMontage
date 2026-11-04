@@ -46,6 +46,8 @@ jobs:
           }
       - name: Перевод интерфейса (i18n)
         run: node tests/i18n-check.js
+      - name: Правки таймлайна (edit-test, без FFmpeg и окна)
+        run: node tests/edit-test.js
       - name: Таблица горячих клавиш (docs/HOTKEYS.md) актуальна
         run: node tools/hotkeys-doc.mjs --check
       - name: Версия одинакова в Cargo.toml, Cargo.lock, tauri.conf.json, package.json

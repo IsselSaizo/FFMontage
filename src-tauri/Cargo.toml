@@ -36,6 +36,11 @@ windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Security", 
 vst3 = "0.3"
 clap-sys = "0.5"
 
+# Примеры-плагины собираются на всех ОС (cargo clippy --all-targets в CI идёт на Linux), хотя хост плагинов — только Windows
+[dev-dependencies]
+vst3 = "0.3"
+clap-sys = "0.5"
+
 # Тестовый плагин VST3 (усиление, с состоянием) для tests/vst-test.js: cargo build --release --example vst3_test_gain
 [[example]]
 name = "vst3_test_gain"

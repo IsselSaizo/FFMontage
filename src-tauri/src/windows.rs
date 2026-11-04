@@ -142,7 +142,13 @@ fn on_web_crash(reason: &str) -> bool {
 #[cfg(target_os = "linux")]
 fn watch_crash(w: &tauri::WebviewWindow) {
     let _ = w.with_webview(|pw| {
-        use webkit2gtk::WebViewExt;
+        use webkit2gtk::{SecurityManagerExt, WebContextExt, WebViewExt};
+        // Плеер ставит <video crossOrigin="anonymous"> (иначе Web Audio даёт тишину), а страница — tauri://localhost:
+        // запрос к media://localhost — чужой источник. WebKitGTK разрешает CORS только схемам, отмеченным как
+        // cors-enabled (wry отмечает свои схемы лишь как secure) — без этого любое видео даёт MEDIA_ERR_SRC_NOT_SUPPORTED.
+        if let Some(sm) = pw.inner().context().and_then(|c| c.security_manager()) {
+            sm.register_uri_scheme_as_cors_enabled("media");
+        }
         pw.inner().connect_web_process_terminated(|v, reason| {
             if on_web_crash(&format!("{reason:?}")) {
                 v.reload();
