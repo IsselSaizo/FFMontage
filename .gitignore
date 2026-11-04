@@ -9,6 +9,9 @@ vendor/
 /FF Montage.old.exe
 /ff-montage
 /ff-montage.old.exe
+/ff-montage.exe
+# Установленные плагины пользователя (примеры — в examples/plugins)
+/plugins/
 
 # Личные настройки и данные — у каждого свои
 config.json

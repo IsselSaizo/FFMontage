@@ -89,7 +89,8 @@ function audioTrackArg(id) {
 const cleanErr = errText;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-function ai(msg) { toast(t('ИИ: {msg}', { msg }), 'info', 2200); }
+let silent = 0; // > 0 — инструмент вызвал плагин (callTool), а не ИИ-ассистент
+function ai(msg) { if (!silent) toast(t('ИИ: {msg}', { msg }), 'info', 2200); }
 
 // ---------------------------------------------------------------------------
 // Описание проекта для ассистента
@@ -719,6 +720,16 @@ async function runTool(tool, args) {
   if (!fn) fail(`Unknown tool: ${tool}`);
   const a = args && typeof args === 'object' && !Array.isArray(args) ? args : {};
   return UNQUEUED.has(tool) ? fn(a) : queued(() => fn(a));
+}
+
+/** Вызов инструмента из плагина (js/plugins/host.js): та же очередь, что у ИИ-ассистента.
+ *  Какие инструменты доступны плагинам и с каким правом, решает хост плагинов (список разрешённых там). */
+export async function callTool(name, args) {
+  const fn = TOOLS[String(name)];
+  if (!fn) fail(`Unknown tool: ${name}`);
+  const a = args && typeof args === 'object' && !Array.isArray(args) ? args : {};
+  // Без тостов «ИИ: …» — это не ассистент. Очередь общая, поэтому вызовы ИИ в это время не выполняются
+  return queued(async () => { silent++; try { return await fn(a); } finally { silent--; } });
 }
 
 // ---------------------------------------------------------------------------

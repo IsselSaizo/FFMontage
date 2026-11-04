@@ -54,7 +54,7 @@
   await sleep(200);
   check(!!document.querySelector('#settings'), 'settings window opens');
   const sections = [...document.querySelectorAll('.set-tab')].map((b) => b.dataset.section);
-  check(sections.join() === 'general,hotkeys,folders,cache,mcp,about', `sections: ${sections.join()}`);
+  check(sections.join() === 'general,hotkeys,folders,cache,mcp,plugins,about', `sections: ${sections.join()}`);
   for (const s of sections) {
     document.querySelector(`.set-tab[data-section="${s}"]`).click();
     await sleep(s === 'cache' || s === 'folders' ? 1500 : 300);

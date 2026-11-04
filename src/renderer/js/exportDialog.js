@@ -2,6 +2,9 @@
 import { store } from './store.js';
 import { h, fmtTime, fmtBytes, fmtDur, icon, toast } from './util.js';
 import { t, num } from './i18n.js';
+import { listExportPresets, onRegistryChange } from './registry.js';
+import { buildExport } from './exportPlan.js';
+import './core/exportPresets.js';
 
 const api = window.api;
 let encoders = null;
@@ -48,7 +51,11 @@ export async function openExport() {
   const fpsOptions = [{ id: 'source', label: t('Как в исходнике — {fps} fps', { fps: src.fps }), v: src.fps }];
   for (const f of [60, 30]) if (Math.abs(f - src.fps) > 0.01) fpsOptions.push({ id: String(f), label: `${f} fps`, v: f });
 
+  // Пресеты (встроенные и из плагинов): размер, частота, при желании кодек и качество. '' — свои настройки
+  const presetById = (id) => (id ? listExportPresets().find((p) => p.id === id) : null);
+
   const st = {
+    preset: presetById(prefs.preset) ? prefs.preset : '',
     name: store.project.name || t('Мой ролик'),
     res: resOptions.find((r) => r.id === prefs.res) ? prefs.res : 'source',
     fps: fpsOptions.find((r) => r.id === prefs.fps) ? prefs.fps : 'source',
@@ -61,7 +68,13 @@ export async function openExport() {
   const modal = h('div', { class: 'modal export' });
   overlay.append(modal);
   document.body.append(overlay);
-  const close = () => { overlay.remove(); open = false; document.removeEventListener('keydown', onKey); };
+  // Список пресетов меняется, пока окно открыто (плагин включили/выключили) — перерисовать форму
+  const offRegistry = onRegistryChange((ev) => {
+    if (ev.kind !== 'exportPreset' || modal.classList.contains('busy') || !modal.querySelector('#export-go')) return;
+    if (st.preset && !presetById(st.preset)) st.preset = '';
+    renderForm();
+  });
+  const close = () => { overlay.remove(); open = false; offRegistry(); document.removeEventListener('keydown', onKey); };
   const onKey = (e) => { if (e.key === 'Escape' && !modal.classList.contains('busy')) close(); };
   document.addEventListener('keydown', onKey);
 
@@ -97,6 +110,24 @@ export async function openExport() {
         h('div', { class: 'cc-desc' }, c.desc));
       return card;
     }));
+    // Пресет: размер и частота берутся из него (кодек и качество — если заданы, их можно поменять)
+    const presets = listExportPresets();
+    const preset = presetById(st.preset);
+    let presetSel = null;
+    if (presets.length) {
+      presetSel = h('select', { class: 'input', id: 'export-preset' },
+        h('option', { value: '', selected: !preset }, t('Свои настройки')),
+        ...presets.map((p) => h('option', { value: p.id, selected: !!preset && preset.id === p.id }, `${p.name} — ${p.width}×${p.height}, ${p.fps} fps`)));
+      presetSel.addEventListener('change', () => {
+        st.preset = presetSel.value;
+        const p = presetById(st.preset);
+        if (p && p.codec) st.codec = p.codec;
+        if (p && p.quality) st.quality = p.quality;
+        renderForm();
+      });
+    }
+    const fromPreset = (text) => h('div', { class: 'muted', title: t('Задано пресетом') }, text);
+
     const qual = h('div', { class: 'segmented' }, ...QUALITIES.map((q) =>
       h('button', { class: st.quality === q.id ? 'on' : '', onclick: () => { st.quality = q.id; renderForm(); } },
         h('b', {}, q.title), h('small', {}, q.desc))));
@@ -110,8 +141,9 @@ export async function openExport() {
           store.episodes().length > 1 ? h('div', { class: 'muted', title: t('Экспортируется открытый эпизод. Чтобы выгрузить другой — откройте его вкладку над таймлайном.') }, t('«{name}» (открытый)', { name: store.episodeName(store.activeEpisode()) })) : null,
           h('label', {}, t('Название')), nameInput,
           h('label', {}, t('Сохранить в')), h('div', { class: 'row gap' }, outLabel, pickBtn),
-          h('label', {}, t('Разрешение')), select(resOptions, 'res'),
-          h('label', {}, t('Частота кадров')), select(fpsOptions, 'fps'),
+          presetSel ? h('label', {}, t('Пресет')) : null, presetSel,
+          h('label', {}, t('Разрешение')), preset ? fromPreset(`${preset.width}×${preset.height}`) : select(resOptions, 'res'),
+          h('label', {}, t('Частота кадров')), preset ? fromPreset(`${preset.fps} fps`) : select(fpsOptions, 'fps'),
           h('label', {}, t('Кодек')), codecCards,
           h('label', {}, t('Качество')), qual),
         h('p', { class: 'muted small' },
@@ -127,14 +159,20 @@ export async function openExport() {
 
   // ---------------- Экспорт ----------------
   async function start() {
-    savePrefs({ res: st.res, fps: st.fps, codec: st.codec, quality: st.quality });
+    savePrefs({ res: st.res, fps: st.fps, codec: st.codec, quality: st.quality, preset: st.preset });
     if (st.name && st.name !== store.project.name) store.mutate((p) => { p.name = st.name; });
-    const res = resOptions.find((r) => r.id === st.res);
-    const fps = fpsOptions.find((r) => r.id === st.fps);
+    const preset = presetById(st.preset);
+    const res = preset ? { w: preset.width, h: preset.height } : resOptions.find((r) => r.id === st.res);
+    const fps = preset ? { v: preset.fps } : fpsOptions.find((r) => r.id === st.fps);
     const enc = encoderFor(st.codec);
     const output = st.output || await api.defaultExportPath(st.name || t('Видео'));
     const exists = await api.exists(output);
     const settings = { width: res.w, height: res.h, fps: fps.v, codec: enc.enc, quality: st.quality, output };
+    // Что экспорт пропустит (эффекты и переходы пропавших плагинов) — показать до и после
+    let warnings = [];
+    try { warnings = buildExport(JSON.parse(JSON.stringify(store.project)), settings).warnings || []; } catch { /* ошибку покажет сам экспорт */ }
+    const warnNote = () => (warnings.length ? h('p', { class: 'muted small export-warn' }, warnings.join(' ')) : null);
+    if (warnings.length) toast(warnings.join(' '), 'info');
 
     modal.innerHTML = '';
     modal.classList.add('busy');
@@ -148,7 +186,7 @@ export async function openExport() {
         h('div', { class: 'export-target' }, output.split(/[\\/]/).pop(),
           h('span', { class: 'muted' }, ` · ${res.w}×${res.h} · ${fps.v} fps · ${CODECS.find((c) => c.id === st.codec).title}`)),
         pct, h('div', { class: 'progress' }, bar), stats,
-        exists ? h('p', { class: 'muted small' }, t('Файл с таким именем будет заменён.')) : null),
+        exists ? h('p', { class: 'muted small' }, t('Файл с таким именем будет заменён.')) : null, warnNote()),
       h('div', { class: 'modal-foot' }, cancel));
 
     const off = api.onExportProgress((p) => {
@@ -177,7 +215,7 @@ export async function openExport() {
             h('dt', {}, t('Размер')), h('dd', {}, fmtBytes(r.size)),
             h('dt', {}, t('Средний битрейт')), h('dd', {}, t('{n} Мбит/с', { n: num(ratio, 1) })),
             h('dt', {}, t('Длительность')), h('dd', {}, fmtTime(r.duration)),
-            h('dt', {}, t('Экспорт занял')), h('dd', {}, fmtDur(r.elapsed)))),
+            h('dt', {}, t('Экспорт занял')), h('dd', {}, fmtDur(r.elapsed))), warnNote()),
         h('div', { class: 'modal-foot' },
           h('button', { class: 'btn ghost', onclick: () => api.showInFolder(r.output) }, h('span', { html: icon('folder', 17) }), t('Показать в папке')),
           h('button', { class: 'btn primary', onclick: () => api.openPath(r.output) }, h('span', { html: icon('play', 17) }), t('Открыть видео'))));

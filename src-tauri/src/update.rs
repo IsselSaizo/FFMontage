@@ -12,7 +12,7 @@ const REPO: &str = "IsselSaizo/FFMontage";
 
 fn s(p: &Path) -> String { p.to_string_lossy().to_string() }
 
-fn which(name: &str) -> Option<PathBuf> {
+pub fn which(name: &str) -> Option<PathBuf> {
     let exe = format!("{name}{}", if cfg!(windows) { ".exe" } else { "" });
     let mut dirs: Vec<PathBuf> = std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect()).unwrap_or_default();
     if name == "cargo" {

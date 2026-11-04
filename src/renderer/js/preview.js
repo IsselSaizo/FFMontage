@@ -8,7 +8,8 @@ import { h, $, icon, fmtTime } from './util.js';
 import { applyTransition, resetLayer } from './transitions.js';
 import { cssEffects } from './effects.js';
 import { speedOf, tlLen, clipEnd, srcAt, tlAt } from './clipTime.js';
-import { activeFx, fxParam } from './audioFx.js';
+import { activeFx, webAudioChain } from './audioFx.js';
+import { onRegistryChange } from './registry.js';
 import { t } from './i18n.js';
 
 const EPS = 0.004;
@@ -70,6 +71,12 @@ export class Preview {
     store.on('time', (src) => { if (src !== 'preview') this.onExternalSeek(); });
     store.on('project', () => { this.layoutStage(); if (!this.playing) this.seek(store.time); else this.syncAudio(store.time, true); this.cleanupAudio(); });
     store.on('media', () => { if (!this.playing) this.seek(store.time); });
+    // Плагин добавил/убрал эффект или переход — пересобрать цепочки Web Audio и перерисовать кадр
+    onRegistryChange(() => {
+      for (const r of this.routes.values()) r.sig = '';
+      for (const b of this.buses.values()) b.sig = null;
+      if (!this.playing) this.seek(store.time); else this.syncAudio(store.time, true);
+    });
     new ResizeObserver(() => requestAnimationFrame(() => this.layoutStage())).observe(this.frame);
     this.layoutStage();
     this.seek(0);
@@ -119,21 +126,20 @@ export class Preview {
   }
 
   // Эффекты в предпросмотре: элемент → громкость → эффекты клипа → шина дорожки (эффекты дорожки) → общий выход.
-  // Шумоподавления в Web Audio нет — его слышно только в готовом видео.
+  // Узлы — по полю webaudio описаний (audioFx.js webAudioChain); у шумоподавления его нет — слышно только в готовом видео.
   fxNodes(list) {
     const nodes = [];
-    for (const fx of activeFx(list)) {
-      const p = (k) => fxParam(fx, k);
-      if (fx.type === 'eq') {
-        const mk = (type, f, gain, q) => { const b = this.ctx.createBiquadFilter(); b.type = type; b.frequency.value = f; b.gain.value = gain; if (q) b.Q.value = q; return b; };
-        nodes.push(mk('lowshelf', 120, p('low')), mk('peaking', p('midF'), p('mid'), 1.4), mk('highshelf', 8000, p('high')));
-      } else if (fx.type === 'comp') {
-        const c = this.ctx.createDynamicsCompressor();
-        c.threshold.value = p('threshold'); c.ratio.value = p('ratio'); c.knee.value = 6;
-        c.attack.value = p('attack') / 1000; c.release.value = p('release') / 1000;
-        const mk = this.ctx.createGain(); mk.gain.value = 10 ** (p('makeup') / 20);
-        nodes.push(c, mk);
+    for (const d of webAudioChain(list)) {
+      let n;
+      if (d.node === 'biquad') { n = this.ctx.createBiquadFilter(); n.type = d.type; }
+      else if (d.node === 'compressor') n = this.ctx.createDynamicsCompressor();
+      else if (d.node === 'gain') n = this.ctx.createGain();
+      else continue;
+      // Числовые поля описания — AudioParam узла с тем же именем (frequency, gain, Q, threshold, attack…)
+      for (const [k, v] of Object.entries(d)) {
+        if (k !== 'node' && k !== 'type' && n[k] instanceof AudioParam && Number.isFinite(v)) n[k].value = v;
       }
+      nodes.push(n);
     }
     return nodes;
   }

@@ -23,7 +23,8 @@ pub fn allow(p: &Path) {
     ALLOWED.lock().unwrap().get_or_insert_with(HashSet::new).insert(norm(p));
 }
 
-fn is_allowed(p: &Path) -> bool {
+/// Разрешён ли окну файл: открытый через импорт (media_probe) или лежащий в кэше медиа
+pub fn is_allowed(p: &Path) -> bool {
     let n = norm(p);
     if ALLOWED.lock().unwrap().as_ref().map(|s| s.contains(&n)).unwrap_or(false) {
         return true;

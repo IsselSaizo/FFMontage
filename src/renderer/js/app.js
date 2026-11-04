@@ -23,6 +23,9 @@ import { closePopover, popoverOpen } from './popover.js';
 // Мост для ИИ-ассистента грузим отдельно: если с ним что-то не так, редактор всё равно запустится
 const mcpReady = import('./mcpBridge.js').catch((e) => { console.error('mcpBridge', e); return null; });
 const showMcpDialog = async () => { const m = await mcpReady; if (m) m.showMcpDialog(); else toast(t('Модуль ИИ-ассистента не загрузился'), 'error'); };
+// Хост плагинов — тоже отдельно: сбой в нём (или в плагине) не мешает запуску редактора
+const pluginsReady = import('./plugins/host.js').catch((e) => { console.error('plugins host', e); return null; });
+let pluginHost = null;
 
 const api = window.api;
 let preview; let timeline; let transport;
@@ -174,6 +177,8 @@ async function loadFromText(text, filePath) {
   await restoreMedia();
   timeline.autoFit = true; timeline.fit();
   updateTitle();
+  // Эффекты/переходы пропавших (или выключенных) плагинов: предупреждаем, данные проекта не трогаем
+  if (pluginHost) pluginHost.warnMissing(store.project);
 }
 
 async function openProject() {
@@ -340,10 +345,18 @@ async function main() {
   store.on('request-pause', () => preview.pause());
   store.on('project', () => { autosave(); updateTitle(); });
   initResizers();
+  // Плагины — до восстановления автосохранения: их эффекты и переходы должны быть уже в реестре
+  pluginHost = await pluginsReady;
+  if (pluginHost) {
+    try {
+      pluginHost.initPluginHost({ browser });
+      await pluginHost.loadPlugins();
+    } catch (e) { console.warn('plugins', e); }
+  }
   await restoreAutosave();
   restoreUiState();
   updateTitle();
-  window.__ffm = { store, preview, timeline, importPaths, openExport, browser, crop, anim, openSettings, reloadUi };
+  window.__ffm = { store, preview, timeline, importPaths, openExport, browser, crop, anim, openSettings, reloadUi, plugins: pluginHost, loadProjectText: loadFromText };
   const bridge = await mcpReady;
   if (bridge) bridge.initMcpBridge({
     loadProjectText: (text, filePath) => loadFromText(text, filePath),

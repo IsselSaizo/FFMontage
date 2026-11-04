@@ -1,10 +1,11 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Окна FF Montage: события, перетаскивание файлов, кнопки окна",
+  "description": "Окна FF Montage: только то, что нужно js/tauri.js — события (в т.ч. перетаскивание файлов, ресайз) и кнопки окна",
   "windows": ["main", "setup"],
   "permissions": [
-    "core:default",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
     "core:window:allow-start-dragging",
     "core:window:allow-minimize",
     "core:window:allow-toggle-maximize",

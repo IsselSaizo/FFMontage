@@ -1,0 +1,21 @@
+{
+  "id": "project-stats",
+  "name": { "ru": "Статистика проекта", "en": "Project stats" },
+  "version": "1.0.0",
+  "apiVersion": 1,
+  "description": {
+    "ru": "Пример плагина с панелью: сколько клипов и какая длина у ролика, заметка к проекту, действие с горячей клавишей.",
+    "en": "Example plugin with a panel: clip count and video length, a project note and an action with a hotkey."
+  },
+  "author": "FF Montage",
+  "entry": "main.js",
+  "contributes": {
+    "actions": [
+      { "id": "show", "title": { "ru": "Статистика проекта", "en": "Project stats" }, "keys": ["Ctrl+Shift+KeyI"] }
+    ],
+    "panels": [
+      { "id": "stats", "title": { "ru": "Статистика", "en": "Stats" }, "entry": "panel.html" }
+    ]
+  },
+  "permissions": ["project:read", "ui:panel", "storage", "notify"]
+}

@@ -13,6 +13,8 @@ mod ff;
 mod i18n;
 mod mcp;
 mod paths;
+mod plancheck;
+mod plugins;
 mod procs;
 mod protocol;
 mod selftest;
@@ -75,6 +77,10 @@ fn run() {
         .register_asynchronous_uri_scheme_protocol("media", |_ctx, req, responder| {
             std::thread::spawn(move || responder.respond(protocol::handle(&req)));
         })
+        // Файлы плагинов для песочных iframe: http://plugin.localhost/<id>/… (Windows), plugin://localhost/<id>/…
+        .register_asynchronous_uri_scheme_protocol("plugin", |_ctx, req, responder| {
+            std::thread::spawn(move || responder.respond(plugins::handle(&req)));
+        })
         .on_page_load(windows::on_page_load)
         .invoke_handler(tauri::generate_handler![
             commands::app_info,
@@ -122,6 +128,15 @@ fn run() {
             selftest::test_shot,
             update::update_check,
             update::update_apply,
+            plugins::plugins_list,
+            plugins::plugins_pick,
+            plugins::plugins_install,
+            plugins::plugins_install_github,
+            plugins::plugins_remove,
+            plugins::plugins_open_dir,
+            plugins::plugin_storage_get,
+            plugins::plugin_storage_set,
+            plugins::plugin_net_fetch,
         ])
         .setup(|app| {
             let h = app.handle().clone();
@@ -139,11 +154,45 @@ fn run() {
         .build(tauri::generate_context!())
         .expect(tr!("FF Montage: не удалось запустить окно", "FF Montage: cannot start the window"));
 
-    app.run(|_app, event| {
-        if let tauri::RunEvent::Exit = event {
+    app.run(|app, event| match event {
+        // Главное окно закрыто (✕ в окне → win.close(), Alt+F4, WM_CLOSE) — выходим, даже если осталось что-то ещё
+        tauri::RunEvent::WindowEvent { label, event: tauri::WindowEvent::Destroyed, .. } if label == "main" => {
+            arm_exit_watchdog();
+            app.exit(0);
+        }
+        tauri::RunEvent::ExitRequested { .. } => arm_exit_watchdog(),
+        tauri::RunEvent::Exit => {
+            arm_exit_watchdog();
             export::cancel();
             procs::kill_all();
             control::stop();
         }
+        _ => {}
     });
+}
+
+/// Выход начался: если за 5 с процесс не завершился сам (завис WebView, поток, выгрузка DLL…) — завершить его жёстко,
+/// иначе exe остаётся занятым и его нельзя заменить. Процессы FFmpeg умрут вместе с ним (Job Object, procs.rs).
+fn arm_exit_watchdog() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static ARMED: AtomicBool = AtomicBool::new(false);
+    if ARMED.swap(true, Ordering::SeqCst) { return; }
+    std::thread::spawn(|| {
+        std::thread::sleep(std::time::Duration::from_secs(5));
+        let _ = std::fs::OpenOptions::new().create(true).append(true).open(paths::get().logs.join("renderer.log"))
+            .and_then(|mut f| { use std::io::Write; writeln!(f, "[exit] watchdog: процесс не завершился за 5 с — завершаю принудительно") }); // i18n-ignore — служебный журнал
+        hard_exit(0);
+    });
+}
+
+#[cfg(windows)]
+fn hard_exit(code: u32) -> ! {
+    use ::windows::Win32::System::Threading::{GetCurrentProcess, TerminateProcess};
+    unsafe { let _ = TerminateProcess(GetCurrentProcess(), code); }
+    std::process::exit(code as i32)
+}
+
+#[cfg(unix)]
+fn hard_exit(code: u32) -> ! {
+    unsafe { libc::_exit(code as i32) }
 }

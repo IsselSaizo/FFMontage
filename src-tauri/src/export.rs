@@ -1,5 +1,5 @@
 // Запуск экспорта. Команду FFmpeg собирает окно (src/renderer/js/exportPlan.js),
-// здесь — запуск, прогресс, отмена, журнал и замена файла по готовности.
+// здесь — проверка плана (plancheck.rs), запуск, прогресс, отмена, журнал и замена файла по готовности.
 use crate::{ff, paths, tr};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -33,8 +33,10 @@ pub fn cancel() -> bool {
     }
 }
 
-pub async fn run(plan: Plan, on_progress: impl Fn(Value) + Send + Sync) -> Result<Value, Value> {
+/// inputs — какие входные файлы разрешены (окно / движок без окна); план проверяется до запуска FFmpeg (plancheck.rs)
+pub async fn run(plan: Plan, inputs: crate::plancheck::Inputs, on_progress: impl Fn(Value) + Send + Sync) -> Result<Value, Value> {
     let err = |m: String, cancelled: bool| json!({ "message": m, "cancelled": cancelled });
+    crate::plancheck::check(&plan.args, &plan.filter, plan.duration, &plan.output, inputs).map_err(|e| err(e, false))?;
     let (tx, mut rx) = tokio::sync::oneshot::channel::<()>();
     {
         let mut g = RUNNING.lock().unwrap();

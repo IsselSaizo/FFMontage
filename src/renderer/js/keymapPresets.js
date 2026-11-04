@@ -68,3 +68,35 @@ export const PRESETS = {
     },
   },
 };
+
+// ---------------------------------------------------------------------------
+// Пресеты из плагинов (contributes.keymaps / ffm.register.keymap): тот же объект PRESETS пополняется,
+// у такого пресета есть поле plugin. Встроенные пресеты плагин заменить не может.
+// ---------------------------------------------------------------------------
+const presetListeners = new Set();
+export const onPresetsChange = (fn) => { presetListeners.add(fn); return () => presetListeners.delete(fn); };
+const changed = () => { for (const fn of presetListeners) { try { fn(); } catch (e) { console.warn('keymap presets', e); } } };
+
+const COMBO = /^(?:(?:Ctrl|Alt|Shift)\+){0,3}[A-Za-z][A-Za-z0-9]{0,24}$/;
+
+/** id — полный id пресета, preset — { name, keys: { actionId: [сочетания] } }, pluginId — владелец */
+export function registerPreset(id, preset, pluginId) {
+  if (typeof id !== 'string' || !id || !pluginId) throw new Error('keymap preset: id and plugin are required');
+  if (PRESETS[id] && PRESETS[id].plugin !== pluginId) throw new Error(`keymap preset id is taken: ${id}`);
+  const keys = {};
+  for (const [action, list] of Object.entries((preset && preset.keys) || {})) {
+    if (typeof action !== 'string' || !Array.isArray(list)) continue;
+    keys[action] = list.filter((k) => typeof k === 'string' && COMBO.test(k)).slice(0, 8);
+  }
+  PRESETS[id] = { name: String((preset && preset.name) || id).slice(0, 80), keys, plugin: pluginId };
+  changed();
+  return id;
+}
+
+/** Убрать все пресеты плагина */
+export function unregisterPresets(pluginId) {
+  let n = 0;
+  for (const [id, p] of Object.entries(PRESETS)) if (p.plugin && p.plugin === pluginId) { delete PRESETS[id]; n++; }
+  if (n) changed();
+  return n;
+}

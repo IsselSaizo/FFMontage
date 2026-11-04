@@ -1,13 +1,15 @@
 // Вкладка «Аудио»: стойка эффектов справа.
 // Выбран аудиоклип — эффекты клипа; выбрана дорожка (щелчок по её названию) — эффекты всей дорожки.
+// Список «Добавить» пополняется аудиоэффектами плагинов (перерисовка по onRegistryChange).
 import { store } from './store.js';
 import { h, $, icon } from './util.js';
 import { AUDIO_FX, fxDef, fxParam } from './audioFx.js';
 import { t, getLang } from './i18n.js';
+import * as registry from './registry.js';
 
 // Десятичный разделитель языка без лишних нулей: 2,5 / 2.5
 const dec = (x) => (getLang() === 'ru' ? String(x).replace('.', ',') : String(x));
-const fmt = (v, pd) => `${dec(Math.round(v * 10) / 10)} ${pd.unit}`;
+const fmt = (v, pd) => `${dec(Math.round(v * 10) / 10)}${pd.unit ? ` ${pd.unit}` : ''}`;
 
 export function rackTarget() {
   const s = store.selection;
@@ -64,7 +66,16 @@ export function initAudioRack() {
     const list = Array.isArray(tg.owner.afx) ? tg.owner.afx : [];
     list.forEach((fx, i) => {
       const d = fxDef(fx.type);
-      if (!d) return;
+      if (!d) {
+        // Эффект плагина, которого нет (или он выключен): в проекте остаётся, но не применяется
+        if (fx && typeof fx.type === 'string') {
+          root.append(h('div', { class: 'fx-card off missing', dataset: { fx: fx.type, index: String(i) } },
+            h('div', { class: 'fx-card-head' },
+              h('span', { class: 'muted small' }, t('«{id}» — эффект отсутствующего плагина, не применяется', { id: fx.type })),
+              h('button', { class: 'icon-btn tiny', title: t('Убрать эффект'), html: icon('trash', 14), dataset: { fxDel: String(i) }, onclick: () => store.removeAudioFx(target, i) }))));
+        }
+        return;
+      }
       const on = h('input', { type: 'checkbox', title: t('Включить / выключить'), dataset: { fxOn: String(i) } });
       on.checked = fx.on !== false;
       on.addEventListener('change', () => store.setAudioFx(target, i, { on: on.checked }));
@@ -87,6 +98,15 @@ export function initAudioRack() {
   store.on('selection', render);
   store.on('project', render);
   store.on('mode', render);
+  // Плагин включили/выключили — список аудиоэффектов изменился
+  if (typeof registry.onRegistryChange === 'function') {
+    let pending = false;
+    registry.onRegistryChange((ev) => {
+      if (pending || (ev && ev.kind && ev.kind !== 'audioEffect')) return;
+      pending = true;
+      queueMicrotask(() => { pending = false; try { render(); } catch (e) { console.warn('audio rack', e); } });
+    });
+  }
   render();
   return { render };
 }

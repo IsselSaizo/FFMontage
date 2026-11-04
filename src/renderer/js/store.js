@@ -3,7 +3,7 @@ import { uid, clamp, snapFps } from './util.js';
 import { t } from './i18n.js';
 import { speedOf, tlLen, clipEnd, srcAt, tlAt, MIN_SPEED, MAX_SPEED } from './clipTime.js';
 import { newAudioFx } from './audioFx.js';
-import { MIN_DURATION as TR_MIN, MAX_DURATION as TR_MAX, DEFAULT_DURATION as TR_DEFAULT, TRANSITIONS } from './transitions.js';
+import { MIN_DURATION as TR_MIN, MAX_DURATION as TR_MAX, DEFAULT_DURATION as TR_DEFAULT } from './transitions.js';
 
 export const MIN_CLIP = 0.1;   // минимальная длина клипа, с
 export const ADJ = 0.002;      // допуск «стоят впритык», с
@@ -107,7 +107,8 @@ export function fixup(p) {
   p.videoClips.forEach((c, i) => {
     if (!c.transition) return;
     const prev = p.videoClips[i - 1];
-    if (!prev || Math.abs(end(prev) - c.start) > ADJ || !TRANSITIONS.find((x) => x.id === c.transition.type)) { delete c.transition; return; }
+    // Неизвестный тип не удаляем: это может быть переход пропавшего (выключенного) плагина — экспорт заменит его растворением
+    if (!prev || Math.abs(end(prev) - c.start) > ADJ || typeof c.transition.type !== 'string' || !c.transition.type) { delete c.transition; return; }
     const mx = maxTransition(prev, c);
     if (mx < TR_MIN) { delete c.transition; return; }
     c.transition.duration = clamp(Number(c.transition.duration) || TR_DEFAULT, TR_MIN, mx);

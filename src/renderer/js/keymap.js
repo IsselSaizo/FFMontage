@@ -3,10 +3,11 @@
 // по коду клавиши, поэтому работает в любой раскладке.
 // Слои: клавиши по умолчанию → пресет (DaVinci Resolve / Premiere Pro / CapCut) → свои клавиши пользователя.
 // Где взять подпись клавиши для подсказки: keyHint('clip.split') → 'S'; h('button', { tip: [t('Разрезать'), 'clip.split'] }).
+// Плагины добавляют свои действия (registerAction, категория «Плагины») и пресеты (registerPreset).
 import { t } from './i18n.js';
-import { PRESETS } from './keymapPresets.js';
+import { PRESETS, registerPreset, unregisterPresets, onPresetsChange } from './keymapPresets.js';
 
-export { PRESETS };
+export { PRESETS, registerPreset, unregisterPresets };
 
 export const CATEGORIES = [
   { id: 'file', title: t('Файл') },
@@ -14,6 +15,7 @@ export const CATEGORIES = [
   { id: 'tools', title: t('Инструменты') },
   { id: 'play', title: t('Воспроизведение') },
   { id: 'view', title: t('Вид') },
+  { id: 'plugins', title: t('Плагины') },
 ];
 
 // global — работает и при вводе текста (Ctrl+S и т.п.)
@@ -64,17 +66,27 @@ export const actionById = (id) => ACTIONS.find((a) => a.id === id);
 // Слои клавиш
 // ---------------------------------------------------------------------------
 let presetId = 'native';
+// Выбранный пользователем пресет: если он из плагина, который ещё не загружен (или выключен),
+// пока действуют родные клавиши, а при появлении пресета он включается сам
+let wantedPreset = 'native';
 let custom = {}; // id → [сочетания] (пустой массив — клавиша снята)
 const listeners = new Set();
+const notify = () => { refreshTips(); for (const fn of listeners) { try { fn(); } catch (e) { console.warn('keymap listener', e); } } };
 
 export function configureKeymap({ preset, keys } = {}) {
-  presetId = PRESETS[preset] ? preset : 'native';
+  wantedPreset = typeof preset === 'string' && preset ? preset : 'native';
+  presetId = PRESETS[wantedPreset] ? wantedPreset : 'native';
   custom = keys && typeof keys === 'object' ? { ...keys } : {};
-  refreshTips();
-  for (const fn of listeners) fn();
+  notify();
 }
 export const keymapState = () => ({ preset: presetId, keys: { ...custom } });
 export const onKeymapChange = (fn) => { listeners.add(fn); return () => listeners.delete(fn); };
+
+// Пресеты плагинов появились/пропали
+onPresetsChange(() => {
+  presetId = PRESETS[wantedPreset] ? wantedPreset : 'native';
+  notify();
+});
 
 /** Клавиши действия без учёта своих: по умолчанию или из пресета */
 export function baseKeysOf(id, preset = presetId) {
@@ -128,9 +140,9 @@ export const keyHint = (id) => keyLabel(keysOf(id)[0]);
 export const withKey = (text, id) => { const k = keyHint(id); return k ? `${text} (${k})` : text; };
 
 // Подсказки кнопок обновляются при смене клавиш: util.h(…, { tip: [текст, id] }) ставит data-tip/data-tip-action
-export function refreshTips(root = document) {
+export function refreshTips(root) {
   if (typeof document === 'undefined') return;
-  for (const el of root.querySelectorAll('[data-tip-action]')) el.title = withKey(el.dataset.tip, el.dataset.tipAction);
+  for (const el of (root || document).querySelectorAll('[data-tip-action]')) el.title = withKey(el.dataset.tip, el.dataset.tipAction);
 }
 
 // ---------------------------------------------------------------------------
@@ -143,6 +155,41 @@ export function runAction(id, e) {
   if (!fn) return false;
   fn(e);
   return true;
+}
+
+// ---------------------------------------------------------------------------
+// Действия плагинов
+// ---------------------------------------------------------------------------
+const ACTION_ID = /^[a-z0-9][a-z0-9-]{0,40}\.[A-Za-z0-9][A-Za-z0-9._-]{0,60}$/;
+const COMBO = /^(?:(?:Ctrl|Alt|Shift)\+){0,3}[A-Za-z][A-Za-z0-9]{0,24}$/;
+
+/**
+ * Добавить действие плагина: def = { id: '<pluginId>.<id>', title, plugin, cat?, keys? }, run(e) — выполнение.
+ * Категория — одна из CATEGORIES (по умолчанию «Плагины»). Сочетания по умолчанию — keys.
+ */
+export function registerAction(def, run) {
+  if (!def || typeof def.id !== 'string' || !ACTION_ID.test(def.id)) throw new Error(`bad action id: ${def && def.id}`);
+  if (!def.plugin || !def.id.startsWith(`${def.plugin}.`)) throw new Error(`action id must start with the plugin id: ${def.id}`);
+  if (typeof run !== 'function') throw new Error('action handler is required');
+  const old = actionById(def.id);
+  if (old && old.plugin !== def.plugin) throw new Error(`action id is taken: ${def.id}`);
+  if (old) ACTIONS.splice(ACTIONS.indexOf(old), 1);
+  const cat = CATEGORIES.some((c) => c.id === def.cat) && def.cat !== 'file' ? def.cat : 'plugins';
+  const keys = (Array.isArray(def.keys) ? def.keys : []).filter((k) => typeof k === 'string' && COMBO.test(k)).slice(0, 4);
+  ACTIONS.push(A(def.id, cat, String(def.title || def.id).slice(0, 120), keys, { plugin: def.plugin }));
+  handlers.set(def.id, run);
+  notify();
+  return def.id;
+}
+
+/** Убрать все действия плагина (его клавиши в настройках пользователя остаются — вернутся вместе с плагином) */
+export function unregisterActions(pluginId) {
+  let n = 0;
+  for (let i = ACTIONS.length - 1; i >= 0; i--) {
+    if (ACTIONS[i].plugin && ACTIONS[i].plugin === pluginId) { handlers.delete(ACTIONS[i].id); ACTIONS.splice(i, 1); n++; }
+  }
+  if (n) notify();
+  return n;
 }
 
 /** Нажатие → действие. typing — фокус в поле ввода (работают только global-действия). true — обработано. */

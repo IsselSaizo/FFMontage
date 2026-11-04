@@ -1,17 +1,29 @@
-// Правая колонка: вкладки «Свойства» (инспектор), «Переходы» и «Фильтры» (id вкладки — 'effects').
+// Правая колонка: вкладки «Свойства» (инспектор), «Переходы» и «Фильтры» (id вкладки — 'effects'),
+// за ними — вкладки панелей плагинов (addTab/removeTab из js/plugins/host.js, iframe-песочница внутри).
 // Наведение на переход/эффект показывает его в плеере (проект не меняется), щелчок — применяет.
+// Списки перерисовываются и при изменении реестра (плагин добавил/убрал эффект или переход).
 import { store } from './store.js';
 import { h, $, icon, toast, t } from './util.js';
+import { getLang } from './i18n.js';
 import { TRANSITIONS, applyTransition, DEFAULT_DURATION } from './transitions.js';
 import { maxTransition } from './store.js';
 import { EFFECTS, clipEffects } from './effects.js';
 import { keyHint } from './keymap.js';
+import * as registry from './registry.js';
 
 const TABS = [
   { id: 'props', name: t('Свойства'), el: '#inspector' },
   { id: 'transitions', name: t('Переходы'), el: '#browse-transitions' },
   { id: 'effects', name: t('Фильтры'), el: '#browse-effects' },
 ];
+
+// Название из реестра: строка или { ru, en } (у плагинов)
+const label = (v, fb = '') => {
+  if (typeof v === 'string') return v;
+  if (v && typeof v === 'object') return v[getLang()] || v.ru || v.en || fb;
+  return fb;
+};
+const cssOf = (e, w) => { try { return typeof e.css === 'function' ? e.css(w) || '' : ''; } catch { return ''; } };
 
 // Стык для перехода: выделенный переход → стык у выделенного видеоклипа → ближайший к курсору
 export function targetJunction() {
@@ -42,18 +54,46 @@ export function targetClip() {
 
 export function initBrowser() {
   const tabsEl = $('#rp-tabs');
-  let current = localStorage.getItem('ffm.rightTab') || 'props';
-  const show = (id) => {
+  const tabs = TABS.map((x) => ({ ...x }));
+  const elOf = (tab) => (typeof tab.el === 'string' ? $(tab.el) : tab.el);
+  // Сохранённая вкладка может быть вкладкой плагина, который загрузится позже — тогда откроем её при появлении
+  let wanted = localStorage.getItem('ffm.rightTab') || 'props';
+  let current = wanted;
+  const show = (id, remember = true) => {
+    if (!tabs.some((x) => x.id === id)) id = 'props';
     current = id;
-    localStorage.setItem('ffm.rightTab', id);
-    for (const tab of TABS) {
-      $(tab.el).hidden = tab.id !== id;
-      tabsEl.querySelector(`[data-tab="${tab.id}"]`).classList.toggle('on', tab.id === id);
+    if (remember) { wanted = id; localStorage.setItem('ffm.rightTab', id); }
+    for (const tab of tabs) {
+      const el = elOf(tab);
+      if (el) el.hidden = tab.id !== id;
+      tabsEl.querySelector(`[data-tab="${CSS.escape(tab.id)}"]`)?.classList.toggle('on', tab.id === id);
     }
     if (id === 'transitions') renderTransitions();
     if (id === 'effects') renderEffects();
   };
-  for (const tab of TABS) tabsEl.append(h('button', { class: 'rp-tab', dataset: { tab: tab.id }, onclick: () => show(tab.id) }, tab.name));
+  const tabButton = (tab) => h('button', {
+    class: `rp-tab${tab.plugin ? ' plugin' : ''}`, dataset: { tab: tab.id, ...(tab.plugin ? { plugin: tab.plugin } : {}) },
+    title: tab.title || null, onclick: () => show(tab.id),
+  }, tab.name);
+  for (const tab of TABS) tabsEl.append(tabButton(tab));
+
+  // Вкладки плагинов: { id, name, el (элемент панели в #right-side), title?, plugin? }
+  function addTab(tab) {
+    if (!tab || !tab.id || tabs.some((x) => x.id === tab.id)) return false;
+    tabs.push(tab);
+    tabsEl.append(tabButton(tab));
+    if (tab.el) tab.el.hidden = current !== tab.id;
+    if (wanted === tab.id && current !== tab.id) show(tab.id, false);
+    return true;
+  }
+  function removeTab(id) {
+    const i = tabs.findIndex((x) => x.id === id);
+    if (i < TABS.length) return false; // встроенные не убираются
+    tabs.splice(i, 1);
+    tabsEl.querySelector(`[data-tab="${CSS.escape(id)}"]`)?.remove();
+    if (current === id) show('props', false);
+    return true;
+  }
 
   // --- Переходы ---
   const trRoot = $('#browse-transitions');
@@ -70,8 +110,9 @@ export function initBrowser() {
     const grid = h('div', { class: 'tr-grid' });
     for (const tr of TRANSITIONS) {
       const a = h('div', { class: 'tp-a' }); const b = h('div', { class: 'tp-b' }); const ov = h('div', { class: 'tp-ov' });
+      const name = label(tr.name, tr.id);
       const tile = h('button', {
-        class: `tr-tile${cur && cur.type === tr.id ? ' on' : ''}`, dataset: { type: tr.id }, title: tr.name,
+        class: `tr-tile${cur && cur.type === tr.id ? ' on' : ''}`, dataset: { type: tr.id }, title: name,
         onclick: () => {
           const id = targetJunction();
           if (!id) { toast(t('Нет стыка: поставьте два видеоклипа впритык'), 'info', 2400); return; }
@@ -80,16 +121,18 @@ export function initBrowser() {
           store.setTransition(id, tr.id, d);
           store.select({ kind: 'transition', id });
         },
-      }, h('div', { class: 'tp-thumb' }, a, b, ov), h('span', {}, tr.name));
-      applyTransition(tr.id, 0.5, a, b, ov);
+      }, h('div', { class: 'tp-thumb' }, a, b, ov), h('span', {}, name));
+      // Ошибка в описании перехода плагина не должна ломать весь список
+      const apply = (p) => { try { applyTransition(tr.id, p, a, b, ov); } catch (e) { console.warn('transition preview', tr.id, e); } };
+      apply(0.5);
       let raf = null; let t0 = 0;
-      const anim = (now) => { const p = ((now - t0) / 1400) % 1; applyTransition(tr.id, Math.min(1, p * 1.25), a, b, ov); raf = requestAnimationFrame(anim); };
+      const anim = (now) => { const p = ((now - t0) / 1400) % 1; apply(Math.min(1, p * 1.25)); raf = requestAnimationFrame(anim); };
       tile.addEventListener('mouseenter', () => {
         t0 = performance.now(); raf = requestAnimationFrame(anim);
         const id = targetJunction();
         if (id) store.emit('preview-transition', { bId: id, type: tr.id, el: tile });
       });
-      tile.addEventListener('mouseleave', () => { cancelAnimationFrame(raf); applyTransition(tr.id, 0.5, a, b, ov); store.emit('preview-transition', null); });
+      tile.addEventListener('mouseleave', () => { cancelAnimationFrame(raf); apply(0.5); store.emit('preview-transition', null); });
       grid.append(tile);
     }
     trRoot.append(grid);
@@ -109,16 +152,17 @@ export function initBrowser() {
         : t('Выделите видеоклип (или поставьте курсор на него). Фильтр действует на весь клип — для фрагмента разрежьте клип ({split} или лезвие {blade}).', { split: keyHint('clip.split'), blade: keyHint('tool.blade') })));
     const grid = h('div', { class: 'fx-grid' });
     for (const e of EFFECTS) {
-      const sw = h('div', { class: 'fx-sample', style: { filter: e.css(120) } });
+      const name = label(e.name, e.id);
+      const sw = h('div', { class: 'fx-sample', style: { filter: cssOf(e, 120) } });
       const tile = h('button', {
-        class: `fx-tile${on.includes(e.id) ? ' on' : ''}`, dataset: { fx: e.id }, title: e.name, disabled: !c,
+        class: `fx-tile${on.includes(e.id) ? ' on' : ''}`, dataset: { fx: e.id }, title: name, disabled: !c,
         onclick: () => {
           const cid = targetClip();
           if (!cid) return;
           store.emit('preview-effect', null);
           store.toggleEffect(cid, e.id);
         },
-      }, sw, h('span', {}, e.name), on.includes(e.id) ? h('span', { class: 'fx-check', html: icon('check', 13) }) : null);
+      }, sw, h('span', {}, name), on.includes(e.id) ? h('span', { class: 'fx-check', html: icon('check', 13) }) : null);
       tile.addEventListener('mouseenter', () => {
         const cid = targetClip();
         if (!cid) return;
@@ -152,6 +196,15 @@ export function initBrowser() {
     show('props');
   });
   store.on('show-tab', (id) => show(id));
-  show(current);
-  return { show };
+  // Плагин добавил или убрал эффекты/переходы
+  if (typeof registry.onRegistryChange === 'function') {
+    let pending = false;
+    registry.onRegistryChange(() => {
+      if (pending) return;
+      pending = true;
+      queueMicrotask(() => { pending = false; refresh(); });
+    });
+  }
+  show(current, false);
+  return { show, addTab, removeTab, current: () => current };
 }

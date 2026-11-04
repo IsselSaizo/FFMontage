@@ -1,0 +1,57 @@
+{
+  "id": "selftest-plugin",
+  "name": { "ru": "Самопроверка плагинов", "en": "Plugin self-test" },
+  "version": "1.0.0",
+  "apiVersion": 1,
+  "description": {
+    "ru": "Фикстура tests/ui-selftest13.js: эффект, переход, аудиоэффект, действие, пресет клавиш, панель и логика.",
+    "en": "Fixture for tests/ui-selftest13.js: effect, transition, audio effect, action, keymap preset, panel and logic."
+  },
+  "author": "FF Montage tests",
+  "entry": "main.js",
+  "contributes": {
+    "effects": [
+      {
+        "id": "vig",
+        "name": { "ru": "Тест: виньетка", "en": "Test: vignette" },
+        "params": [
+          { "k": "strength", "name": { "ru": "Сила", "en": "Strength" }, "min": 0, "max": 1, "step": 0.05, "def": 0.5 }
+        ],
+        "ffmpeg": [
+          { "filter": "vignette", "args": { "angle": "{0.15 + strength * 0.75:4}" }, "when": "strength > 0" }
+        ],
+        "css": "brightness({1 - strength * 0.12:3})"
+      }
+    ],
+    "transitions": [
+      {
+        "id": "fadeblack",
+        "name": { "ru": "Тест: через чёрное", "en": "Test: through black" },
+        "xfade": "fadeblack",
+        "preview": { "a": { "opacity": "{1 - p}" }, "b": { "opacity": "{p}" }, "top": "b" }
+      }
+    ],
+    "audioEffects": [
+      {
+        "id": "quiet",
+        "name": { "ru": "Тест: тише", "en": "Test: quieter" },
+        "params": [
+          { "k": "gain", "name": { "ru": "Усиление", "en": "Gain" }, "min": -30, "max": 0, "step": 1, "def": -6, "unit": "dB" }
+        ],
+        "ffmpeg": [ { "filter": "volume", "args": { "volume": "{db(gain):4}" } } ],
+        "webaudio": [ { "node": "gain", "gain": "{db(gain):4}" } ]
+      }
+    ],
+    "actions": [
+      { "id": "ping", "title": { "ru": "Тест: пинг", "en": "Test: ping" }, "keys": ["Ctrl+Alt+KeyP"] }
+    ],
+    "keymaps": [
+      { "id": "test", "name": { "ru": "Тест: клавиши", "en": "Test: keys" }, "keys": { "ping": ["Ctrl+Alt+KeyO"], "clip.split": ["Ctrl+Alt+KeyK"] } }
+    ],
+    "panels": [
+      { "id": "sandbox", "title": { "ru": "Песочница", "en": "Sandbox" }, "entry": "panel.html" }
+    ]
+  },
+  "permissions": ["project:read", "storage", "notify", "ui:panel"],
+  "ffmpeg": { "filters": ["vignette", "volume", "xfade"] }
+}

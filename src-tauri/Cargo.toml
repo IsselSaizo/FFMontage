@@ -10,7 +10,7 @@ default-run = "ff-montage"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["devtools"] }
+tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
@@ -19,6 +19,8 @@ tokio = { version = "1", features = ["process", "io-util", "io-std", "net", "tim
 percent-encoding = "2"
 sha1 = "0.10"
 getrandom = "0.2"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+sha2 = "0.10"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 webkit2gtk = "2.0"
@@ -33,6 +35,9 @@ windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Security", 
 [features]
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]
+# Инструменты разработчика WebView в release-сборке (F12): cargo build --release --features devtools.
+# В debug-сборке Tauri включает их сам.
+devtools = ["tauri/devtools"]
 
 [profile.release]
 strip = true

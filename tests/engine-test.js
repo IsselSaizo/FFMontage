@@ -67,6 +67,38 @@ async function viewTest(enc, ib) {
 }
 const isBlue = ([r, g, b]) => b > 150 && r < 80 && g < 80;
 
+// Эффект плагина (декларативное описание с параметром) реально экспортируется FFmpeg'ом:
+// виньетка затемняет углы, середина кадра остаётся красной; неизвестный эффект пропускается с предупреждением
+async function pluginTest(enc) {
+  console.log('Эффект плагина:');
+  const { pathToFileURL } = require('url');
+  const js = (f) => import(pathToFileURL(path.join(__dirname, '..', 'src', 'renderer', 'js', f)).href);
+  const reg = await js('registry.js');
+  const plan = await js('exportPlan.js');
+  const id = reg.registerEffect({
+    id: 'soft', name: { ru: 'Виньетка', en: 'Vignette' },
+    params: [{ k: 'angle', name: 'Сила', min: 0.1, max: 1.5, step: 0.05, def: 0.6 }],
+    ffmpeg: [{ filter: 'vignette', args: { angle: '{angle:4}' } }],
+  }, { id: 'vignette', filters: new Set(['vignette']) });
+  const red = await make('e_red.mp4', ['-f', 'lavfi', '-i', 'color=c=red:s=640x360:r=30', '-f', 'lavfi',
+    '-i', 'sine=frequency=440:sample_rate=48000', '-t', '6', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac']);
+  const ir = await ff.probe(red);
+  const pr = {
+    media: { r: ir },
+    videoClips: [{ mediaId: 'r', in: 0, out: 2, start: 0, volume: 1, muted: false, effects: [id, 'gone.effect'], fxp: { [id]: { angle: 1.4 } } }],
+    audioTracks: [],
+  };
+  const b = plan.buildExport(pr, { width: 640, height: 360, fps: 30 });
+  assert(b.filter.includes('vignette=angle=1.4000,') && !b.filter.includes('gone'), 'в графе vignette=angle=1.4000, неизвестный эффект пропущен');
+  assert(b.warnings.length === 1 && b.warnings[0].includes('gone.effect'), `предупреждение: ${b.warnings[0]}`);
+  const out = path.join(DIR, 'out_plugin.mp4');
+  await startExport(pr, { width: 640, height: 360, fps: 30, codec: enc.h264_nvenc ? 'h264_nvenc' : 'libx264', quality: 'high', output: out });
+  const f = await rgb(out, 1);
+  const c = f.px(32, 18); const k = f.px(1, 1);
+  assert(isRed(c) && k[0] < c[0] * 0.6, `виньетка: в центре ${c}, в углу темнее ${k}`);
+  reg.unregisterPlugin('vignette');
+}
+
 // Скорость клипа: ×2 (видео + звук), ×0.5, звук ×0.25 (цепочка atempo), длина на таймлайне = (out − in) / speed
 async function speedTest(enc) {
   console.log('Скорость:');
@@ -367,5 +399,6 @@ async function effectsTest(enc) {
   await effectsTest(enc);
   await viewTest(enc, ib);
   await speedTest(enc);
+  await pluginTest(enc);
   console.log('\nВСЁ ОК');
 })().catch((e) => { console.error(e); process.exit(1); });

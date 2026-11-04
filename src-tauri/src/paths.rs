@@ -21,6 +21,8 @@ pub struct Paths {
     pub temp: PathBuf,
     pub media_cache: PathBuf,
     pub autosave: PathBuf,
+    /// Плагины: <app_dir>/plugins/<id>/plugin.json (переопределение — FFM_PLUGINS_DIR, для тестов)
+    pub plugins_dir: PathBuf,
     pub first_run: bool,
 }
 
@@ -125,7 +127,12 @@ fn init() -> Paths {
         None => (firstrun_dir.clone(), firstrun_dir.clone(), firstrun_dir.clone(), None, true),
     };
     let app_cache = cache_dir.join("app");
+    let plugins_dir = match std::env::var("FFM_PLUGINS_DIR") {
+        Ok(d) if !d.trim().is_empty() => absolute(Path::new(d.trim()), &std::env::current_dir().unwrap_or_default()),
+        _ => app_dir.join("plugins"),
+    };
     Paths {
+        plugins_dir,
         vendor_dir: app_dir.join("vendor"),
         webview: app_cache.join("webview"),
         logs: app_cache.join("logs"),

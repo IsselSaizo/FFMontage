@@ -1,0 +1,28 @@
+{
+  "id": "vignette",
+  "name": { "ru": "Виньетка", "en": "Vignette" },
+  "version": "1.0.0",
+  "apiVersion": 1,
+  "description": {
+    "ru": "Пример плагина без кода: эффект «Виньетка» (затемнение краёв кадра) через фильтр FFmpeg vignette.",
+    "en": "Code-free example plugin: a Vignette effect (darker frame edges) using the FFmpeg vignette filter."
+  },
+  "author": "FF Montage",
+  "contributes": {
+    "effects": [
+      {
+        "id": "vignette",
+        "name": { "ru": "Виньетка", "en": "Vignette" },
+        "params": [
+          { "k": "strength", "name": { "ru": "Сила", "en": "Strength" }, "min": 0, "max": 1, "step": 0.05, "def": 0.5 }
+        ],
+        "ffmpeg": [
+          { "filter": "vignette", "args": { "angle": "{0.15 + strength * 0.75:4}" }, "when": "strength > 0" }
+        ],
+        "css": "brightness({1 - strength * 0.12:3}) contrast({1 + strength * 0.08:3})"
+      }
+    ]
+  },
+  "permissions": [],
+  "ffmpeg": { "filters": ["vignette"] }
+}

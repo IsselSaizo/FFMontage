@@ -1,7 +1,7 @@
 // Движок без окна — для автотестов (tests/engine-test.js) и CI:
 //   ff-montage --engine <команда>   (параметры — JSON в stdin, ответ — JSON в stdout)
 // Команды: probe {file} | thumbs {info} | peaks {info} | proxy {info} | reverse {info,a,b} | freeze {info,at}
-//          silence {file,threshold,min} | frame {file,t,width} | encoders | version | export {plan} | paths
+//          silence {file,threshold,min} | frame {file,t,width} | encoders | version | export {plan} | checkplan {plan} | paths
 use crate::{commands, export, ff, paths, tr};
 use serde_json::{json, Value};
 use std::io::{Read, Write};
@@ -35,9 +35,15 @@ pub fn main(cmd: &str) {
             "export" => {
                 let plan: export::Plan = serde_json::from_value(args["plan"].clone()).map_err(|e| e.to_string())?;
                 let last = std::sync::Mutex::new(0.0f64);
-                let r = export::run(plan, |p| { *last.lock().unwrap() = p["fraction"].as_f64().unwrap_or(0.0); }).await;
+                // Без окна разрешённых файлов нет: входы — любые существующие файлы, граф и аргументы проверяются как в окне
+                let r = export::run(plan, crate::plancheck::Inputs::Engine, |p| { *last.lock().unwrap() = p["fraction"].as_f64().unwrap_or(0.0); }).await;
                 let fr = *last.lock().unwrap();
                 r.map(|mut v| { v["lastProgress"] = json!(fr); v }).map_err(|e| e["message"].as_str().unwrap_or("").to_string())
+            }
+            // Только проверка плана (как перед экспортом), без запуска FFmpeg: {plan} → true или ошибка
+            "checkplan" => {
+                let plan: export::Plan = serde_json::from_value(args["plan"].clone()).map_err(|e| e.to_string())?;
+                crate::plancheck::check(&plan.args, &plan.filter, plan.duration, &plan.output, crate::plancheck::Inputs::Engine).map(|_| json!(true))
             }
             other => Err(tr!("неизвестная команда: {}", "unknown command: {}", other)),
         }

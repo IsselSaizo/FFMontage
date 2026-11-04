@@ -1,12 +1,12 @@
 // Связь окна с программой (Tauri): window.api — все вызовы команд Rust и подписки на события.
 // Подключается первым модулем (index.html, setup.html), до остальных скриптов.
+// window.__TAURI__ в окне нет (withGlobalTauri: false) — вызовы идут через js/tauri.js.
 import { exportCommand } from './exportPlan.js';
+import { invoke, listen, appWindow, webview } from './tauri.js';
 
-const T = window.__TAURI__;
-const invoke = (cmd, args) => T.core.invoke(cmd, args);
 const on = (event, fn) => {
   let off = null; let dead = false;
-  T.event.listen(event, (e) => fn(e.payload)).then((u) => { if (dead) u(); else off = u; });
+  listen(event, (e) => fn(e.payload)).then((u) => { if (dead) u(); else off = u; }).catch((e) => console.warn('listen', event, e));
   return () => { dead = true; if (off) off(); };
 };
 
@@ -34,15 +34,14 @@ const info = async () => {
 // Перетаскивание файлов из Проводника: Tauri сообщает пути и позицию курсора
 const dropListeners = new Set();
 try {
-  T.webview.getCurrentWebview().onDragDropEvent((e) => {
-    const p = e.payload;
+  webview.onDragDropEvent((p) => {
     const dpr = window.devicePixelRatio || 1;
     const pos = p.position ? { x: p.position.x / dpr, y: p.position.y / dpr } : null;
     for (const fn of dropListeners) fn({ type: p.type, paths: p.paths || [], x: pos ? pos.x : 0, y: pos ? pos.y : 0 });
-  });
+  }).catch((e) => console.warn('drag-drop', e));
 } catch (e) { console.warn('drag-drop', e); }
 
-const win = T.window.getCurrentWindow();
+const win = appWindow;
 
 window.api = {
   info,
@@ -93,7 +92,7 @@ window.api = {
   winToggleMaximize: () => win.toggleMaximize(),
   winClose: () => win.close(),
   winIsMaximized: () => win.isMaximized(),
-  onWinResize: (fn) => win.onResized(() => fn()),
+  onWinResize: (fn) => win.onResized(() => fn()).catch((e) => console.warn('resize', e)),
   // Обновления
   updateCheck: () => invoke('update_check'),
   updateApply: () => invoke('update_apply'),
@@ -112,4 +111,14 @@ window.api = {
   settingsSet: (patch) => invoke('settings_set', { patch }),
   cacheStats: () => invoke('cache_stats'),
   cacheClear: (cats, keep) => invoke('cache_clear', { cats, keep }),
+  // Плагины (js/plugins/host.js, раздел настроек «Плагины»)
+  pluginsList: () => invoke('plugins_list'),
+  pluginsPick: (kind) => invoke('plugins_pick', { kind }),
+  pluginsInstall: (source) => invoke('plugins_install', { source }),
+  pluginsInstallGithub: (repo) => invoke('plugins_install_github', { repo }),
+  pluginsRemove: (id) => invoke('plugins_remove', { id }),
+  pluginsOpenDir: (id = null) => invoke('plugins_open_dir', { id }),
+  pluginStorageGet: (id) => invoke('plugin_storage_get', { id }),
+  pluginStorageSet: (id, data) => invoke('plugin_storage_set', { id, data }),
+  pluginNetFetch: (id, request) => invoke('plugin_net_fetch', { id, request }),
 };

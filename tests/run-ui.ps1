@@ -2,7 +2,10 @@
 #   powershell -ExecutionPolicy Bypass -File tests\run-ui.ps1 ui-selftest3
 # Нужны тестовые файлы: сначала node tests\engine-test.js
 #   -Lang en — интерфейс на английском (settings.lang в тестовом config.json)
-param([string]$Test = 'ui-selftest3', [int]$TimeoutSec = 240, [switch]$KeepAutosave, [string]$Lang = '')
+#   -Plugins — положить тестовый плагин (tests\fixtures\plugins) в папку плагинов; для ui-selftest13 включено всегда.
+#   Папка плагинов теста — <T>\plugins (FFM_PLUGINS_DIR), очищается при каждом запуске: без -Plugins она пустая,
+#   чтобы вкладки и клавиши плагина не мешали остальным тестам (ui-selftest5 считает вкладки справа).
+param([string]$Test = 'ui-selftest3', [int]$TimeoutSec = 240, [switch]$KeepAutosave, [string]$Lang = '', [switch]$Plugins)
 $ErrorActionPreference = 'Stop'
 $App = Split-Path -Parent $PSScriptRoot
 # Всё — в .test-cache проекта: кэш пользователя из config.json не трогаем
@@ -19,6 +22,14 @@ $json = $cfg | ConvertTo-Json
 [System.IO.File]::WriteAllText("$T\config.json", $json, (New-Object System.Text.UTF8Encoding $false))
 if (-not $KeepAutosave) { Remove-Item "$T\cache\app\autosave.ffproj" -ErrorAction SilentlyContinue }
 Remove-Item "$T\$Test.json" -ErrorAction SilentlyContinue
+# Плагины: <App>\.test-cache\tmp\uitest\plugins — заново при каждом запуске (вместе с .data — storage плагинов)
+$plg = Join-Path $T 'plugins'
+if ((Split-Path -Leaf $plg) -eq 'plugins' -and $plg.StartsWith((Join-Path $App '.test-cache')) -and (Test-Path $plg)) { Remove-Item $plg -Recurse -Force }
+New-Item -ItemType Directory -Force $plg | Out-Null
+if ($Plugins -or $Test -eq 'ui-selftest13') {
+  Copy-Item (Join-Path $App 'tests\fixtures\plugins\*') $plg -Recurse -Force
+}
+$env:FFM_PLUGINS_DIR = $plg
 $env:FFM_CONFIG = "$T\config.json"
 $env:FFM_SELFTEST = Join-Path $App "tests\$Test.js"
 $env:FFM_SHOT = "$T\$Test.png"

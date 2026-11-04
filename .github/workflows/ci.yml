@@ -34,6 +34,9 @@ jobs:
       - name: Сборка
         working-directory: src-tauri
         run: cargo build --release --locked
+      - name: Юнит-тесты Rust (план экспорта, плагины)
+        working-directory: src-tauri
+        run: cargo test --release --locked
       - name: Тест движка (процессор, без NVENC)
         run: node tests/engine-test.js
       - name: Автотест интерфейса
@@ -81,6 +84,9 @@ jobs:
       - name: Сборка
         working-directory: src-tauri
         run: cargo build --release --locked
+      - name: Юнит-тесты Rust (план экспорта, плагины)
+        working-directory: src-tauri
+        run: cargo test --release --locked
       - name: Тест движка (процессор)
         run: node tests/engine-test.js
       - name: Тест ИИ-ассистента (MCP)

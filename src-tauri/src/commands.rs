@@ -34,6 +34,7 @@ pub async fn app_info(app: AppHandle) -> Value {
         "logsDir": s(&p.logs),
         "configFile": s(&p.config_file),
         "appDir": s(&p.app_dir),
+        "pluginsDir": s(&p.plugins_dir),
         "sep": std::path::MAIN_SEPARATOR.to_string(),
         "videoExt": VIDEO_EXT, "audioExt": AUDIO_EXT, "imageExt": ff::IMAGE_EXT,
         "selftest": std::env::var("FFM_SELFTEST").map(|v| !v.is_empty()).unwrap_or(false),
@@ -309,7 +310,7 @@ pub async fn export_start(app: AppHandle, plan: export::Plan) -> Value {
     set_bar(Some(0.0));
     let a = app.clone();
     let w2 = win.clone();
-    let r = export::run(plan, move |p| {
+    let r = export::run(plan, crate::plancheck::Inputs::Window, move |p| {
         if let Some(w) = &w2 {
             use tauri::window::{ProgressBarState, ProgressBarStatus};
             let f = p["fraction"].as_f64().unwrap_or(0.0);
@@ -397,17 +398,41 @@ pub fn autosave_read() -> Option<String> { std::fs::read_to_string(&paths::get()
 #[tauri::command]
 pub fn shell_show(path: String) -> bool { tauri_plugin_opener::reveal_item_in_dir(&path).is_ok() }
 
-#[tauri::command]
-pub fn shell_open(path: String) -> String {
-    let p = PathBuf::from(&path);
-    if p.is_dir() || path.ends_with('\\') || path.ends_with('/') { let _ = std::fs::create_dir_all(&p); }
-    match tauri_plugin_opener::open_path(&path, None::<&str>) { Ok(_) => String::new(), Err(e) => e.to_string() }
+/// Что можно открыть системной программой: существующую папку или медиафайл / проект (.ffproj).
+/// Папки самой программы (экспорт, проекты, кэш, журналы, плагины) создаются, если их ещё нет.
+fn openable(path: &str) -> Result<PathBuf, String> {
+    let p = PathBuf::from(path);
+    if !p.is_absolute() { return Err(tr!("Можно открыть только папку или медиафайл: {}", "Only a folder or a media file can be opened: {}", path)); }
+    let p = paths::normalize(&p);
+    let ps = paths::get();
+    let own = [&ps.output_dir, &ps.projects_dir, &ps.cache_dir, &ps.logs, &ps.plugins_dir];
+    if !p.exists() && own.iter().any(|d| paths::normalize(d) == p) { let _ = std::fs::create_dir_all(&p); }
+    if p.is_dir() { return Ok(p); }
+    let ext = ff::ext_of(&p);
+    let known = VIDEO_EXT.contains(&ext.as_str()) || AUDIO_EXT.contains(&ext.as_str()) || ff::IMAGE_EXT.contains(&ext.as_str()) || ext == "ffproj";
+    if p.is_file() && known { return Ok(p); }
+    Err(tr!("Можно открыть только папку или медиафайл: {}", "Only a folder or a media file can be opened: {}", path))
 }
 
 #[tauri::command]
+pub fn shell_open(path: String) -> String {
+    let p = match openable(&path) { Ok(p) => p, Err(e) => return e };
+    match tauri_plugin_opener::open_path(s(&p), None::<&str>) { Ok(_) => String::new(), Err(e) => e.to_string() }
+}
+
+/// Инструменты разработчика (F12): в debug-сборке всегда, в release — только с cargo-feature `devtools`
+#[tauri::command]
 pub fn win_devtools(window: WebviewWindow) -> bool {
-    if window.is_devtools_open() { window.close_devtools(); } else { window.open_devtools(); }
-    true
+    #[cfg(any(debug_assertions, feature = "devtools"))]
+    {
+        if window.is_devtools_open() { window.close_devtools(); } else { window.open_devtools(); }
+        true
+    }
+    #[cfg(not(any(debug_assertions, feature = "devtools")))]
+    {
+        let _ = window;
+        false
+    }
 }
 
 #[tauri::command]

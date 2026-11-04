@@ -11,9 +11,10 @@
 // Настройки экспорта:
 //   { width, height, fps, codec, quality, output }
 
-import { ffEffects } from './effects.js';
+import { ffEffects, unknownEffects } from './effects.js';
 import { speedOf, atempoChain } from './clipTime.js';
-import { ffAudioFx } from './audioFx.js';
+import { ffAudioFx, unknownFx } from './audioFx.js';
+import { TRANSITIONS } from './transitions.js';
 import { t } from './i18n.js';
 
 export const QUALITY = {
@@ -66,18 +67,15 @@ export function encoderArgs(codec, quality, fps) {
   }
 }
 
-// Переходы: id в проекте -> параметры фильтра xfade
-const XFADE = new Set(['fade', 'fadeblack', 'fadewhite', 'wipeleft', 'wiperight', 'wipeup', 'wipedown',
-  'smoothleft', 'smoothright', 'smoothup', 'smoothdown', 'slideleft', 'slideright', 'slideup', 'slidedown',
-  'circleopen', 'circleclose', 'zoomin', 'hblur']);
-function xfadeTransition(type) {
-  // Жалюзи: 10 вертикальных полос, в каждой новый клип открывается слева направо (P идёт от 1 к 0)
-  if (type === 'blinds') return "transition=custom:expr='if(lt(mod(X,W/10),(1-P)*W/10),B,A)'";
-  return `transition=${XFADE.has(type) ? type : 'fade'}`;
+// Переходы: id в проекте -> параметры фильтра xfade (из реестра; неизвестный тип — растворение)
+export function xfadeTransition(type) {
+  const tr = TRANSITIONS.find((x) => x.id === type);
+  return tr ? tr.xfadeArg : 'transition=fade';
 }
 const ADJ = 0.002;
 
-// Возвращает { inputs, filter, duration, W, H, F }.
+// Возвращает { inputs, filter, duration, W, H, F, warnings }.
+// warnings — что пришлось пропустить: эффекты/аудиоэффекты пропавших плагинов, неизвестный переход (заменён растворением).
 // Видео: клипы по времени (между ними чёрное), клипы с переходом склеиваются фильтром xfade.
 //   Переход центрирован на стыке: уходящий клип продолжается на d/2 дальше своего конца,
 //   следующий начинается на d/2 раньше (если в файле не хватает кадров — повторяется крайний кадр).
@@ -92,6 +90,13 @@ export function buildExport(project, settings) {
   const inputs = [];
   const filters = [];
   const audio = [];
+  const warnings = new Set();
+  // (внутри цикла по клипам имя t занято — поэтому сообщения собираются здесь)
+  const warnAfx = (list) => { for (const id of unknownFx(list)) warnings.add(t('Аудиоэффект «{id}» не найден (нет плагина) — пропущен', { id })); };
+  const warnFx = (c) => { for (const id of unknownEffects(c)) warnings.add(t('Эффект «{id}» не найден (нет плагина) — пропущен', { id })); };
+  const warnTr = (type) => {
+    if (!TRANSITIONS.some((x) => x.id === type)) warnings.add(t('Переход «{id}» не найден (нет плагина) — заменён растворением', { id: String(type) }));
+  };
 
   const still = (m) => m.isImage && !m.isAnimation;
   const addInput = (m, ss, dur) => {
@@ -164,6 +169,7 @@ export function buildExport(project, settings) {
     const hasSound = m.hasAudio && !c.noAudio && !c.muted && c.volume > 0;
     const k = (m.hasVideo || hasSound) ? addInput(m, ss, (head + len + t) * sp) : -1;
     if (m.hasVideo) {
+      warnFx(c);
       filters.push(`[${k}:v]${vSpeed(sp)},${ffEffects(c, m.width)}${scaleChain(c)}` +
         (freezeHead > 0.0005 ? `,tpad=start_mode=clone:start_duration=${n6(freezeHead)}` : '') +
         `,tpad=stop_mode=clone:stop_duration=${n6(t + 2)},trim=duration=${n6(S)},setpts=PTS-STARTPTS` +
@@ -172,6 +178,7 @@ export function buildExport(project, settings) {
       filters.push(`${black(S)}[s${i}]`);
     }
     if (tin[i]) {
+      warnTr(c.transition.type);
       filters.push(`${chain}[s${i}]xfade=${xfadeTransition(c.transition.type)}:duration=${n6(tin[i])}:offset=${n6(chainLen - tin[i])}[x${i}]`);
       chain = `[x${i}]`;
       chainLen = chainLen + S - tin[i];
@@ -184,6 +191,7 @@ export function buildExport(project, settings) {
 
     // Звук клипа: со «ступеньками» для перехода, на своём месте
     if (hasSound) {
+      warnAfx(c.afx);
       const L = head + len + t;
       let af = `[${k}:a]${audioFmt}${aSpeed(sp)},volume=${n6(c.volume)}${ffAudioFx(c.afx)},asetpts=PTS-STARTPTS,apad,atrim=duration=${n6(L)}`;
       if (tin[i]) af += `,afade=t=in:st=0:d=${n6(head + h)}`;
@@ -205,6 +213,7 @@ export function buildExport(project, settings) {
     const tv = tr.volume === undefined ? 1 : Number(tr.volume);
     // Эффекты дорожки: её клипы сначала смешиваются между собой, потом — общая цепочка эффектов
     const trFx = tr.muted ? '' : ffAudioFx(tr.afx);
+    if (!tr.muted) warnAfx(tr.afx);
     const trLabels = [];
     (tr.clips || []).forEach((c) => {
       const m = media[c.mediaId];
@@ -214,6 +223,7 @@ export function buildExport(project, settings) {
       if (tr.muted || c.muted || !(c.volume > 0) || !(tv > 0)) return;
       const sp = speedOf(c);
       const k = addInput(m, c.in, dur * sp);
+      warnAfx(c.afx);
       const delayMs = Math.max(0, Math.round(c.start * 1000));
       const nStreams = (m.audioStreams && m.audioStreams.length) || 1;
       const st = Math.min(Math.max(0, c.stream | 0), nStreams - 1);
@@ -264,7 +274,7 @@ export function buildExport(project, settings) {
   else filters.push(`${audio.join('')}amix=inputs=${audio.length}:duration=longest:dropout_transition=0:normalize=0,${tail}`);
 
   const filter = filters.join(';\n');
-  return { inputs, filter, duration: total, W, H, F };
+  return { inputs, filter, duration: total, W, H, F, warnings: [...warnings] };
 }
 
 // Полная команда для программы: @@FILTER@@ и @@OUT@@ подставит export.rs

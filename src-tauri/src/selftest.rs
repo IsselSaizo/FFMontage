@@ -32,8 +32,8 @@ pub fn on_loaded(app: AppHandle, label: String) {
         let body = script.trim().trim_end_matches(';').trim().to_string();
         let wrapper = format!(
             "(async () => {{ let __r; try {{ __r = await ({body}\n); }} catch (e) {{ __r = {{ error: String(e && e.stack || e) }}; }} \
-             try {{ await window.__TAURI__.core.invoke('test_done', {{ result: __r === undefined ? null : __r }}); }} \
-             catch (e) {{ await window.__TAURI__.core.invoke('test_done', {{ result: {{ error: 'result: ' + String(e) }} }}); }} }})();"
+             try {{ await window.__TAURI_INTERNALS__.invoke('test_done', {{ result: __r === undefined ? null : __r }}); }} \
+             catch (e) {{ await window.__TAURI_INTERNALS__.invoke('test_done', {{ result: {{ error: 'result: ' + String(e) }} }}); }} }})();"
         );
         if let Some(w) = app.get_webview_window(&label) {
             if let Err(e) = w.eval(&wrapper) {

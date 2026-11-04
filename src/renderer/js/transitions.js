@@ -1,12 +1,16 @@
-// Переходы между клипами. Экспорт делает фильтр FFmpeg xfade (id перехода = имя в xfade,
-// кроме «жалюзи» — там своё выражение), а здесь — приближённая картинка для предпросмотра на CSS.
+// Переходы между клипами. Экспорт делает фильтр FFmpeg xfade (transition.xfadeArg — встроенный переход
+// или своё выражение, как у «жалюзи»), а здесь — приближённая картинка для предпросмотра на CSS.
+// Сами переходы — в реестре (registry.js): встроенные описаны в core/transitions.js, остальные приходят из плагинов.
 //
 // style(p) получает долю перехода p = 0…1 и возвращает стили для двух слоёв:
 //   a — уходящий клип, b — следующий клип, top — какой слой сверху,
 //   overlay — заливка поверх обоих (для «через белый»).
-import { t } from './i18n.js';
+// Неизвестный тип (плагин пропал) в проекте остаётся; показывается и экспортируется как растворение.
+import { TRANSITIONS } from './registry.js';
+import './core/transitions.js';
 
-const pct = (x) => `${(x * 100).toFixed(3)}%`;
+export { TRANSITIONS };
+
 const clamp01 = (x) => Math.max(0, Math.min(1, x));
 
 export const DEFAULT_TRANSITION = 'fade';
@@ -14,48 +18,9 @@ export const DEFAULT_DURATION = 0.5;
 export const MIN_DURATION = 0.1;
 export const MAX_DURATION = 3;
 
-export const TRANSITIONS = [
-  { id: 'fade', name: t('Растворение'), style: (p) => ({ b: { opacity: p } }) },
-  { id: 'fadeblack', name: t('Через чёрный'), style: (p) => ({ a: { opacity: clamp01(1 - 2 * p) }, b: { opacity: clamp01(2 * p - 1) } }) },
-  {
-    id: 'fadewhite', name: t('Через белый'),
-    style: (p) => ({ a: { opacity: p < 0.5 ? 1 : 0 }, b: { opacity: p < 0.5 ? 0 : 1 }, overlay: { color: '#fff', opacity: 1 - Math.abs(2 * p - 1) } }),
-  },
-  { id: 'wipeleft', name: t('Жёсткая шторка справа налево'), style: (p) => ({ b: { clipPath: `inset(0 0 0 ${pct(1 - p)})` } }) },
-  { id: 'wiperight', name: t('Жёсткая шторка слева направо'), style: (p) => ({ b: { clipPath: `inset(0 ${pct(1 - p)} 0 0)` } }) },
-  { id: 'wipeup', name: t('Жёсткая шторка снизу вверх'), style: (p) => ({ b: { clipPath: `inset(${pct(1 - p)} 0 0 0)` } }) },
-  { id: 'wipedown', name: t('Жёсткая шторка сверху вниз'), style: (p) => ({ b: { clipPath: `inset(0 0 ${pct(1 - p)} 0)` } }) },
-  { id: 'smoothleft', name: t('Мягкая шторка справа налево'), style: (p) => ({ b: { mask: `linear-gradient(to right, transparent ${pct(1 - 2 * p)}, black ${pct(2 - 2 * p)})` } }) },
-  { id: 'smoothright', name: t('Мягкая шторка слева направо'), style: (p) => ({ b: { mask: `linear-gradient(to left, transparent ${pct(1 - 2 * p)}, black ${pct(2 - 2 * p)})` } }) },
-  { id: 'smoothup', name: t('Мягкая шторка снизу вверх'), style: (p) => ({ b: { mask: `linear-gradient(to bottom, transparent ${pct(1 - 2 * p)}, black ${pct(2 - 2 * p)})` } }) },
-  { id: 'smoothdown', name: t('Мягкая шторка сверху вниз'), style: (p) => ({ b: { mask: `linear-gradient(to top, transparent ${pct(1 - 2 * p)}, black ${pct(2 - 2 * p)})` } }) },
-  { id: 'slideleft', name: t('Сдвиг влево'), style: (p) => ({ a: { transform: `translateX(${pct(-p)})` }, b: { transform: `translateX(${pct(1 - p)})` } }) },
-  { id: 'slideright', name: t('Сдвиг вправо'), style: (p) => ({ a: { transform: `translateX(${pct(p)})` }, b: { transform: `translateX(${pct(p - 1)})` } }) },
-  { id: 'slideup', name: t('Сдвиг вверх'), style: (p) => ({ a: { transform: `translateY(${pct(-p)})` }, b: { transform: `translateY(${pct(1 - p)})` } }) },
-  { id: 'slidedown', name: t('Сдвиг вниз'), style: (p) => ({ a: { transform: `translateY(${pct(p)})` }, b: { transform: `translateY(${pct(p - 1)})` } }) },
-  {
-    id: 'circleopen', name: t('Круг из центра'),
-    style: (p) => { const r = (p - 0.5) * 3; return { b: { mask: `radial-gradient(circle farthest-corner at 50% 50%, black ${pct(r)}, transparent ${pct(r + 1)})` } }; },
-  },
-  {
-    id: 'circleclose', name: t('Круг к центру'),
-    style: (p) => { const r = (0.5 - p) * 3; return { top: 'a', a: { mask: `radial-gradient(circle farthest-corner at 50% 50%, black ${pct(r)}, transparent ${pct(r + 1)})` } }; },
-  },
-  {
-    id: 'zoomin', name: t('Приближение'),
-    style: (p) => ({ a: { transform: `scale(${1 + 1.2 * clamp01(p * 2)})` }, b: { opacity: clamp01(2 * p - 1) } }),
-  },
-  {
-    id: 'hblur', name: t('Размытие'),
-    style: (p) => { const b = 14 * (1 - Math.abs(2 * p - 1)); return { a: { filter: `blur(${b.toFixed(1)}px)` }, b: { opacity: p, filter: `blur(${b.toFixed(1)}px)` } }; },
-  },
-  {
-    id: 'blinds', name: t('Жалюзи'),
-    style: (p) => ({ b: { mask: `repeating-linear-gradient(to right, black 0, black ${(p * 10).toFixed(3)}%, transparent ${(p * 10).toFixed(3)}%, transparent 10%)` } }),
-  },
-];
-
+// Неизвестный тип — первый (растворение), как и в экспорте
 export const transitionById = (id) => TRANSITIONS.find((t) => t.id === id) || TRANSITIONS[0];
+export const isKnownTransition = (id) => TRANSITIONS.some((x) => x.id === id);
 
 const RESET = { opacity: '', transform: '', clipPath: '', maskImage: '', filter: '', zIndex: '' };
 

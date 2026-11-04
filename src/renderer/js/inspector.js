@@ -3,11 +3,12 @@ import { store, MAX_FADE } from './store.js';
 import { h, $, fmtTime, fmtDur, fmtBytes, icon, iconEl, t } from './util.js';
 import { getLang, num as numFixed } from './i18n.js';
 import { keyHint } from './keymap.js';
-import { transitionById, MIN_DURATION } from './transitions.js';
+import { transitionById, isKnownTransition, MIN_DURATION } from './transitions.js';
 import { maxTransition } from './store.js';
 import { changeDuration } from './actions.js';
 import { isReversed, isFreeze } from './fx.js';
-import { EFFECTS, clipEffects } from './effects.js';
+import { clipEffects, unknownEffects, effectById, effectValues } from './effects.js';
+import { onRegistryChange } from './registry.js';
 import { speedOf, tlLen, fmtSpeed, SPEED_PRESETS, MIN_SPEED, MAX_SPEED } from './clipTime.js';
 
 // Число как есть, но с десятичным разделителем языка: 0,8 / 0.8 (без лишних нулей, в отличие от i18n num)
@@ -87,6 +88,22 @@ export function initInspector() {
         chk, h('span', {}, t('Сдвигать следующие клипы'))),
       h('p', { class: 'muted small' }, (cur !== 1 ? `${t('Длина на таймлайне {len} (из файла {src}).', { len: fmtTime(tlLen(clip)), src: fmtTime(clip.out - clip.in) })} ` : '') + t('Тон звука сохраняется.')
         + (linked ? ` ${t('Звук этого видео меняет скорость вместе с ним.')}` : '')));
+  }
+
+  // Ползунок параметра видеоэффекта: значение хранится в clip.fxp[effectId][k]
+  function effectParamRow(clipId, effectId, pd, value) {
+    const digits = (String(pd.step).split('.')[1] || '').length;
+    const format = (v) => `${num(v, digits)}${pd.unit ? ` ${pd.unit}` : ''}`;
+    const put = (c, v) => { c.fxp = { ...(c.fxp || {}), [effectId]: { ...((c.fxp && c.fxp[effectId]) || {}), [pd.k]: v } }; };
+    const { slider, val } = liveSlider({
+      min: pd.min, max: pd.max, step: pd.step, value, format,
+      onLive: (v) => { const f = store.findClip(clipId); if (f) put(f.clip, v); },
+      onCommit: (v) => store.mutate(() => { const f = store.findClip(clipId); if (f) put(f.clip, v); }),
+    });
+    slider.dataset.param = pd.k;
+    // Двойной щелчок — значение по умолчанию
+    slider.addEventListener('dblclick', () => store.mutate(() => { const f = store.findClip(clipId); if (f) put(f.clip, pd.def); }));
+    return [h('div', { class: 'row between' }, h('label', {}, pd.name), val), slider];
   }
 
   const render = () => {
@@ -187,10 +204,22 @@ export function initInspector() {
     // --- Фильтры (видео): список — во вкладке «Фильтры», подгонка и кадрирование — над плеером ---
     if (kind === 'video') {
       const fxOn = clipEffects(clip);
-      root.append(h('div', { class: 'insp-section', dataset: { section: 'effects' } }, h('h3', {}, t('Фильтры')),
+      // Эффекты пропавших плагинов остаются в проекте — показываем их id, в экспорт они не попадают
+      const missing = unknownEffects(clip);
+      const names = [...fxOn.map((id) => effectById(id).name), ...missing.map((id) => t('{id} (нет плагина)', { id }))];
+      const fxSec = h('div', { class: 'insp-section', dataset: { section: 'effects' } }, h('h3', {}, t('Фильтры')),
         h('div', { class: 'row between' },
-          h('span', { class: 'muted small' }, fxOn.length ? fxOn.map((id) => (EFFECTS.find((e) => e.id === id) || { name: id }).name).join(', ') : t('Нет')),
-          h('button', { class: 'btn ghost small', onclick: () => store.emit('show-tab', 'effects') }, fxOn.length ? t('Изменить') : t('Добавить')))));
+          h('span', { class: 'muted small' }, names.length ? names.join(', ') : t('Нет')),
+          h('button', { class: 'btn ghost small', onclick: () => store.emit('show-tab', 'effects') }, names.length ? t('Изменить') : t('Добавить'))));
+      // Параметры эффектов (clip.fxp[effectId][k]; нет значения — по умолчанию)
+      for (const id of fxOn) {
+        const e = effectById(id);
+        if (!e.params || !e.params.length) continue;
+        const vals = effectValues(clip, id);
+        fxSec.append(h('div', { class: 'fx-params', dataset: { effect: id } }, h('div', { class: 'small' }, h('b', {}, e.name)),
+          ...e.params.flatMap((pd) => effectParamRow(clip.id, id, pd, vals[pd.k]))));
+      }
+      root.append(fxSec);
     }
     // --- Исходный файл ---
     root.append(fileInfo(srcMedia));
@@ -214,7 +243,7 @@ export function initInspector() {
         onLive: (v) => { const b = store.findClip(clipId).clip; if (b.transition) b.transition.duration = v; },
         onCommit: (v) => store.setTransition(clipId, tr.type, v),
       });
-      d.append(h('div', { class: 'row between' }, h('label', {}, transitionById(tr.type).name),
+      d.append(h('div', { class: 'row between' }, h('label', {}, isKnownTransition(tr.type) ? transitionById(tr.type).name : t('{id} (нет плагина)', { id: tr.type })),
         secInput(tr.duration, mx, (v) => store.setTransition(clipId, tr.type, Math.max(MIN_DURATION, v)))), slider,
       h('button', { class: 'btn danger-ghost small', onclick: () => store.setTransition(clipId, null) }, h('span', { html: icon('trash', 15) }), t('Убрать переход')));
       root.append(d);
@@ -272,6 +301,8 @@ export function initInspector() {
   store.on('selection', render);
   store.on('project', render);
   store.on('busy', render);
+  // Плагин включили/выключили — названия и параметры эффектов могли измениться
+  onRegistryChange(() => render());
   store.on('media', () => { if (!store.selection) render(); });
   store.on('focus-inspector', (section) => { focusSection = section || 'actions'; render(); });
   render();

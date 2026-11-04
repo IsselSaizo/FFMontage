@@ -1,0 +1,12 @@
+{
+  "id": "core",
+  "name": { "ru": "Встроенные эффекты и переходы", "en": "Built-in effects and transitions" },
+  "version": "1.0.0",
+  "apiVersion": 1,
+  "description": {
+    "ru": "Фильтры видео, переходы, звуковые эффекты и пресеты экспорта, которые входят в программу. Описаны в том же формате, что и плагины (src/renderer/js/core).",
+    "en": "Video filters, transitions, audio effects and export presets that ship with the app. Described in the same format as plugins (src/renderer/js/core)."
+  },
+  "author": "FF Montage",
+  "builtin": true
+}

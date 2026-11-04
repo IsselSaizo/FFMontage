@@ -296,6 +296,13 @@ async fn serve(pipe: &str, token: &str) -> std::io::Result<()> {
 /// Уже запущена копия программы с этим же кэшем? Тогда просим её показать окно (true — надо выйти).
 /// Копии с разными кэшами (автотесты) друг другу не мешают.
 pub fn focus_existing() -> bool {
+    // Зависшая прошлая копия (канал открыт, но не отвечает) не должна вешать и новую — ждём не дольше 3 с
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || { let _ = tx.send(focus_existing_blocking()); });
+    rx.recv_timeout(Duration::from_secs(3)).unwrap_or(false)
+}
+
+fn focus_existing_blocking() -> bool {
     let Ok(text) = std::fs::read_to_string(endpoint_file()) else { return false };
     let Ok(ep) = serde_json::from_str::<Value>(&text) else { return false };
     let (Some(pipe), Some(token)) = (ep["pipe"].as_str(), ep["token"].as_str()) else { return false };
