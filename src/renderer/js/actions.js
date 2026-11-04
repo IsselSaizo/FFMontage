@@ -6,6 +6,7 @@ import { keyHint } from './keymap.js';
 import { openMenu } from './contextMenu.js';
 import { toggleReverse, freezeFrameAt, isReversed, isFreeze } from './fx.js';
 import { speedOf, tlLen, clipEnd } from './clipTime.js';
+import { isText, TEXT_MAX } from './textModel.js';
 const inside = (c, time) => time > c.start + MIN_CLIP && time < clipEnd(c) - MIN_CLIP;
 // Число как есть, но с десятичным разделителем языка (0.1 → «0,1» / «0.1»)
 const dec = (x) => (getLang() === 'ru' ? String(x).replace('.', ',') : String(x));
@@ -56,7 +57,7 @@ export async function changeDuration(id) {
   const f = store.findClip(id);
   if (!f) return;
   const m = store.media(f.clip.mediaId);
-  const max = (m ? m.duration - f.clip.in : f.clip.out - f.clip.in) / speedOf(f.clip);
+  const max = isText(f.clip) ? TEXT_MAX : (m ? m.duration - f.clip.in : f.clip.out - f.clip.in) / speedOf(f.clip);
   const cur = tlLen(f.clip);
   const v = await promptDialog(t('Изменить длительность'), t('Длительность в секундах (или мин:сек)'), dec(Math.round(cur * 100) / 100), {
     okText: t('Применить'),
@@ -95,6 +96,20 @@ export function openClipMenu(id, x, y, clickTime = null) {
   const rev = isReversed(c);
   const busy = !!store.busy[id];
   const hasSound = video ? m.hasAudio : true;
+  if (isText(c)) {
+    openMenu(x, y, [
+      { id: 'edit-text', label: t('Изменить текст'), icon: 'rename', onClick: () => { store.select({ kind: 'video', id }); focusInspector('text'); } },
+      { id: 'duplicate', label: t('Дублировать'), icon: 'duplicate', key: keyHint('clip.duplicate'), onClick: () => store.duplicateClip(id) },
+      { id: 'copy', label: t('Копировать'), icon: 'copy', key: keyHint('clip.copy'), onClick: () => copyClip(id) },
+      { id: 'delete', label: t('Удалить'), icon: 'trash', key: keyHint('clip.delete'), onClick: () => deleteClip(id) },
+      { id: 'ripple-delete', label: t('Удалить и сдвинуть'), icon: 'gapclose', key: keyHint('clip.rippleDelete'), onClick: () => deleteClip(id, true) },
+      'sep',
+      { id: 'split', label: t('Разделить'), icon: 'split', key: keyHint('clip.split'), disabled: at === null, onClick: () => splitClip(id, at) },
+      { id: 'duration', label: t('Изменить длительность'), icon: 'clock', onClick: () => changeDuration(id) },
+      { id: 'fade', label: t('Затухание и появление…'), icon: 'fade', onClick: () => { store.select({ kind: f.kind, id }); focusInspector('fade'); } },
+    ]);
+    return;
+  }
   openMenu(x, y, [
     { id: 'duplicate', label: t('Дублировать'), icon: 'duplicate', key: keyHint('clip.duplicate'), onClick: () => store.duplicateClip(id) },
     { id: 'copy', label: t('Копировать'), icon: 'copy', key: keyHint('clip.copy'), onClick: () => copyClip(id) },

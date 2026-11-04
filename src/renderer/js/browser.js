@@ -10,11 +10,14 @@ import { maxTransition } from './store.js';
 import { EFFECTS, clipEffects } from './effects.js';
 import { keyHint } from './keymap.js';
 import * as registry from './registry.js';
+import { renderTextPanel } from './textPanel.js';
+import { onFontsChange } from './fonts.js';
 
 const TABS = [
   { id: 'props', name: t('Свойства'), el: '#inspector' },
   { id: 'transitions', name: t('Переходы'), el: '#browse-transitions' },
   { id: 'effects', name: t('Фильтры'), el: '#browse-effects' },
+  { id: 'text', name: t('Текст'), el: '#browse-text' },
 ];
 
 // Название из реестра: строка или { ru, en } (у плагинов)
@@ -70,6 +73,7 @@ export function initBrowser() {
     }
     if (id === 'transitions') renderTransitions();
     if (id === 'effects') renderEffects();
+    if (id === 'text') renderTextPanel($('#browse-text'));
   };
   const tabButton = (tab) => h('button', {
     class: `rp-tab${tab.plugin ? ' plugin' : ''}`, dataset: { tab: tab.id, ...(tab.plugin ? { plugin: tab.plugin } : {}) },
@@ -177,6 +181,12 @@ export function initBrowser() {
   }
 
   const refresh = () => { if (current === 'transitions') renderTransitions(); if (current === 'effects') renderEffects(); };
+  // Панель «Текст» не зависит от курсора — только от реестра стилей, шрифтов и дорожек субтитров
+  const refreshText = () => { if (current === 'text') renderTextPanel($('#browse-text')); };
+  onFontsChange(refreshText);
+  let subSig = '';
+  store.on('project', () => { const s = store.subtitleTracks().map((x) => `${x.id}:${x.cues.length}`).join(); if (s !== subSig) { subSig = s; refreshText(); } });
+  if (typeof registry.onRegistryChange === 'function') registry.onRegistryChange((ev) => { if (!ev || ev.kind === 'textStyle') refreshText(); });
   store.on('project', refresh);
   store.on('selection', refresh);
   // Курсор двигается (в т. ч. при воспроизведении) — перерисовываем, только если сменился клип/стык под ним

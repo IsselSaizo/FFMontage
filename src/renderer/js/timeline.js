@@ -1,7 +1,7 @@
 // Таймлайн: основная видеодорожка (клипы по времени, с пустотами и переходами) + аудиодорожки.
 // Клипы «магнитятся» к краям соседей, курсору и началу; пустоты убираются кнопкой-корзиной,
 // на стыке клипов, стоящих впритык, — кнопка «+» для перехода.
-import { store, MIN_CLIP, ADJ, placeVideo, overwriteVideo, overwriteAudio, newTrack, moveToLane, MAIN_LANE } from './store.js';
+import { store, MIN_CUE, MIN_CLIP, ADJ, placeVideo, overwriteVideo, overwriteAudio, newTrack, moveToLane, MAIN_LANE } from './store.js';
 import { isIdentity, tfOf } from './transform.js';
 import { h, $, clamp, icon, fmtTime, rafThrottle, toast } from './util.js';
 import { importPaths, peaksOf, streamCount } from './media.js';
@@ -13,6 +13,9 @@ import { speedOf, tlLen, clipEnd, fmtSpeed } from './clipTime.js';
 import { activeFx, fxSummary } from './audioFx.js';
 import { t, getLang } from './i18n.js';
 import { withKey } from './keymap.js';
+import { isText, TEXT_MAX } from './textModel.js';
+import { fontFamilies } from './textRender.js';
+import { subtitleRows, importSubtitles } from './subtitlesUi.js';
 
 const HEAD_W = 168;
 const VIDEO_H = 76;
@@ -167,7 +170,7 @@ export class Timeline {
   updateToolbar() {
     $('#tb-undo').disabled = !store.undoStack.length;
     $('#tb-redo').disabled = !store.redoStack.length;
-    $('#tb-delete').disabled = !store.selection || store.selection.kind === 'transition' || store.selection.kind === 'track';
+    $('#tb-delete').disabled = !store.selection || store.selection.kind === 'transition' || store.selection.kind === 'track' || store.selection.kind === 'strack';
     $('#tb-split').disabled = !this.canSplit();
     this.updateKeyTips();
     this.zoomSlider.value = String(Math.round(1000 * Math.log(this.pps / MIN_PPS) / Math.log(MAX_PPS / MIN_PPS)));
@@ -175,6 +178,10 @@ export class Timeline {
 
   canSplit() {
     const t = store.time;
+    if (store.selection && store.selection.kind === 'cue') {
+      const q = store.findCue(store.selection.id);
+      if (q) return t > q.cue.start + MIN_CUE && t < q.cue.end - MIN_CUE;
+    }
     if (store.selection && store.selection.kind !== 'transition') {
       const f = store.findClip(store.selection.id);
       if (f) return t > f.clip.start + MIN_CLIP && t < clipEnd(f.clip) - MIN_CLIP;
@@ -184,6 +191,10 @@ export class Timeline {
 
   splitAction() {
     const at = store.time;
+    if (store.selection && store.selection.kind === 'cue') {
+      if (!store.splitCue(store.selection.id, at)) toast(t('Поставьте курсор внутрь реплики, чтобы разрезать'), 'info', 2200);
+      return;
+    }
     const sel = store.selection && store.selection.kind !== 'transition' ? store.findClip(store.selection.id) : null;
     if (sel && at > sel.clip.start && at < clipEnd(sel.clip)) { splitClip(sel.clip.id, at); return; }
     if (!store.splitAt(at)) toast(t('Поставьте курсор внутрь клипа, чтобы разрезать'), 'info', 2200);
@@ -191,8 +202,9 @@ export class Timeline {
 
   deleteAction(ripple = false) {
     const s = store.selection;
-    if (!s || s.kind === 'track') return;
+    if (!s || s.kind === 'track' || s.kind === 'strack') return;
     if (s.kind === 'transition') { store.setTransition(s.id, null); return; }
+    if (s.kind === 'cue') { const f = store.findCue(s.id); if (f && !f.track.locked) store.deleteCue(s.id); return; }
     store.deleteClip(s.id, { ripple });
   }
 
@@ -263,6 +275,8 @@ export class Timeline {
     // Видеодорожки: сверху вниз (верхняя дорожка перекрывает нижние), основная — последней
     const lanes = store.vlanes();
     for (let i = lanes.length - 1; i >= 0; i--) this.content.append(this.videoRow(lanes[i], i, laneW));
+    // Субтитры (M5.5) — между видео и звуком
+    for (const row of subtitleRows(this, laneW)) this.content.append(row);
 
     // Аудио
     const solo = store.anySolo();
@@ -297,8 +311,12 @@ export class Timeline {
 
     // Строка для новой дорожки
     const addBtn = h('button', { class: 'btn ghost tiny', onclick: () => store.addAudioTrack() }, t('+ Дорожка'));
+    const addSub = h('button', {
+      class: 'btn ghost tiny', id: 'tl-add-subs', title: t('Новая дорожка субтитров (щелчок с Alt — открыть файл SRT / VTT / ASS)'),
+      onclick: (e) => { if (e.altKey) importSubtitles(); else store.select({ kind: 'strack', id: store.addSubtitleTrack() }); },
+    }, t('+ Субтитры'));
     this.content.append(h('div', { class: 'tl-row newtrack', dataset: { lane: 'newtrack' } },
-      h('div', { class: 'tl-head' }, addBtn),
+      h('div', { class: 'tl-head' }, addBtn, addSub),
       h('div', { class: 'tl-lane newtrack-lane', dataset: { lane: 'newtrack' }, style: { width: `${laneW}px` } },
         h('span', { class: 'lane-hint left' }, t('Перетащите аудио сюда, чтобы создать новую дорожку')))));
 
@@ -485,6 +503,7 @@ export class Timeline {
 
   clipLabel(c, m, extra = null) {
     const label = h('div', { class: 'clip-label' });
+    if (isText(c)) label.append(h('span', { class: 'ci fxb', title: t('Текст — двойной щелчок, чтобы изменить') }, 'T'));
     if (isReversed(c)) label.append(h('span', { class: 'ci fx', title: t('Задом наперёд'), html: icon('reverse', 13) }));
     if (isFreeze(c)) label.append(h('span', { class: 'ci fx', title: t('Стоп-кадр'), html: icon('freeze', 13) }));
     const fxl = clipEffects(c);
@@ -509,8 +528,17 @@ export class Timeline {
     const rt = store.runtime[c.mediaId] || {};
     const left = seg.start * this.pps;
     const width = (seg.end - seg.start) * this.pps;
-    const el = this.clipBase('video', c, left, width);
+    const el = this.clipBase('video', c, left, width, isText(c) ? 'text' : '');
     const sel = el.classList.contains('selected');
+    if (isText(c)) {
+      // Текст: образец оформления (цвет, жирность, курсив) вместо плёнки
+      const tx = c.text || {};
+      el.append(h('div', { class: 'text-strip', style: { color: tx.color || '#fff', fontWeight: String(tx.weight || 700), fontStyle: tx.italic ? 'italic' : '', fontFamily: fontFamilies(tx.font || 'Inter') } },
+        (tx.content || '').replace(/\s*\n\s*/g, ' · ')));
+      el.append(this.clipLabel(c, m, h('span', { class: 'cd' }, fmtTime(tlLen(c), { ms: false }))));
+      this.decorate(el, c, width, sel);
+      return el;
+    }
     const [vx0, vx1] = this.visibleRange();
 
     // Плёнка из миниатюр (только видимая часть)
@@ -654,10 +682,19 @@ export class Timeline {
   // Мышь
   // ------------------------------------------------------------------------
   onDblClick(e) {
+    const cueEl = e.target.closest('.cue');
+    if (cueEl) { store.select({ kind: 'cue', id: cueEl.dataset.id }); store.emit('focus-inspector', 'cue'); return; }
+    const subLane = e.target.closest('.sub-lane');
+    if (subLane) {
+      const tr = store.subtitleTrack(subLane.dataset.strack);
+      if (tr && !tr.locked) { const id = store.addCue(tr.id, { start: this.xToTime(e.clientX), text: t('Новая реплика') }); store.select({ kind: 'cue', id }); store.emit('focus-inspector', 'cue'); }
+      return;
+    }
     const clipEl = e.target.closest('.clip');
     if (!clipEl) return;
     // Анимация из пресета — открыть её в редакторе «Анимации»
     const f = store.findClip(clipEl.dataset.id);
+    if (f && isText(f.clip)) { store.emit('focus-inspector', 'text'); return; }
     const m = f && store.media(f.clip.mediaId);
     if (m && m.anim) { store.emit('anim-edit', f.clip.id); return; }
     store.setTime(this.xToTime(e.clientX));
@@ -718,7 +755,9 @@ export class Timeline {
     const origVT = store.project.videoTracks ? clone(store.project.videoTracks) : null;
     const origTracks = clone(store.project.audioTracks);
     const x0 = e.clientX; const y0 = e.clientY;
-    const media = store.media(f.clip.mediaId) || { duration: orig.out };
+    const txt = isText(orig);
+    // У текста нет файла: длина — любая (обрезка слева двигает начало, fixup держит in = 0)
+    const media = txt ? { duration: TEXT_MAX } : store.media(f.clip.mediaId) || { duration: orig.out };
     // Связанные клипы (видео и его звук) двигаются и обрезаются вместе
     const partners = store.linkedOf(id).map((x) => ({ id: x.clip.id, kind: x.kind, o: clone(x.clip) }));
     const groupIds = new Set([id, ...partners.map((x) => x.id)]);
@@ -743,7 +782,7 @@ export class Timeline {
     const vi = vOrig ? sorted.findIndex((c) => c.id === vOrig.id) : -1;
     const prevEnd = vi > 0 ? clipEnd(sorted[vi - 1]) : 0;
     const nextStart = vi >= 0 && vi < sorted.length - 1 ? sorted[vi + 1].start : Infinity;
-    const mediaDur = (c) => { const m = store.media(c.mediaId); return m ? m.duration : c.out; };
+    const mediaDur = (c) => { if (isText(c)) return TEXT_MAX; const m = store.media(c.mediaId); return m ? m.duration : c.out; };
     // Обрезка партнёров на тот же сдвиг (Alt — только этот клип)
     const trimPartners = (ev, side, d) => {
       if (ev.altKey) return;
@@ -773,15 +812,16 @@ export class Timeline {
         const v = clamp((mode === 'fade-in' ? orig.fadeIn : orig.fadeOut) + (mode === 'fade-in' ? dt : -dt), 0, len);
         store.live(() => { const c = store.findClip(id).clip; if (mode === 'fade-in') c.fadeIn = v; else c.fadeOut = v; });
       } else if (mode === 'trim-l') {
-        let nin = clamp(orig.in + dt * sp, 0, orig.out - MIN_CLIP * sp);
+        const inLo = txt ? orig.in - orig.start : 0;
+        let nin = clamp(orig.in + dt * sp, inLo, orig.out - MIN_CLIP * sp);
         let nstart = orig.start + (nin - orig.in) / sp;
         const sn = this.snap(nstart, pts, ev);
         if (sn.snapped) { nin += (sn.t - nstart) * sp; nstart = sn.t; snapAt = sn.t; }
         // Не залезаем на предыдущий клип / за ноль / за начало файла (и то же для связанного видео)
         const useV = vOrig && (kind === 'video' || !ev.altKey);
-        const lo = Math.max(0, orig.start - orig.in / sp, useV ? orig.start + (prevEnd - vOrig.start) : 0, useV ? orig.start - vOrig.in / sp : 0);
+        const lo = Math.max(0, txt ? 0 : orig.start - orig.in / sp, useV ? orig.start + (prevEnd - vOrig.start) : 0, useV && !txt ? orig.start - vOrig.in / sp : 0);
         if (nstart < lo) { nin += (lo - nstart) * sp; nstart = lo; }
-        nin = clamp(nin, 0, orig.out - MIN_CLIP * sp); nstart = orig.start + (nin - orig.in) / sp;
+        nin = clamp(nin, inLo, orig.out - MIN_CLIP * sp); nstart = orig.start + (nin - orig.in) / sp;
         store.live(() => { const c = store.findClip(id).clip; c.in = nin; c.start = nstart; trimPartners(ev, 'l', nin - orig.in); });
         if (kind === 'video') store.setTime(nstart);
       } else if (mode === 'trim-r') {

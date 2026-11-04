@@ -279,6 +279,41 @@ async function main() {
     pj = await cl.ok('get_project');
     ok(pj.upper_video_tracks.length === 0 && pj.video_track.clips.length === 3, 'после удаления — как было');
 
+    console.log('Текст и субтитры (M5):');
+    ok(['add_text', 'update_text', 'set_subtitles', 'update_subtitles'].every((n) => names.includes(n)), 'инструменты текста и субтитров в tools/list');
+    ok(pj.text_styles.includes('title') && pj.text_styles.includes('credits') && pj.fonts.includes('Inter'), `get_project: стили ${pj.text_styles.join(',')}, шрифты ${pj.fonts.join(',')}`);
+    const txt = (await cl.ok('add_text', { text: 'Глава 1', style: 'lower-third', start: 1, duration: 3, styling: { color: '#ffcc00' } })).clip;
+    ok(txt.kind === 'text' && txt.start === 1 && txt.end === 4 && txt.text.content === 'Глава 1' && txt.text.color === '#ffcc00' && /^vtk_/.test(txt.video_track_id), `add_text: ${JSON.stringify(txt.text)}`);
+    const txBad = await cl.tool('add_text', { text: 'x', style: 'nope' });
+    ok(txBad.isError && /lower-third/.test(txBad.text), 'add_text: неизвестный стиль → ошибка со списком');
+    const txBad2 = await cl.tool('add_text', { text: 'x', styling: { blink: 1 } });
+    ok(txBad2.isError && /blink/.test(txBad2.text), 'add_text: неизвестное поле оформления → ошибка');
+    const ut = (await cl.ok('update_text', { clip_id: txt.id, text: 'Глава 2', duration: 2, fade_in: 0.5, styling: { size: 0.1 } })).clip;
+    ok(ut.text.content === 'Глава 2' && ut.duration === 2 && ut.fade_in === 0.5 && ut.text.size === 0.1, 'update_text');
+    const uc = await cl.tool('update_clip', { clip_id: txt.id, volume: 1 });
+    ok(uc.isError && /update_text/.test(uc.text), 'update_clip для текста → подсказка про update_text');
+    await cl.ok('set_transform', { clip_id: txt.id, y: 0.3 });
+    const subs = (await cl.ok('set_subtitles', { content: '1\n00:00:00,500 --> 00:00:01,500\nПривет\n\n2\n00:00:02,000 --> 00:00:03,000\nМир\n', name: 'RU' })).subtitle_track;
+    ok(/^stk_/.test(subs.id) && subs.cues_count === 2 && subs.name === 'RU', `set_subtitles (SRT): ${subs.id}`);
+    const sa = (await cl.ok('set_subtitles', { mode: 'append', subtitle_track_id: subs.id, cues: [{ start: 4, end: 5, text: 'Ещё' }] })).subtitle_track;
+    ok(sa.cues_count === 3, 'set_subtitles append');
+    pj = await cl.ok('get_project');
+    const stp = pj.subtitle_tracks[0];
+    ok(pj.subtitle_tracks.length === 1 && stp.cues[0].text === 'Привет' && stp.cues[2].start === 4, 'get_project: subtitle_tracks с репликами');
+    const us = await cl.ok('update_subtitles', { subtitle_track_id: subs.id, lang: 'rus', style: { position: 'top' }, cue_edits: [{ cue_id: stp.cues[1].id, text: 'Мир!' }, { cue_id: stp.cues[2].id, delete: true }], as_text: 'srt' });
+    ok(us.subtitle_track.lang === 'rus' && us.subtitle_track.style.position === 'top' && us.subtitle_track.cues_count === 2 && /Мир!/.test(us.text) && /00:00:02,000 --> 00:00:03,000/.test(us.text), 'update_subtitles: язык, стиль, правка/удаление реплик, as_text srt');
+    const rmS = await cl.ok('update_subtitles', { subtitle_track_id: subs.id, remove: true });
+    ok(rmS.removed === subs.id, 'update_subtitles remove');
+    await cl.ok('undo');
+    pj = await cl.ok('get_project');
+    ok(pj.subtitle_tracks.length === 1, 'undo возвращает дорожку субтитров');
+    // убираем, чтобы дальше всё было как раньше
+    await cl.ok('update_subtitles', { subtitle_track_id: subs.id, remove: true });
+    await cl.ok('delete_clip', { clip_id: txt.id });
+    await cl.ok('update_video_track', { video_track_id: txt.video_track_id, remove: true });
+    pj = await cl.ok('get_project');
+    ok(pj.upper_video_tracks.length === 0 && pj.subtitle_tracks.length === 0 && pj.duration === 7, 'текст и субтитры убраны');
+
     console.log('Взгляд на видео и звук:');
     const fr = await cl.tool('get_frame', { time: 1, width: 320 });
     const img = fr.content.find((c) => c.type === 'image');

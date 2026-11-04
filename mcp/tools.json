@@ -1,5 +1,5 @@
 {
- "instructions": "FF Montage is a desktop video editor; these tools edit the project open in its window (the user sees every change and can undo with Ctrl+Z).\nModel: video tracks stacked bottom to top — the main track \"video\" (bottom, over the background colour) and optional upper tracks (ids vtk_…, transparent where empty, each covers the tracks below: picture-in-picture, overlays, logos). On every video track clips go in time order, gaps allowed, transitions only between adjacent clips of the same track. Each video clip has a transform (x, y offset of its centre in frame fractions, scale, rotate in degrees, opacity) and a crop. Plus audio tracks for music/voice. All times are seconds.\nWorkflow: get_project → import_media (absolute paths) → add_clip (track \"video\"/\"audio\") → trim/move with update_clip, split_clip, delete_clip (ripple), close_gaps → set_transition (clip_id = second clip of the cut) → add_video_track + add_clip video_track_id + set_transform for picture-in-picture/overlays → get_frame / detect_silence to inspect → save_project → export_video, then export_status with wait.\nIds come from get_project; re-read it after edits because splitting creates new clip ids.\nDo not use force=true in new_project/open_project without asking the user.",
+ "instructions": "FF Montage is a desktop video editor; these tools edit the project open in its window (the user sees every change and can undo with Ctrl+Z).\nModel: video tracks stacked bottom to top — the main track \"video\" (bottom, over the background colour) and optional upper tracks (ids vtk_…, transparent where empty, each covers the tracks below: picture-in-picture, overlays, logos). On every video track clips go in time order, gaps allowed, transitions only between adjacent clips of the same track. Each video clip has a transform (x, y offset of its centre in frame fractions, scale, rotate in degrees, opacity) and a crop. Text clips (titles, lower thirds, credits) are video clips of kind \"text\" on upper tracks (add_text / update_text, positioned with set_transform). Subtitle tracks hold timed cues (set_subtitles / update_subtitles; SRT/VTT/ASS in and out). Plus audio tracks for music/voice. All times are seconds.\nWorkflow: get_project → import_media (absolute paths) → add_clip (track \"video\"/\"audio\") → trim/move with update_clip, split_clip, delete_clip (ripple), close_gaps → set_transition (clip_id = second clip of the cut) → add_video_track + add_clip video_track_id + set_transform for picture-in-picture/overlays → get_frame / detect_silence to inspect → save_project → export_video, then export_status with wait.\nIds come from get_project; re-read it after edits because splitting creates new clip ids.\nDo not use force=true in new_project/open_project without asking the user.",
  "tools": [
   {
    "name": "get_project",
@@ -535,6 +535,249 @@
     "readOnlyHint": false,
     "destructiveHint": false,
     "idempotentHint": true,
+    "openWorldHint": false
+   }
+  },
+  {
+   "name": "add_text",
+   "title": "Add text / title",
+   "description": "Put a text clip (title, lower third, caption, rolling credits…) on an upper video track (a free one, or a new one) at start (default: playhead). It is drawn over the video below, in preview and in export. Use style for a ready look (ids in get_project.text_styles, built in: title, lower-third, caption, credits, plain; plugins add plugin.id ones) and styling to tweak it. Position/scale/rotation: set_transform with the returned clip id. Split/delete/move like any video clip.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "text": {
+      "type": "string",
+      "description": "The text; \"\\n\" = new line"
+     },
+     "style": {
+      "type": "string",
+      "description": "Text style id (get_project.text_styles)"
+     },
+     "start": {
+      "type": "number",
+      "minimum": 0
+     },
+     "duration": {
+      "type": "number",
+      "minimum": 0.1,
+      "description": "Seconds (default from the style, usually 3-5)"
+     },
+     "video_track_id": {
+      "type": "string",
+      "description": "Upper video track id, or \"new\" for a new track on top (default: the top free track)"
+     },
+     "styling": {
+      "type": "object",
+      "description": "Text look (all optional): font (family name from get_project.fonts), size (font height as a fraction of frame height, 0.01-0.5), weight (100-900), italic, color \"#rrggbb\", align left|center|right, lineHeight (0.6-3), letterSpacing (em), wrap (max line width as a fraction of frame width, 0 = no wrapping), strokeWidth/strokeColor (outline, fraction of font size), shadowOpacity/shadowColor/shadowBlur/shadowX/shadowY, box/boxColor/boxOpacity/boxPad/boxRadius (background box), motion none|roll (roll = credits move bottom to top over the clip)."
+     }
+    },
+    "required": [
+     "text"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": false,
+    "idempotentHint": false,
+    "openWorldHint": false
+   }
+  },
+  {
+   "name": "update_text",
+   "title": "Change text clip",
+   "description": "Change the text, its look (style / styling), start, duration or fades of a text clip. Position: set_transform.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "clip_id": {
+      "type": "string"
+     },
+     "text": {
+      "type": "string"
+     },
+     "style": {
+      "type": "string",
+      "description": "Apply another text style (keeps the text)"
+     },
+     "styling": {
+      "type": "object",
+      "description": "Text look (all optional): font (family name from get_project.fonts), size (font height as a fraction of frame height, 0.01-0.5), weight (100-900), italic, color \"#rrggbb\", align left|center|right, lineHeight (0.6-3), letterSpacing (em), wrap (max line width as a fraction of frame width, 0 = no wrapping), strokeWidth/strokeColor (outline, fraction of font size), shadowOpacity/shadowColor/shadowBlur/shadowX/shadowY, box/boxColor/boxOpacity/boxPad/boxRadius (background box), motion none|roll (roll = credits move bottom to top over the clip)."
+     },
+     "start": {
+      "type": "number",
+      "minimum": 0
+     },
+     "duration": {
+      "type": "number",
+      "minimum": 0.1
+     },
+     "fade_in": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 10
+     },
+     "fade_out": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 10
+     }
+    },
+    "required": [
+     "clip_id"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": false,
+    "idempotentHint": true,
+    "openWorldHint": false
+   }
+  },
+  {
+   "name": "set_subtitles",
+   "title": "Add subtitles",
+   "description": "Create a subtitle track (mode \"new\", default), replace the cues of a track or append to it. Cues come from \"cues\" ([{start, end, text}] in timeline seconds), from \"content\" (SRT / WebVTT / ASS text) or from \"path\" (a .srt/.vtt/.ass file; its encoding is detected). ASS styling is taken over. shift moves the imported cues in time. Subtitles show in the preview and are burned into the export (or added as a soft MP4 track if the user chooses so).",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "cues": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "properties": {
+        "start": {
+         "type": "number"
+        },
+        "end": {
+         "type": "number"
+        },
+        "text": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "start",
+        "end",
+        "text"
+       ]
+      }
+     },
+     "content": {
+      "type": "string",
+      "description": "Subtitle file text (SRT, WebVTT or ASS)"
+     },
+     "format": {
+      "type": "string",
+      "enum": [
+       "srt",
+       "vtt",
+       "ass"
+      ],
+      "description": "Format of content (auto-detected if omitted)"
+     },
+     "path": {
+      "type": "string",
+      "description": "Absolute path to a subtitle file"
+     },
+     "mode": {
+      "type": "string",
+      "enum": [
+       "new",
+       "replace",
+       "append"
+      ]
+     },
+     "subtitle_track_id": {
+      "type": "string",
+      "description": "Required for replace/append"
+     },
+     "name": {
+      "type": "string"
+     },
+     "shift": {
+      "type": "number",
+      "description": "Seconds to add to every imported cue (may be negative)"
+     }
+    }
+   },
+   "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": false,
+    "idempotentHint": false,
+    "openWorldHint": false
+   }
+  },
+  {
+   "name": "update_subtitles",
+   "title": "Change subtitles",
+   "description": "Change a subtitle track: name, hidden, locked, lang (ISO 639-2 like \"rus\", \"eng\" — used for soft subtitles), style ({ font, size (fraction of frame height, ~0.055), bold, italic, color, outline, outlineColor, shadow, box, boxColor, boxOpacity, position bottom|middle|top, align left|center|right, margin }), edit cues (cue_edits: [{ cue_id, start?, end?, text?, delete? }]), remove the whole track (remove: true), or get it as SRT / VTT / ASS text (as_text).",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "subtitle_track_id": {
+      "type": "string"
+     },
+     "name": {
+      "type": "string"
+     },
+     "hidden": {
+      "type": "boolean"
+     },
+     "locked": {
+      "type": "boolean"
+     },
+     "lang": {
+      "type": "string"
+     },
+     "style": {
+      "type": "object"
+     },
+     "cue_edits": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "properties": {
+        "cue_id": {
+         "type": "string"
+        },
+        "start": {
+         "type": "number"
+        },
+        "end": {
+         "type": "number"
+        },
+        "text": {
+         "type": "string"
+        },
+        "delete": {
+         "type": "boolean"
+        }
+       },
+       "required": [
+        "cue_id"
+       ]
+      }
+     },
+     "remove": {
+      "type": "boolean"
+     },
+     "as_text": {
+      "type": "string",
+      "enum": [
+       "srt",
+       "vtt",
+       "ass"
+      ]
+     }
+    },
+    "required": [
+     "subtitle_track_id"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": true,
+    "idempotentHint": false,
     "openWorldHint": false
    }
   },

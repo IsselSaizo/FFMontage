@@ -22,7 +22,7 @@
     ok(v.length === 2 && Math.abs(v[1].start - v[0].start - 8) < 1e-6, 'два клипа встык');
 
     // --- Вкладки ---
-    ok(document.querySelectorAll('#rp-tabs .rp-tab').length === 3, 'три вкладки справа');
+    ok(document.querySelectorAll('#rp-tabs .rp-tab').length === 4, 'четыре вкладки справа (с «Текстом», M5)');
     tab('transitions').click(); await sleep(50);
     const trRoot = document.querySelector('#browse-transitions');
     ok(!trRoot.hidden && document.querySelector('#inspector').hidden, 'вкладка «Переходы» открыта');

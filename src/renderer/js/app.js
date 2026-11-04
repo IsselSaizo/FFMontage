@@ -20,6 +20,8 @@ import { initAudioRack } from './audioRack.js';
 import { initAnim } from './anim.js';
 import { modeTabs, initModes } from './modes.js';
 import { closePopover, popoverOpen } from './popover.js';
+import { initFonts } from './fonts.js';
+import { initSubtitleOverlay, importSubtitles } from './subtitlesUi.js';
 
 // Мост для ИИ-ассистента грузим отдельно: если с ним что-то не так, редактор всё равно запустится
 const mcpReady = import('./mcpBridge.js').catch((e) => { console.error('mcpBridge', e); return null; });
@@ -247,7 +249,7 @@ function restoreUiState() {
 // Клавиатура: действия из реестра (keymap.js); клавиши настраиваются в «Настройки → Горячие клавиши»
 // ---------------------------------------------------------------------------
 function initKeys() {
-  const clipSel = () => (store.selection && store.selection.kind !== 'transition' ? store.selection.id : null);
+  const clipSel = () => (store.selection && !['transition', 'cue', 'strack', 'track', 'vtrack'].includes(store.selection.kind) ? store.selection.id : null);
   const step = () => 1 / (store.sourceFormat().fps || 30);
   const bind = {
     'project.new': () => newProject(),
@@ -316,7 +318,11 @@ function initWindowDrop() {
     }
     shade.classList.remove('on');
     if (type !== 'drop') { timeline.dragLeave(); return; }
-    if (!paths.length) return;
+    // Файлы субтитров — сразу на новую дорожку субтитров
+    const subs = paths.filter((p) => /\.(srt|vtt|ass|ssa)$/i.test(p));
+    for (const p of subs) await importSubtitles(null, p);
+    paths = paths.filter((p) => !subs.includes(p));
+    if (!paths.length) { timeline.dragLeave(); return; }
     if (await timeline.dropAt(x, y, { paths })) return;
     const ids = await importPaths(paths);
     if (ids.length) toast(t('Импортировано файлов: {n}', { n: ids.length }), 'success', 2000);
@@ -336,6 +342,9 @@ async function main() {
   initViewbar();
   const crop = initCropMode(preview);
   const gizmo = initGizmo(preview);
+  const subsOverlay = initSubtitleOverlay(preview);
+  // Шрифты (встроенные и свои) — в фоне: тексты перерисуются, когда загрузятся
+  const fontsReady = initFonts().catch((e) => console.warn('fonts', e));
   initAudioRack();
   const anim = initAnim(preview);
   initModes();
@@ -358,7 +367,7 @@ async function main() {
   await restoreAutosave();
   restoreUiState();
   updateTitle();
-  window.__ffm = { store, preview, timeline, importPaths, openExport, browser, crop, gizmo, anim, openSettings, reloadUi, plugins: pluginHost, loadProjectText: loadFromText };
+  window.__ffm = { store, preview, timeline, importPaths, openExport, browser, crop, gizmo, anim, openSettings, reloadUi, plugins: pluginHost, loadProjectText: loadFromText, subsOverlay, fontsReady };
   const bridge = await mcpReady;
   if (bridge) bridge.initMcpBridge({
     loadProjectText: (text, filePath) => loadFromText(text, filePath),

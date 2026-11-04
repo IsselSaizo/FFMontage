@@ -69,7 +69,12 @@ window.api = {
   startExport: async (project, settings) => {
     const i = infoCache || await info();
     let plan;
-    try { plan = exportCommand(project, settings, i.ffMajor); } catch (e) { return { ok: false, error: String(e?.message || e) }; }
+    try {
+      // Тексты (картинки PNG) и субтитры (.ass / .srt) — готовятся окном до сборки команды (exportAssets.js)
+      const { prepareExportAssets } = await import('./exportAssets.js');
+      const assets = await prepareExportAssets(project, settings, window.api);
+      plan = exportCommand(project, { ...settings, assets }, i.ffMajor);
+    } catch (e) { return { ok: false, error: String(e?.message || e) }; }
     return invoke('export_start', { plan });
   },
   // Готовый план FFmpeg (запекание анимаций): { args, filter, duration, output }
@@ -121,4 +126,15 @@ window.api = {
   pluginStorageGet: (id) => invoke('plugin_storage_get', { id }),
   pluginStorageSet: (id, data) => invoke('plugin_storage_set', { id, data }),
   pluginNetFetch: (id, request) => invoke('plugin_net_fetch', { id, request }),
+  // Шрифты (M5.2): встроенные + свои (папка user-fonts); для экспорта субтитров — папка fontsExportDir
+  fontsList: () => invoke('fonts_list'),
+  fontsAdd: (paths = null) => invoke('fonts_add', { paths }),
+  fontsRemove: (file) => invoke('fonts_remove', { file }),
+  fontsOpenDir: () => invoke('fonts_open_dir'),
+  fontsExportDir: () => invoke('fonts_export_dir'),
+  // Файлы для экспорта (картинки текстов, субтитры): kind 'png' (base64) | 'ass' | 'srt' | 'vtt' → путь
+  exportAssetSave: (kind, data) => invoke('export_asset_save', { kind, data }),
+  // Субтитры: открыть (null — окно выбора) → { path, name, text } | null; сохранить → путь | null
+  subtitleRead: (path = null) => invoke('subtitle_file_read', { path }),
+  subtitleWrite: (path, defaultName, text) => invoke('subtitle_file_write', { path, defaultName, text }),
 };

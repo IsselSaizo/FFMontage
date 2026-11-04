@@ -12,6 +12,8 @@
 import { t, getLang } from './i18n.js';
 import { SAFE_FILTERS, FORBIDDEN_OPTION } from './core/safeFilters.js';
 import { compileExpr, compileTemplate } from './expr.js';
+import { cleanText, cleanContent, TEXT_KEYS, TEXT_DEFAULT_DUR } from './textModel.js';
+import { cleanTransform } from './transform.js';
 
 export const API_VERSION = 1;
 /** Владелец встроенных описаний; filters: null — любой фильтр из SAFE_FILTERS */
@@ -22,8 +24,10 @@ export const EFFECTS = [];
 export const TRANSITIONS = [];
 export const AUDIO_FX = [];
 export const EXPORT_PRESETS = [];
+// Стили текстовых блоков (M5.3): { id, name, plugin, kind, text (полное оформление), transform|null, duration }
+export const TEXT_STYLES = [];
 
-const LISTS = { effect: EFFECTS, transition: TRANSITIONS, audioEffect: AUDIO_FX, exportPreset: EXPORT_PRESETS };
+const LISTS = { effect: EFFECTS, transition: TRANSITIONS, audioEffect: AUDIO_FX, exportPreset: EXPORT_PRESETS, textStyle: TEXT_STYLES };
 
 const ID_RE = /^[a-z0-9][a-z0-9_-]{0,40}$/i;
 const PLUGIN_ID_RE = /^[a-z0-9][a-z0-9-]{1,40}$/;
@@ -318,6 +322,25 @@ function compileExportPreset(desc, owner, id) {
   return p;
 }
 
+// ---------------- стили текста ----------------
+// { id, name, kind?: 'title'|'lower'|'caption'|'credits'|'other', text: { …оформление, content — образец },
+//   transform?: { x, y, scale, rotate, opacity }, duration?: с }
+const TEXT_KINDS = new Set(['title', 'lower', 'caption', 'credits', 'other']);
+function compileTextStyle(desc, owner, id) {
+  if (desc.text !== undefined && !isObj(desc.text)) fail(t('неверное оформление текста'));
+  const raw = isObj(desc.text) ? desc.text : {};
+  for (const k of Object.keys(raw)) if (!TEXT_KEYS.includes(k) || k === 'style') fail(t('неизвестное поле оформления «{k}»', { k }));
+  // Содержимое образца: строка или { ru, en }
+  const sample = isObj(raw.content) ? localName(raw.content, false) : cleanContent(raw.content ?? '');
+  const text = cleanText({ ...raw, content: sample, style: id });
+  if (desc.transform !== undefined && desc.transform !== null && !isObj(desc.transform)) fail(t('неверный трансформ'));
+  const dur = desc.duration === undefined ? TEXT_DEFAULT_DUR : Number(desc.duration);
+  if (!(dur >= 0.5 && dur <= 600)) fail(t('неверная длительность'));
+  const kind = desc.kind === undefined ? 'other' : desc.kind;
+  if (!TEXT_KINDS.has(kind)) fail(t('неверный вид текстового блока'));
+  return { id, name: localName(desc.name), plugin: owner.id, kind, text, transform: cleanTransform(desc.transform || null), duration: dur };
+}
+
 // ---------------- регистрация ----------------
 const listeners = new Set();
 function emit(ev) {
@@ -334,8 +357,9 @@ const LABEL = {
   transition: (id, reason) => t('Переход «{id}»: {reason}', { id, reason }),
   audioEffect: (id, reason) => t('Аудиоэффект «{id}»: {reason}', { id, reason }),
   exportPreset: (id, reason) => t('Пресет экспорта «{id}»: {reason}', { id, reason }),
+  textStyle: (id, reason) => t('Стиль текста «{id}»: {reason}', { id, reason }),
 };
-const COMPILE = { effect: compileEffect, transition: compileTransition, audioEffect: compileAudioEffect, exportPreset: compileExportPreset };
+const COMPILE = { effect: compileEffect, transition: compileTransition, audioEffect: compileAudioEffect, exportPreset: compileExportPreset, textStyle: compileTextStyle };
 
 function register(kind, desc, owner) {
   const o = normOwner(owner);
@@ -366,6 +390,8 @@ export const registerTransition = (desc, owner = CORE) => register('transition',
 export const registerAudioEffect = (desc, owner = CORE) => register('audioEffect', desc, owner);
 /** Пресет экспорта → полный id */
 export const registerExportPreset = (desc, owner = CORE) => register('exportPreset', desc, owner);
+/** Стиль текстового блока (заголовок, плашка, подпись, титры…) → полный id */
+export const registerTextStyle = (desc, owner = CORE) => register('textStyle', desc, owner);
 
 /** Убрать всё, что регистрировал плагин; возвращает, сколько описаний убрано. Встроенные (core) не убираются */
 export function unregisterPlugin(pluginId) {
@@ -386,6 +412,8 @@ export const listEffects = () => [...EFFECTS];
 export const listTransitions = () => [...TRANSITIONS];
 export const listAudioEffects = () => [...AUDIO_FX];
 export const listExportPresets = () => [...EXPORT_PRESETS];
+export const listTextStyles = () => [...TEXT_STYLES];
+export const textStyleById = (id) => TEXT_STYLES.find((x) => x.id === id) || null;
 
 /**
  * Какие id эффектов / переходов / аудиоэффектов проекта не зарегистрированы (пропал плагин).

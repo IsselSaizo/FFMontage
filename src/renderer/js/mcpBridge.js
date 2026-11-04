@@ -10,6 +10,12 @@ import { TRANSITIONS, MIN_DURATION as TR_MIN, MAX_DURATION as TR_MAX } from './t
 import { h, icon, toast, uid, errText } from './util.js';
 import { speedOf, tlLen, clipEnd, srcAt, tlAt, MIN_SPEED, MAX_SPEED } from './clipTime.js';
 import { t } from './i18n.js';
+import { isText, textDiff, cleanText, TEXT_KEYS, TEXT_MAX } from './textModel.js';
+import { listTextStyles, textStyleById } from './registry.js';
+import './core/textStyles.js';
+import { fontList } from './fonts.js';
+import { parseSubtitles } from './subtitles.js';
+import { subtitleText } from './subtitlesUi.js';
 
 const api = window.api;
 
@@ -121,7 +127,25 @@ function describeMedia(m) {
   return o;
 }
 
+function describeText(c) {
+  const o = { id: c.id, kind: 'text', start: r3(c.start), end: r3(end(c)), duration: r3(len(c)), fade_in: r3(c.fadeIn || 0), fade_out: r3(c.fadeOut || 0), text: textDiff(c.text) };
+  const vf = store.findClip(c.id);
+  if (vf && vf.lane) o.video_track_id = vf.lane.id;
+  if (!isIdentity(tfOf(c))) { const tf = tfOf(c); o.transform = { x: tf.x, y: tf.y, scale: tf.scale, rotate: tf.rotate, opacity: tf.opacity }; }
+  if (c.transition) o.transition_in = { type: c.transition.type, duration: r3(c.transition.duration) };
+  return o;
+}
+const describeCue = (c) => ({ id: c.id, start: r3(c.start), end: r3(c.end), text: c.text });
+function describeSubTrack(tr, withCues = true) {
+  const o = { id: tr.id, name: store.subtitleTrackName(tr.id), hidden: !!tr.hidden, locked: !!tr.locked, style: tr.style, cues_count: tr.cues.length };
+  if (tr.lang) o.lang = tr.lang;
+  if (withCues) o.cues = tr.cues.slice(0, 500).map(describeCue);
+  if (withCues && tr.cues.length > 500) o.note = 'Only the first 500 cues are listed.';
+  return o;
+}
+
 function describeClip(c, kind, track = null) {
+  if (isText(c)) return describeText(c);
   const m = store.media(c.mediaId);
   const src = m && m.derived ? store.media(m.derived.from) : m;
   const o = {
@@ -169,6 +193,18 @@ function describeById(id) {
 
 const gapsR = (g) => g.map(([a, b]) => [r3(a), r3(b)]);
 
+// Поля оформления текста из аргумента styling (только известные ключи; значения проверяет cleanText)
+function textPatch(s) {
+  if (s === undefined || s === null) return {};
+  if (typeof s !== 'object' || Array.isArray(s)) fail('"styling" must be an object (font, size, weight, italic, color, align, …).');
+  const out = {};
+  for (const [k, v] of Object.entries(s)) {
+    if (!TEXT_KEYS.includes(k) || k === 'content' || k === 'style') fail(`Unknown styling field "${k}". Allowed: ${TEXT_KEYS.filter((x) => x !== 'content' && x !== 'style').join(', ')}.`);
+    out[k] = v;
+  }
+  return out;
+}
+
 function projectSummary() {
   return {
     name: store.project.name, file_path: store.filePath, unsaved_changes: !!store.dirty,
@@ -204,6 +240,9 @@ function getProject() {
       clips: [...t.clips].sort((a, b) => a.start - b.start).map((c) => describeClip(c, 'audio', t)),
       gaps: gapsR(store.gaps(t.id)),
     })),
+    subtitle_tracks: store.subtitleTracks().map((tr) => describeSubTrack(tr)),
+    text_styles: listTextStyles().map((s) => s.id),
+    fonts: fontList().map((f) => f.name),
     transitions: store.transitions('*').map((x) => ({ from_clip: x.a.id, to_clip: x.b.id, type: x.type, duration: r3(x.d), at: r3(x.seam), video_track_id: x.laneId })),
     transition_types: TRANSITIONS.map((t) => t.id),
     format: (() => { const f = store.sourceFormat(); return { width: f.width, height: f.height, fps: r3(f.fps) }; })(),
@@ -383,6 +422,7 @@ const TOOLS = {
   update_clip(args) {
     const f = clipArg(args.clip_id);
     const c = f.clip;
+    if (isText(c)) fail('This is a text clip: use update_text (text, styling, start, duration, fades) and set_transform (position).');
     const m = store.media(c.mediaId);
     if (!m) fail('The clip media is missing.');
     if (store.busy[c.id]) fail('The clip is being processed (reverse/freeze), try again later.');
@@ -648,6 +688,142 @@ const TOOLS = {
     store.setTransform(ids, reset && !Object.keys(patch).length ? null : patch, { replace: reset });
     ai(t('трансформ клипа'));
     return { clips: ids.map(describeById) };
+  },
+
+  // --- текст и субтитры (M5) ---
+  add_text(args) {
+    const content = strArg(args, 'text', { required: true, max: 5000 });
+    const sid = strArg(args, 'style');
+    let style = null;
+    if (sid !== undefined) {
+      style = textStyleById(sid) || textStyleById(`core.${sid}`);
+      if (!style) fail(`Text style "${sid}" not found. Styles: ${listTextStyles().map((s) => s.id).join(', ')}.`);
+    }
+    const at = numArg(args, 'start', { min: 0, def: store.time });
+    const duration = numArg(args, 'duration', { min: MIN_CLIP, max: TEXT_MAX });
+    let lane = strArg(args, 'video_track_id');
+    if (lane !== undefined && lane !== 'new') lane = videoTrackArg(lane);
+    const look = textPatch(args.styling);
+    const c = store.addTextClip({ style, text: { ...look, content }, at, duration: duration ?? null, lane: lane ?? null, select: false });
+    if (!c) fail('Could not place the text (the video track is locked?).');
+    ai(t('текст «{text}»', { text: content.split('\n')[0].slice(0, 30) }));
+    return { clip: describeById(c.id), note: 'Move/scale/rotate it with set_transform (x, y are fractions of the frame from the centre).' };
+  },
+
+  update_text(args) {
+    const f = clipArg(args.clip_id);
+    if (!isText(f.clip)) fail('This is not a text clip (use update_clip for media clips).');
+    if (f.lane.locked) fail(`The clip is on the locked video track "${f.lane.id}".`);
+    const patch = textPatch(args.styling);
+    const content = strArg(args, 'text', { max: 5000 });
+    if (content !== undefined) patch.content = content;
+    const sid = strArg(args, 'style');
+    if (sid !== undefined) {
+      const st = textStyleById(sid) || textStyleById(`core.${sid}`);
+      if (!st) fail(`Text style "${sid}" not found. Styles: ${listTextStyles().map((s) => s.id).join(', ')}.`);
+      Object.assign(patch, { ...st.text, content: patch.content ?? f.clip.text.content, style: st.id }, textPatch(args.styling));
+    }
+    const start = numArg(args, 'start', { min: 0 });
+    const dur = numArg(args, 'duration', { min: MIN_CLIP, max: TEXT_MAX });
+    const fadeIn = numArg(args, 'fade_in', { min: 0, max: 10 });
+    const fadeOut = numArg(args, 'fade_out', { min: 0, max: 10 });
+    if (!Object.keys(patch).length && start === undefined && dur === undefined && fadeIn === undefined && fadeOut === undefined) fail('Nothing to change: pass text, style, styling, start, duration, fade_in or fade_out.');
+    store.mutate(() => {
+      const c = store.findClip(f.clip.id).clip;
+      if (Object.keys(patch).length) c.text = cleanText(patch, c.text);
+      if (dur !== undefined) c.out = dur;
+      if (fadeIn !== undefined) c.fadeIn = fadeIn;
+      if (fadeOut !== undefined) c.fadeOut = fadeOut;
+    });
+    if (start !== undefined) store.moveVideoClip(f.clip.id, start, 'overwrite');
+    ai(t('текст изменён'));
+    return { clip: describeById(f.clip.id) };
+  },
+
+  set_subtitles(args) {
+    let cues = null;
+    if (Array.isArray(args.cues)) {
+      cues = args.cues.map((c, i) => {
+        if (!c || typeof c !== 'object') fail(`cues[${i}] must be an object { start, end, text }.`);
+        const s = Number(c.start); const e = Number(c.end);
+        if (!isFinite(s) || !isFinite(e) || s < 0 || e <= s) fail(`cues[${i}]: need 0 <= start < end (seconds).`);
+        if (typeof c.text !== 'string' || !c.text.trim()) fail(`cues[${i}]: "text" must be a non-empty string.`);
+        return { start: s, end: e, text: c.text };
+      });
+    }
+    const content = strArg(args, 'content', { max: 4_000_000 });
+    let style = null;
+    if (content !== undefined) {
+      const r = parseSubtitles(content, enumArg(args, 'format', ['srt', 'vtt', 'ass']) || null);
+      if (!r.format) fail('Subtitle text not recognised: pass SRT, WebVTT or ASS (or a "cues" array).');
+      cues = [...(cues || []), ...r.cues];
+      style = r.style || null;
+    }
+    const path = strArg(args, 'path', { max: 1000 });
+    if (path !== undefined && silent) fail('"path" is not available to plugins: pass "content" or "cues".');
+    if (!cues && path === undefined) fail('Pass "cues" (array of { start, end, text }), "content" (SRT/VTT/ASS text) or "path" (subtitle file).');
+    const mode = enumArg(args, 'mode', ['new', 'replace', 'append'], 'new');
+    let tid = strArg(args, 'subtitle_track_id');
+    if (mode !== 'new') {
+      if (!tid || !store.subtitleTrack(tid)) fail(`"subtitle_track_id" of an existing track is required for mode "${mode}". Tracks: ${store.subtitleTracks().map((x) => x.id).join(', ') || 'none'}.`);
+      if (store.subtitleTrack(tid).locked) fail('The subtitle track is locked by the user.');
+    } else tid = null;
+    const shift = numArg(args, 'shift', { min: -36000, max: 36000, def: 0 });
+    const name = strArg(args, 'name', { max: 60 });
+    return (async () => {
+      if (path !== undefined) {
+        if (!isAbs(path)) fail('"path" must be an absolute path.');
+        const file = await api.subtitleRead(path);
+        const r = parseSubtitles(file.text);
+        if (!r.format) fail('The file is not SRT, WebVTT or ASS.');
+        cues = [...(cues || []), ...r.cues];
+        style = style || r.style || null;
+      }
+      if (!cues.length) fail('No cues to add.');
+      let list = cues;
+      if (mode === 'append') list = [...store.subtitleTrack(tid).cues, ...cues.map((c) => ({ ...c, start: c.start + shift, end: c.end + shift }))];
+      const id = store.importCues(list, { trackId: tid, name: name || (path ? fileName(path).replace(/\.[^.]+$/, '') : null), style, shift: mode === 'append' ? 0 : shift });
+      ai(t('субтитры: {n} реплик', { n: cues.length }));
+      return { subtitle_track: describeSubTrack(store.subtitleTrack(id), false), duration: r3(store.duration()) };
+    })();
+  },
+
+  update_subtitles(args) {
+    const tid = strArg(args, 'subtitle_track_id', { required: true });
+    const tr = store.subtitleTrack(tid);
+    if (!tr) fail(`Subtitle track "${tid}" not found. Tracks: ${store.subtitleTracks().map((x) => x.id).join(', ') || 'none'}.`);
+    const asText = enumArg(args, 'as_text', ['srt', 'vtt', 'ass']);
+    if (boolArg(args, 'remove')) {
+      if (tr.locked) fail('The subtitle track is locked by the user.');
+      store.removeSubtitleTrack(tid);
+      ai(t('дорожка субтитров удалена'));
+      return { removed: tid };
+    }
+    const patch = {};
+    const name = strArg(args, 'name', { max: 60 }); if (name !== undefined) patch.name = name;
+    const hidden = boolArg(args, 'hidden'); if (hidden !== undefined) patch.hidden = hidden;
+    const locked = boolArg(args, 'locked'); if (locked !== undefined) patch.locked = locked;
+    const lang = strArg(args, 'lang', { max: 3 }); if (lang !== undefined) { if (lang && !/^[a-z]{2,3}$/.test(lang)) fail('"lang" must be an ISO 639 code like "rus" or "eng".'); patch.lang = lang; }
+    if (args.style !== undefined) { if (!args.style || typeof args.style !== 'object') fail('"style" must be an object.'); patch.style = args.style; }
+    const edits = Array.isArray(args.cue_edits) ? args.cue_edits : [];
+    if ((edits.length || patch.style) && tr.locked && locked !== false) fail('The subtitle track is locked by the user.');
+    if (Object.keys(patch).length) store.setSubtitleTrack(tid, patch);
+    for (const [i, e] of edits.entries()) {
+      const id = e && e.cue_id;
+      if (!id || !store.findCue(id) || store.findCue(id).track.id !== tid) fail(`cue_edits[${i}]: cue "${id}" not found on this track.`);
+      if (e.delete) { store.deleteCue(id); continue; }
+      const p = {};
+      if (e.start !== undefined) p.start = Number(e.start);
+      if (e.end !== undefined) p.end = Number(e.end);
+      if (e.text !== undefined) p.text = String(e.text);
+      if ((p.start !== undefined && !(p.start >= 0)) || (p.end !== undefined && !(p.end > 0))) fail(`cue_edits[${i}]: bad times.`);
+      store.setCue(id, p);
+    }
+    if (Object.keys(patch).length || edits.length) ai(t('субтитры изменены'));
+    else if (!asText) fail('Nothing to change: pass name, hidden, locked, lang, style, cue_edits, remove or as_text.');
+    const out = { subtitle_track: describeSubTrack(store.subtitleTrack(tid), edits.length > 0) };
+    if (asText) out.text = subtitleText(tid, asText);
+    return out;
   },
 
   undo() {

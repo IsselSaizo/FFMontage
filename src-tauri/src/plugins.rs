@@ -145,7 +145,7 @@ pub fn check_manifest(m: &Value, dir: Option<&Path>) -> R<String> {
     let c = &m["contributes"];
     if !c.is_null() {
         if !c.is_object() { return Err(tr!("contributes — объект", "contributes must be an object").into()); }
-        for k in ["effects", "transitions", "audioEffects", "exportPresets", "keymaps", "actions", "panels"] {
+        for k in ["effects", "transitions", "audioEffects", "exportPresets", "textStyles", "keymaps", "actions", "panels"] {
             if !c[k].is_null() && !c[k].is_array() { return Err(tr!("contributes.{} — массив", "contributes.{} must be an array", k)); }
         }
         for p in c["panels"].as_array().into_iter().flatten() {

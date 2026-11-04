@@ -43,10 +43,14 @@ jobs:
         run: node tests/ffescape-test.js
       - name: Раскладки кадра (пример-плагин)
         run: node tests/layouts-test.js
+      - name: Субтитры (SRT / VTT / ASS) и реестр
+        run: |
+          node tests/subtitles-test.js
+          node tests/registry-test.js
       - name: Автотест интерфейса
         shell: pwsh
         run: |
-          foreach ($t in 'ui-selftest3', 'ui-selftest4', 'ui-selftest5', 'ui-selftest6', 'ui-selftest11', 'ui-selftest14') {
+          foreach ($t in 'ui-selftest3', 'ui-selftest4', 'ui-selftest5', 'ui-selftest6', 'ui-selftest11', 'ui-selftest14', 'ui-selftest15') {
             ./tests/run-ui.ps1 $t -TimeoutSec 300 | Tee-Object -Variable out
             if ($out -match 'FAIL|ERROR|TIMEOUT') { exit 1 }
           }
@@ -97,6 +101,10 @@ jobs:
         run: node tests/ffescape-test.js
       - name: Раскладки кадра (пример-плагин)
         run: node tests/layouts-test.js
+      - name: Субтитры (SRT / VTT / ASS) и реестр
+        run: |
+          node tests/subtitles-test.js
+          node tests/registry-test.js
       - name: Тест ИИ-ассистента (MCP)
         run: xvfb-run -a node tests/mcp-test.js
       - name: Журналы

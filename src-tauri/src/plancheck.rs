@@ -3,6 +3,7 @@
 // поэтому FFmpeg получает только то, что мы понимаем:
 //   • граф — разбирается так же, как в FFmpeg (libavfilter/graphparser.c + ff_filter_opt_parse, два уровня кавычек),
 //     каждый фильтр ∈ SAFE_FILTERS, ключи опций — обычные имена и не FORBIDDEN_OPTION (файлы, модели, команды);
+//     исключение — ass (субтитры, M5): только свой набор опций и файлы из папок программы (check_ass);
 //   • аргументы — только известные опции с проверенными значениями; @@FILTER@@ и @@OUT@@ — ровно по разу;
 //   • -i — существующий файл, разрешённый окну (импорт / кэш медиа / папка плагинов); у движка без окна — любой существующий;
 //   • output — абсолютный .mp4/.mov/.mkv/.webm, не совпадает со входом.
@@ -132,11 +133,63 @@ fn max_positional(name: &str) -> usize {
     match name { "curves" | "selectivecolor" | "firequalizer" => 2, _ => usize::MAX }
 }
 
-pub fn check_graph(s: &str) -> Result<(), String> {
+/// Фильтр ass (M5, субтитры через libass) — не в SAFE_FILTERS (плагинам он недоступен), только по этому правилу:
+/// filename/f/первое позиционное — абсолютный .ass, fontsdir — абсолютная папка, original_size, shaping, alpha.
+/// Окно: файл — из <app_cache>/export-assets (assets::save), шрифты — <app_cache>/fonts; движок — любые существующие.
+fn check_ass(f: &Filter, inputs: Inputs) -> Result<(), String> {
+    let bad = |k: &str| tr!("опция «{}» фильтра ass не разрешена", "option \"{}\" of filter ass is not allowed", k);
+    let (mut file, mut fonts): (Option<&str>, Option<&str>) = (None, None);
+    let mut seen: Vec<&str> = vec![];
+    for (i, (k, v)) in f.opts.iter().enumerate() {
+        let key = match k.as_deref() {
+            Some("f") => "filename",
+            Some(k) => k,
+            None if i == 0 => "filename",
+            None => return Err(tr!("слишком много позиционных опций у фильтра {}", "too many positional options for filter {}", f.name)),
+        };
+        if seen.contains(&key) { return Err(tr!("опция «{}» фильтра ass указана дважды", "option \"{}\" of filter ass is given twice", key)); }
+        seen.push(key);
+        let ok = match key {
+            "filename" => { file = Some(v.as_str()); true }
+            "fontsdir" => { fonts = Some(v.as_str()); true }
+            "original_size" => v.split_once('x').is_some_and(|(w, h)| [w, h].iter().all(|n| (1..=5).contains(&n.len()) && n.bytes().all(|c| c.is_ascii_digit()))),
+            "shaping" => matches!(v.as_str(), "auto" | "simple" | "complex"),
+            "alpha" => matches!(v.as_str(), "0" | "1"),
+            _ => return Err(bad(key)),
+        };
+        if !ok { return Err(tr!("недопустимое значение опции {} фильтра ass: {}", "invalid value of option {} of filter ass: {}", key, v)); }
+    }
+    let file = file.ok_or(tr!("у фильтра ass нет файла субтитров", "filter ass has no subtitle file"))?;
+    let fp = PathBuf::from(file);
+    let bad_file = || tr!("файл субтитров не разрешён: {}", "subtitle file is not allowed: {}", file);
+    if file.contains(['\0', '\n', '\r']) || !fp.is_absolute() || crate::ff::ext_of(&fp) != "ass" { return Err(bad_file()); }
+    let file_ok = match inputs {
+        Inputs::Window => fp.is_file() && under(&fp, &crate::assets::dir()),
+        Inputs::Engine => fp.is_file(),
+        #[cfg(test)]
+        Inputs::Any => true,
+    };
+    if !file_ok { return Err(bad_file()); }
+    if let Some(d) = fonts {
+        let dp = PathBuf::from(d);
+        let fonts_dir = crate::fonts::export_dir();
+        let dir_ok = !d.contains(['\0', '\n', '\r']) && dp.is_absolute() && match inputs {
+            Inputs::Window => dp.is_dir() && (norm(&dp).trim_end_matches(['\\', '/']) == norm(&fonts_dir).trim_end_matches(['\\', '/']) || under(&dp, &fonts_dir)),
+            Inputs::Engine => dp.is_dir(),
+            #[cfg(test)]
+            Inputs::Any => true,
+        };
+        if !dir_ok { return Err(tr!("папка шрифтов не разрешена: {}", "fonts folder is not allowed: {}", d)); }
+    }
+    Ok(())
+}
+
+pub fn check_graph(s: &str, inputs: Inputs) -> Result<(), String> {
     if s.len() > 8 * 1024 * 1024 { return Err(tr!("граф больше 8 МБ", "the graph is larger than 8 MB").into()); }
     let filters = parse_graph(s)?;
     if filters.is_empty() { return Err(tr!("пустой граф", "empty graph").into()); }
     for f in &filters {
+        if f.name == "ass" { check_ass(f, inputs)?; continue; }
         if !plugins::is_safe_filter(&f.name) { return Err(tr!("фильтр «{}» не разрешён", "filter \"{}\" is not allowed", f.name)); }
         let mut positional = 0;
         for (k, _) in &f.opts {
@@ -165,6 +218,23 @@ enum V {
     Map,
     Input,
     Filter,
+    /// -metadata:s:s:N: language=<2–3 строчные латинские> | title=<1–64 символа без управляющих>
+    SubMeta,
+}
+
+/// «<prefix><N>», N — 1–3 цифры (номер потока субтитров)
+fn stream_opt(opt: &str, prefix: &str) -> bool {
+    opt.strip_prefix(prefix).is_some_and(|n| (1..=3).contains(&n.len()) && n.bytes().all(|c| c.is_ascii_digit()))
+}
+
+fn is_sub_meta(v: &str) -> bool {
+    if let Some(l) = v.strip_prefix("language=") {
+        return (2..=3).contains(&l.len()) && l.bytes().all(|c| c.is_ascii_lowercase());
+    }
+    if let Some(t) = v.strip_prefix("title=") {
+        return (1..=64).contains(&t.chars().count()) && !t.chars().any(char::is_control);
+    }
+    false
 }
 
 const VCODECS: &[&str] = &["libx264", "libx265", "libsvtav1", "h264_nvenc", "hevc_nvenc", "av1_nvenc", "libvpx-vp9"];
@@ -188,6 +258,10 @@ fn spec(opt: &str) -> Option<V> {
         "-f" => V::Enum(&["mp4", "mov", "webm", "matroska"]),
         "-progress" => V::Enum(&["pipe:1"]),
         "-deadline" => V::Enum(&["realtime", "good", "best"]),
+        // M5: мягкие субтитры
+        "-c:s" => V::Enum(&["mov_text", "srt", "ass", "webvtt"]),
+        _ if stream_opt(opt, "-metadata:s:s:") => V::SubMeta,
+        _ if stream_opt(opt, "-disposition:s:") => V::Enum(&["default", "0"]),
         _ => return None,
     })
 }
@@ -277,6 +351,7 @@ fn check_inner(args: &[String], filter: &str, duration: f64, output: &str, input
             V::Word => is_word(v),
             V::Enum(list) => list.contains(&v),
             V::Map => is_map(v),
+            V::SubMeta => is_sub_meta(v),
             V::Filter => { n_filter += 1; v == "@@FILTER@@" }
             V::Input => {
                 // -f перед -i выбрал бы демультиплексор входа (concat, lavfi…) — -f только для выхода
@@ -297,7 +372,7 @@ fn check_inner(args: &[String], filter: &str, duration: f64, output: &str, input
     if ins.iter().any(|p| { let n = norm(p); n == o || n == part }) {
         return Err(tr!("выходной файл совпадает со входным", "the output file is the same as an input").into());
     }
-    check_graph(filter)
+    check_graph(filter, inputs)
 }
 
 // ---------------------------------------------------------------------------
@@ -340,8 +415,8 @@ mod tests {
 
     #[test]
     fn real_graphs_pass() {
-        check_graph(&real_graph()).unwrap();
-        check_graph(&rain_graph()).unwrap();
+        check_graph(&real_graph(), Inputs::Any).unwrap();
+        check_graph(&rain_graph(), Inputs::Any).unwrap();
         let f = parse_graph(&real_graph()).unwrap();
         let x = f.iter().find(|f| f.name == "xfade").unwrap();
         assert_eq!(x.opts[1], (Some("expr".into()), "if(lt(mod(X,W/10),(1-P)*W/10),B,A)".into()));
@@ -391,8 +466,105 @@ mod tests {
             "[0:v]hue==0[v]",
             "",
         ] {
-            assert!(check_graph(g).is_err(), "должен быть отклонён: {g}"); // i18n-ignore — тест
+            assert!(check_graph(g, Inputs::Any).is_err(), "должен быть отклонён: {g}"); // i18n-ignore — тест
         }
+    }
+
+    /// Путь как значение опции в графе — так же, как js/core/ffEscape.js ffPath: «\» → «/», затем «\ ' :» и «\ ' [ ] , ;»
+    fn ff_path(p: &str) -> String {
+        let p = p.replace('\\', "/");
+        let opt: String = p.chars().flat_map(|c| if "\\':".contains(c) { vec!['\\', c] } else { vec![c] }).collect();
+        opt.chars().flat_map(|c| if "\\'[],;".contains(c) { vec!['\\', c] } else { vec![c] }).collect()
+    }
+
+    #[test]
+    fn ass_filter() {
+        let (a, fonts) = if cfg!(windows) { (r"C:\x\a.ass", r"C:\x\fonts") } else { ("/x/a.ass", "/x/fonts") };
+        let g = format!("[vout0]ass=filename={}:fontsdir={}[vout]", ff_path(a), ff_path(fonts));
+        if cfg!(windows) { assert_eq!(g, r"[vout0]ass=filename=C\\:/x/a.ass:fontsdir=C\\:/x/fonts[vout]"); }
+        check_graph(&g, Inputs::Any).unwrap();
+        let f = parse_graph(&g).unwrap();
+        assert_eq!(f[0].opts[0].1, a.replace('\\', "/"));
+        // позиционное имя файла, f=, остальные опции
+        check_graph(&format!("[v]ass={}:original_size=1920x1080:shaping=complex:alpha=1[o]", ff_path(a)), Inputs::Any).unwrap();
+        check_graph(&format!("[v]ass=f={}[o]", ff_path(a)), Inputs::Any).unwrap();
+        let fs = ff_path(fonts);
+        let rel = "ass=filename=sub/a.ass";
+        for g in [
+            rel.to_string(),
+            format!("ass=filename={}", ff_path(&a.replace(".ass", ".srt"))),
+            format!("ass=filename={}:fontsdir={fs}:force_style=FontName\\\\=X", ff_path(a)),
+            format!("ass=filename={}:charenc=cp1251", ff_path(a)),
+            format!("ass=filename={}:fontsdir=fonts", ff_path(a)),
+            format!("ass={}:{fs}", ff_path(a)),
+            format!("ass=filename={}:f={}", ff_path(a), ff_path(a)),
+            format!("ass=filename={}:original_size=big", ff_path(a)),
+            format!("ass=filename={}:shaping=x", ff_path(a)),
+            format!("ass=/filename={}", ff_path(a)),
+            "ass".to_string(),
+            format!("[0:v]subtitles={}[v]", ff_path(a)),
+            format!("[0:v]subtitles=filename={}[v]", ff_path(a)),
+        ] {
+            assert!(check_graph(&g, Inputs::Any).is_err(), "должен быть отклонён: {g}"); // i18n-ignore — тест
+        }
+        // плагинам ass недоступен
+        assert!(!plugins::is_safe_filter("ass"));
+        // окно: файл только из <кэш>/export-assets, а такого файла нет
+        assert!(check_graph(&g, Inputs::Window).is_err());
+    }
+
+    #[test]
+    fn ass_filter_engine_and_window() {
+        let dir = std::env::temp_dir().join(format!("ffm-ass-{}", std::process::id()));
+        let fonts = dir.join("fonts");
+        std::fs::create_dir_all(&fonts).unwrap();
+        let sub = dir.join("a b'c.ass");
+        std::fs::write(&sub, b"[Script Info]\n").unwrap();
+        let srt = dir.join("a.srt");
+        std::fs::write(&srt, b"1\n").unwrap();
+        let p = |x: &Path| ff_path(&x.to_string_lossy());
+        let g = format!("[vout0]ass=filename={}:fontsdir={}[vout]", p(&sub), p(&fonts));
+        check_graph(&g, Inputs::Engine).unwrap();
+        // нет файла / нет папки шрифтов / .srt
+        assert!(check_graph(&format!("ass=filename={}", p(&dir.join("nope.ass"))), Inputs::Engine).is_err());
+        assert!(check_graph(&format!("ass=filename={}:fontsdir={}", p(&sub), p(&dir.join("nofonts"))), Inputs::Engine).is_err());
+        assert!(check_graph(&format!("ass=filename={}", p(&srt)), Inputs::Engine).is_err());
+        // окно: временная папка — не <кэш>/export-assets
+        assert!(check_graph(&g, Inputs::Window).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn subtitle_args() {
+        let inp = abs("a.mp4");
+        let sub = abs("subs.srt");
+        let mut a: Vec<String> = ["-hide_banner", "-y", "-i", &inp, "-i", &sub, "-/filter_complex", "@@FILTER@@", "-map", "[vout]", "-map", "1:s",
+            "-c:v", "libx264", "-c:s", "mov_text", "-metadata:s:s:0", "language=rus", "-metadata:s:s:0", "title=Русские", "-disposition:s:0", "default", // i18n-ignore — тест
+            "-f", "mp4", "@@OUT@@"].iter().map(|x| x.to_string()).collect();
+        check(&a, &real_graph(), 6.0, &abs("out.mp4"), Inputs::Any).unwrap();
+        for c in ["srt", "ass", "webvtt"] {
+            let i = a.iter().position(|x| x == "-c:s").unwrap();
+            a[i + 1] = c.into();
+            check(&a, &real_graph(), 6.0, &abs("out.mkv"), Inputs::Any).unwrap();
+        }
+        let with = |from: &str, to: &[&str]| {
+            let mut b = a.clone();
+            let i = b.iter().position(|x| x == from).unwrap();
+            b.splice(i..i + 2, to.iter().map(|x| x.to_string()));
+            check(&b, &real_graph(), 6.0, &abs("out.mp4"), Inputs::Any)
+        };
+        assert!(with("-c:s", &["-c:s", "copy"]).is_err());
+        assert!(with("-c:s", &["-c:s", "dvd_subtitle"]).is_err());
+        assert!(with("-metadata:s:s:0", &["-metadata:s:s:0", "foo=bar"]).is_err());
+        assert!(with("-metadata:s:s:0", &["-metadata:s:s:0", "language=RUS"]).is_err());
+        assert!(with("-metadata:s:s:0", &["-metadata:s:s:0", "language=russian"]).is_err());
+        assert!(with("-metadata:s:s:0", &["-metadata", "title=x"]).is_err());
+        assert!(with("-metadata:s:s:0", &["-metadata:s:v:0", "language=rus"]).is_err());
+        assert!(with("-metadata:s:s:0", &["-metadata:s:s:x", "language=rus"]).is_err());
+        assert!(with("-metadata:s:s:0", &["-metadata:s:s:0", "title=a\nb"]).is_err());
+        assert!(with("-metadata:s:s:0", &["-metadata:s:s:0", &format!("title={}", "x".repeat(65))]).is_err());
+        assert!(with("-disposition:s:0", &["-disposition:s:0", "forced"]).is_err());
+        assert!(with("-disposition:s:0", &["-disposition:s:0", "0"]).is_ok());
     }
 
     fn export_args(input: &str) -> Vec<String> {

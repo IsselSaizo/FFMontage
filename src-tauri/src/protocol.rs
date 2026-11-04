@@ -61,6 +61,8 @@ fn mime(p: &Path) -> &'static str {
         "ogg" | "oga" | "opus" => "audio/ogg",
         "flac" => "audio/flac",
         "json" => "application/json",
+        "ttf" | "ttc" => "font/ttf",
+        "otf" => "font/otf",
         _ => "application/octet-stream",
     }
 }

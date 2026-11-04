@@ -298,6 +298,19 @@ function sameStyle(a, b, tol = 0) {
   throws(() => reg.registerExportPreset({ id: 'c', name: 'C', width: 1080, height: 1080, fps: 30, codec: 'prores' }, owner), null, 'отказ: неизвестный кодек');
   ok(reg.listExportPresets().filter((p) => p.plugin === 'core').length === 3, 'встроенные пресеты экспорта');
 
+  // Стили текста (M5.3)
+  await load('core/textStyles.js');
+  const coreTs = reg.listTextStyles().filter((s) => s.plugin === 'core');
+  ok(coreTs.length === 5 && coreTs.some((s) => s.id === 'credits' && s.text.motion === 'roll'), `встроенные стили текста: ${coreTs.map((s) => s.id).join(', ')}`);
+  const ownerT = { id: 'titles' };
+  const tsid = reg.registerTextStyle({ id: 'neon', name: { ru: 'Неон', en: 'Neon' }, kind: 'title', text: { content: 'NEON', color: '#ff00ff', size: 0.12, strokeWidth: 0.05 }, transform: { y: -0.2 }, duration: 4 }, ownerT);
+  const ts = reg.textStyleById(tsid);
+  ok(tsid === 'titles.neon' && ts.text.color === '#ff00ff' && ts.transform.y === -0.2 && ts.duration === 4, 'стиль текста плагина');
+  throws(() => reg.registerTextStyle({ id: 'x', name: 'X', text: { blink: true } }, ownerT), null, 'отказ: неизвестное поле оформления');
+  throws(() => reg.registerTextStyle({ id: 'y', name: 'Y', kind: 'marquee', text: {} }, ownerT), null, 'отказ: неизвестный вид блока');
+  throws(() => reg.registerTextStyle({ id: 'z', name: 'Z', text: {}, duration: 9999 }, ownerT), null, 'отказ: длительность вне пределов');
+  ok(reg.unregisterPlugin('titles') === 1 && !reg.textStyleById(tsid), 'стиль текста выгружается с плагином');
+
   // missingIds и предупреждения экспорта
   const project = {
     media: { m: { path: 'C:/x.mp4', hasVideo: true, hasAudio: true, width: 1920, height: 1080, duration: 10 } },

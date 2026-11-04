@@ -1,4 +1,9 @@
 /* FF Montage — тёмная тема в духе Clipchamp */
+/* Встроенные шрифты текста и субтитров (M5.2, SIL OFL 1.1 — assets/fonts/*-LICENSE/OFL) */
+@font-face { font-family: "Inter"; src: url("assets/fonts/Inter.ttf") format("truetype"); font-weight: 100 900; font-style: normal; font-display: block; }
+@font-face { font-family: "Inter"; src: url("assets/fonts/Inter-Italic.ttf") format("truetype"); font-weight: 100 900; font-style: italic; font-display: block; }
+@font-face { font-family: "Open Sans"; src: url("assets/fonts/OpenSans.ttf") format("truetype"); font-weight: 300 800; font-style: normal; font-display: block; }
+@font-face { font-family: "Open Sans"; src: url("assets/fonts/OpenSans-Italic.ttf") format("truetype"); font-weight: 300 800; font-style: italic; font-display: block; }
 :root {
   --bg: #121216;
   --bg-2: #18181d;
@@ -745,3 +750,37 @@ textarea.input.mono { font-family: Consolas, "Cascadia Mono", monospace; font-si
 .plg-warn { color: #ffcf8a; }
 .plg-install .btn span { display: inline-flex; }
 .folders-form { display: flex; flex-direction: column; gap: 16px; }
+
+/* ---- M5: текст и субтитры ---- */
+.stage canvas.slot.txt { position: absolute; inset: 0; width: 100%; height: 100%; visibility: hidden; pointer-events: none; transform-origin: 50% 50%; }
+.stage canvas.slot.txt.on { visibility: visible; }
+.clip.text { background: linear-gradient(180deg, #5a3fb8, #3b2a7d); }
+.clip.text .text-strip { position: absolute; left: 6px; right: 6px; bottom: 6px; top: 26px; display: flex; align-items: center; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none; text-shadow: 0 1px 2px rgba(0,0,0,.7); }
+.tl-row.subs { margin-top: 6px; }
+.tl-head.sub-head { cursor: pointer; }
+.tl-head.sub-head.selected { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
+.sub-lane { background: rgba(255, 196, 64, .04); }
+.tl-row.subs.lane-hidden .sub-lane { opacity: .45; }
+.cue { position: absolute; top: 4px; bottom: 4px; border-radius: 6px; background: #6b5418; border: 1.5px solid rgba(255,220,130,.35); cursor: grab; overflow: hidden; }
+.cue:hover { border-color: rgba(255,230,160,.8); }
+.cue.selected { border: 2px solid #fff; box-shadow: 0 0 0 2px #d9a520; z-index: 2; }
+.cue .cue-text { position: absolute; left: 8px; right: 8px; top: 50%; transform: translateY(-50%); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none; color: #fff3d1; }
+.cue .handle { width: 7px; }
+.cue.selected .handle::after, .cue:hover .handle::after { content: ''; position: absolute; top: 50%; width: 3px; height: 16px; margin-top: -8px; border-radius: 2px; background: #fff; }
+.tl-row.lane-locked .cue { cursor: not-allowed; }
+.sub-overlay { position: absolute; inset: 0; z-index: 20; pointer-events: none; overflow: hidden; }
+.sub-box { position: absolute; display: flex; flex-direction: column; line-height: 1.21; white-space: pre-wrap; }
+.sub-box.center { align-items: center; text-align: center; }
+.sub-box.left { align-items: flex-start; text-align: left; }
+.sub-box.right { align-items: flex-end; text-align: right; }
+.sub-line span { display: inline; }
+.ts-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 8px; margin-top: 10px; }
+.ts-tile { display: flex; flex-direction: column; gap: 5px; background: none; border: 0; padding: 0; cursor: pointer; text-align: left; font-size: 11.5px; color: var(--text-2); }
+.ts-tile:hover { color: var(--text); }
+.ts-thumb { width: 100%; aspect-ratio: 16 / 9; border-radius: 8px; border: 1.5px solid var(--line-2); }
+.ts-tile:hover .ts-thumb { border-color: var(--accent); }
+textarea.text-edit { width: 100%; resize: vertical; font: inherit; font-size: 13px; line-height: 1.35; user-select: text; }
+.color-in { width: 30px; height: 26px; padding: 0 2px; border: 1px solid var(--line-2); border-radius: 6px; background: var(--panel-2); cursor: pointer; flex: none; }
+select.font-select { flex: 1; min-width: 0; }
+label.check { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
+.font-row { padding: 3px 0; font-size: 14px; }

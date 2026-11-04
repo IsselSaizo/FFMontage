@@ -4,12 +4,14 @@
 //   ff-montage --engine <cmd>  — движок без окна (автотесты)
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod assets;
 mod cache;
 mod cli;
 mod commands;
 mod control;
 mod export;
 mod ff;
+mod fonts;
 mod i18n;
 mod mcp;
 mod paths;
@@ -137,6 +139,14 @@ fn run() {
             plugins::plugin_storage_get,
             plugins::plugin_storage_set,
             plugins::plugin_net_fetch,
+            fonts::fonts_list,
+            fonts::fonts_add,
+            fonts::fonts_remove,
+            fonts::fonts_open_dir,
+            fonts::fonts_export_dir,
+            assets::export_asset_save,
+            assets::subtitle_file_read,
+            assets::subtitle_file_write,
         ])
         .setup(|app| {
             let h = app.handle().clone();

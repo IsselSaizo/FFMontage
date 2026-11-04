@@ -12,6 +12,9 @@ import { speedOf, tlLen, clipEnd, srcAt, tlAt } from './clipTime.js';
 import { activeFx, webAudioChain } from './audioFx.js';
 import { onRegistryChange } from './registry.js';
 import { t } from './i18n.js';
+import { isText } from './textModel.js';
+import { drawText } from './textRender.js';
+import { fontsVersion, onFontsChange } from './fonts.js';
 
 const EPS = 0.004;
 // crop { l, t, r, b } — доли кадра, срезанные с каждой стороны
@@ -58,6 +61,8 @@ export class Preview {
     store.on('time', (src) => { if (src !== 'preview') this.onExternalSeek(); });
     store.on('project', () => { this.layoutStage(); if (!this.playing) this.seek(store.time); else this.syncAudio(store.time, true); this.cleanupAudio(); });
     store.on('media', () => { if (!this.playing) this.seek(store.time); });
+    // Загрузились/добавились шрифты — перерисовать тексты
+    onFontsChange(() => { if (!this.playing) this.present(store.time, true); });
     // Плагин добавил/убрал эффект или переход — пересобрать цепочки Web Audio и перерисовать кадр
     onRegistryChange(() => {
       for (const r of this.routes.values()) r.sig = '';
@@ -199,9 +204,11 @@ export class Preview {
       return el;
     });
     const imgSlots = [0, 1].map(() => h('img', { class: 'slot img', draggable: 'false', alt: '' }));
+    // Текстовые клипы (M5.1): холст во весь «экран», текст рисует textRender.js (трансформ — внутри рисунка)
+    const textSlots = [0, 1].map(() => h('canvas', { class: 'slot txt' }));
     const overlay = h('div', { class: 'stage-overlay' });
-    root.append(...slots, ...imgSlots, overlay);
-    v = { id, root, slots, imgSlots, overlay, visible: new Set(), current: null, master: null };
+    root.append(...slots, ...imgSlots, ...textSlots, overlay);
+    v = { id, root, slots, imgSlots, textSlots, overlay, visible: new Set(), current: null, master: null };
     this.views.set(id, v);
     if (this.ctx) for (const el of slots) this.attach(el);
     return v;
@@ -328,13 +335,20 @@ export class Preview {
       for (const role of ['A', 'B']) {
         const x = L[role];
         if (!x) continue;
-        const url = playUrl(x.clip.mediaId);
+        const url = isText(x.clip) ? 'text:' : playUrl(x.clip.mediaId);
         if (url) layers.push({ ...x, role, url });
       }
     }
-    // Картинки показываются в <img>, видео — в <video>
-    const vLayers = layers.filter((x) => !isStill(x.clip));
+    // Тексты — на холсте, картинки — в <img>, видео — в <video>
+    const tLayers = layers.filter((x) => isText(x.clip));
+    const vLayers = layers.filter((x) => !isStill(x.clip) && !isText(x.clip));
     const iLayers = layers.filter((x) => isStill(x.clip));
+    tLayers.forEach((x, i) => {
+      const el = v.textSlots[i];
+      this.drawTextSlot(el, x.clip, t);
+      x.el = el; x.fade = fadeFactor(x.clip, t); x.text = true;
+    });
+    for (const s of v.textSlots) s.classList.toggle('on', tLayers.some((x) => x.el === s));
     const els = this.assign(v, vLayers);
     v.visible = new Set(els);
     v.master = null;
@@ -397,7 +411,7 @@ export class Preview {
     // «Заполнить/вписать», трансформ и эффекты клипа (поверх стилей перехода, например размытия или сдвига)
     const shownW = this.stage.clientWidth;
     for (const x of layers) {
-      if (!x.el) continue;
+      if (!x.el || x.text) continue;
       // В режиме кадрирования клип показывается целиком (вписан, без трансформа), рамку рисует cropMode.js
       const editing = this.cropEdit === x.clip.id;
       x.el.classList.toggle('cover', !editing && x.clip.fit === 'cover');
@@ -414,6 +428,24 @@ export class Preview {
       x.el.style.filter = cssEffects(ov, shownW, tf ? [tf] : []);
     }
     if (!this.override) this.preload(v, lane, t);
+  }
+
+  // Текст на холсте слоя: размер холста = «экран» × devicePixelRatio; перерисовка — только если что-то изменилось
+  drawTextSlot(el, clip, t) {
+    const dpr = window.devicePixelRatio || 1;
+    const W = Math.max(2, Math.round(this.stage.clientWidth * dpr));
+    const H = Math.max(2, Math.round(this.stage.clientHeight * dpr));
+    const roll = clip.text && clip.text.motion === 'roll';
+    const local = roll ? Math.round((t - clip.start) * 120) / 120 : 0;
+    const sig = `${W}x${H}|${local}|${fontsVersion()}|${clip.out}|${JSON.stringify(clip.text)}|${JSON.stringify(clip.transform || null)}`;
+    if (el.dataset.sig === sig) return;
+    el.dataset.sig = sig;
+    if (el.width !== W) el.width = W;
+    if (el.height !== H) el.height = H;
+    const ctx = el.getContext('2d');
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, W, H);
+    drawText(ctx, clip, W, H, { local });
   }
 
   // --- показ перехода/эффекта при наведении (проект не меняется) ---
@@ -499,7 +531,8 @@ export class Preview {
     } else if (L || this.master) {
       const c = L ? L[L.master].clip : this.master.clip;
       const rt = store.runtime[c.mediaId] || {};
-      if (rt.missing) text = t('Файл не найден');
+      if (isText(c)) text = '';
+      else if (rt.missing) text = t('Файл не найден');
       else if (!playUrl(c.mediaId)) text = rt.status === 'rebuild' ? t('Восстановление эффекта…') : t('Подготовка файла… {p}%', { p: Math.round((rt.progress || 0) * 100) });
       else if (this.master && this.master.el.failed) text = t('Этот файл не воспроизводится в предпросмотре');
     }

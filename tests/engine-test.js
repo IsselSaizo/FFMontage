@@ -334,6 +334,74 @@ async function effectsTest(enc) {
   assert(sil.some((s) => s.start > 6 && s.start < 6.2), `тишина в пустоте найдена: ${JSON.stringify(sil)}`);
 }
 
+// M5: текст (картинка PNG с альфой, как её готовит окно — exportAssets.js) поверх видео, титры «roll»,
+// вшитые субтитры (.ass через libass со шрифтами программы) и мягкие (mov_text).
+async function textTest(enc) {
+  console.log('Текст и субтитры:');
+  const { pathToFileURL } = require('url');
+  const js = (f) => import(pathToFileURL(path.join(__dirname, '..', 'src', 'renderer', 'js', f)).href);
+  const subs = await js('subtitles.js');
+  const codec = enc.h264_nvenc ? 'h264_nvenc' : 'libx264';
+  const W = 640; const H = 360;
+  const blue = await make('t_blue.mp4', ['-f', 'lavfi', '-i', `color=c=blue:s=${W}x${H}:r=30`, '-t', '6', '-c:v', 'libx264', '-pix_fmt', 'yuv420p']);
+  const ib = await ff.probe(blue);
+  // «Текст»: прозрачный кадр, белый прямоугольник в верхней трети (так выглядит PNG, который рисует окно)
+  const png = await make('t_text.png', ['-f', 'lavfi', '-i', `color=c=black@0:s=${W}x${H},format=rgba,drawbox=x=220:y=40:w=200:h=60:color=white@1:t=fill:replace=1`, '-frames:v', '1']);
+  // Титры: полоса W×80 с белой полосой посередине
+  const strip = await make('t_strip.png', ['-f', 'lavfi', '-i', `color=c=black@0:s=${W}x80,format=rgba,drawbox=x=100:y=20:w=440:h=40:color=white@1:t=fill:replace=1`, '-frames:v', '1']);
+  const text = (id, start, dur, extra = {}) => ({ id, kind: 'text', in: 0, out: dur, start, volume: 1, muted: true, fadeIn: 0, fadeOut: 0, text: { content: id }, ...extra });
+  const pr = {
+    media: { b: ib }, background: '#000000',
+    videoClips: [{ mediaId: 'b', in: 0, out: 6, start: 0, volume: 1, muted: true }],
+    videoTracks: [{ id: 'vtk_t', clips: [text('t1', 1, 2), text('roll', 3, 3, { text: { content: 'credits', motion: 'roll' } })] }],
+    audioTracks: [],
+    subtitleTracks: [{ id: 'stk_1', style: subs.cleanSubStyle({ position: 'bottom', size: 0.09, color: '#ffff00' }), cues: [{ id: 'c1', start: 0.5, end: 2.5, text: 'Привет, мир!' }] }],
+  };
+  const plan = await js('exportPlan.js');
+  // Без подготовленных файлов текст пропускается с предупреждением
+  const b0 = plan.buildExport(pr, { width: W, height: H, fps: 30, assets: { texts: {} } });
+  assert(b0.warnings.length === 2 && b0.inputs.filter((x) => x === '-i').length === 1, `без PNG текст пропущен: ${b0.warnings[0]}`);
+  const fontsdir = path.join(__dirname, '..', 'src', 'renderer', 'assets', 'fonts');
+  const assFile = path.join(DIR, 't_subs.ass');
+  fs.writeFileSync(assFile, subs.toAss([{ style: pr.subtitleTracks[0].style, cues: pr.subtitleTracks[0].cues }], { W, H, fontName: (f) => (f === 'Inter' ? 'Inter Variable' : f) }));
+  const assets = {
+    texts: { t1: { path: png, w: W, h: H, roll: false }, roll: { path: strip, w: W, h: 80, roll: true } },
+    subtitles: { mode: 'burn', ass: assFile, fontsdir, end: 2.5 },
+  };
+  const out = path.join(DIR, 'out_text.mp4');
+  await startExport(pr, { width: W, height: H, fps: 30, codec, quality: 'high', output: out, assets });
+  const io = await ff.probe(out);
+  assert(Math.abs(io.duration - 6) < 0.15, `длительность ${io.duration}`);
+  const isWhite = ([r, g, b]) => r > 200 && g > 200 && b > 200;
+  // Тонкие жёлтые буквы при уменьшении до 64×36 смешиваются с синим: ищем заметные красный и зелёный (у синего фона их нет)
+  const isYellow = ([r, g]) => r > 70 && g > 70;
+  const bright = (f, y0, y1, fn) => { let n = 0; for (let y = y0; y < y1; y++) for (let x = 0; x < 64; x++) if (fn(f.px(x, y))) n++; return n; };
+  const f1 = await rgb(out, 1.5);
+  assert(isWhite(f1.px(32, 6)) && isBlue(f1.px(32, 18)), `текст в верхней трети ${f1.px(32, 6)}, ниже — видео ${f1.px(32, 18)}`);
+  assert(bright(f1, 28, 36, isYellow) > 8, `субтитр жёлтым внизу: ${bright(f1, 28, 36, isYellow)} точек`);
+  const f0 = await rgb(out, 0.2);
+  assert(isBlue(f0.px(32, 6)) && bright(f0, 28, 36, isYellow) === 0, 'до начала текста и реплики — только видео');
+  const f3 = await rgb(out, 2.8);
+  assert(isWhite(f3.px(32, 6)) && bright(f3, 28, 36, isYellow) === 0, 'после конца реплики субтитра нет, текст ещё виден');
+  // Титры едут снизу вверх: в начале клипа (3 с) полоса внизу, к середине (4,5 с) — около центра
+  const rowOf = (f) => { let best = -1; let n = 0; for (let y = 0; y < 36; y++) { let k = 0; for (let x = 0; x < 64; x++) if (isWhite(f.px(x, y))) k++; if (k > n) { n = k; best = y; } } return best; };
+  const r1 = rowOf(await rgb(out, 3.4)); const r2 = rowOf(await rgb(out, 4.5)); const r3 = rowOf(await rgb(out, 5.6));
+  assert(r1 > r2 && r2 > r3 && r1 >= 24 && Math.abs(r2 - 16) <= 5, `титры едут вверх: строка ${r1} → ${r2} → ${r3}`);
+
+  // Мягкие субтитры: отдельный поток mov_text с языком
+  const srt = path.join(DIR, 't_subs.srt');
+  fs.writeFileSync(srt, subs.toSrt(pr.subtitleTracks[0].cues));
+  const out2 = path.join(DIR, 'out_softsubs.mp4');
+  await startExport(pr, { width: W, height: H, fps: 30, codec, quality: 'compact', output: out2,
+    assets: { texts: assets.texts, subtitles: { mode: 'soft', tracks: [{ path: srt, lang: 'rus', title: 'Русские' }], end: 2.5 } } });
+  const { stderr } = await ff.run(ff.findBinaries().ffmpeg, ['-hide_banner', '-i', out2, '-map', '0:s:0', '-f', 'srt', '-'], {}).catch((e) => ({ stderr: e.stderr }));
+  assert(/Subtitle: mov_text/.test(stderr) && /\(rus\)/.test(stderr), 'в MP4 поток субтитров mov_text (rus)');
+  const back = await ff.run(ff.findBinaries().ffmpeg, ['-hide_banner', '-loglevel', 'error', '-i', out2, '-map', '0:s:0', '-f', 'srt', '-']);
+  assert(back.stdout.includes('Привет, мир!'), 'текст реплики читается из файла');
+  const f4 = await rgb(out2, 1.5);
+  assert(bright(f4, 28, 36, isYellow) === 0, 'мягкие субтитры не вшиты в кадр');
+}
+
 (async () => {
   await ff.ready;
   DIR = path.join(ff.paths().temp, 'engine-test');
@@ -347,7 +415,7 @@ async function effectsTest(enc) {
   // node tests/engine-test.js --only tracks — только одна группа проверок (для отладки)
   const only = process.argv.includes('--only') ? process.argv[process.argv.indexOf('--only') + 1] : null;
   if (only) {
-    await ({ tracks: tracksTest, effects: effectsTest, speed: speedTest, plugin: pluginTest })[only](enc);
+    await ({ tracks: tracksTest, effects: effectsTest, speed: speedTest, plugin: pluginTest, text: textTest })[only](enc);
     console.log('\nВСЁ ОК');
     return;
   }
@@ -460,5 +528,6 @@ async function effectsTest(enc) {
   await speedTest(enc);
   await pluginTest(enc);
   await tracksTest(enc);
+  await textTest(enc);
   console.log('\nВСЁ ОК');
 })().catch((e) => { console.error(e); process.exit(1); });

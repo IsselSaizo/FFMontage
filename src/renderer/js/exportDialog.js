@@ -5,6 +5,7 @@ import { t, num } from './i18n.js';
 import { listExportPresets, onRegistryChange } from './registry.js';
 import { buildExport } from './exportPlan.js';
 import './core/exportPresets.js';
+import { exportableSubs } from './exportAssets.js';
 
 const api = window.api;
 let encoders = null;
@@ -61,6 +62,7 @@ export async function openExport() {
     fps: fpsOptions.find((r) => r.id === prefs.fps) ? prefs.fps : 'source',
     codec: CODECS.find((c) => c.id === prefs.codec) ? prefs.codec : 'av1',
     quality: QUALITIES.find((q) => q.id === prefs.quality) ? prefs.quality : 'high',
+    subtitles: ['burn', 'soft', 'none'].includes(prefs.subtitles) ? prefs.subtitles : 'burn',
     output: null,
   };
 
@@ -127,6 +129,8 @@ export async function openExport() {
       });
     }
     const fromPreset = (text) => h('div', { class: 'muted', title: t('Задано пресетом') }, text);
+    const hasSubs = exportableSubs(store.project).length > 0;
+    const SUB_MODES = [{ id: 'burn', label: t('Вшить в кадр') }, { id: 'soft', label: t('Отдельной дорожкой (можно выключить в плеере)') }, { id: 'none', label: t('Не добавлять') }];
 
     const qual = h('div', { class: 'segmented' }, ...QUALITIES.map((q) =>
       h('button', { class: st.quality === q.id ? 'on' : '', onclick: () => { st.quality = q.id; renderForm(); } },
@@ -145,7 +149,9 @@ export async function openExport() {
           h('label', {}, t('Разрешение')), preset ? fromPreset(`${preset.width}×${preset.height}`) : select(resOptions, 'res'),
           h('label', {}, t('Частота кадров')), preset ? fromPreset(`${preset.fps} fps`) : select(fpsOptions, 'fps'),
           h('label', {}, t('Кодек')), codecCards,
-          h('label', {}, t('Качество')), qual),
+          h('label', {}, t('Качество')), qual,
+          hasSubs ? h('label', {}, t('Субтитры в видео')) : null,
+          hasSubs ? select(SUB_MODES, 'subtitles') : null),
         h('p', { class: 'muted small' },
           encoderFor(st.codec).gpu
             ? t('Длительность ролика: {dur}. Кодирование идёт на видеокарте NVIDIA — быстро. Звук: AAC 192 кбит/с, 48 кГц.', { dur: fmtTime(store.duration()) })
@@ -159,7 +165,7 @@ export async function openExport() {
 
   // ---------------- Экспорт ----------------
   async function start() {
-    savePrefs({ res: st.res, fps: st.fps, codec: st.codec, quality: st.quality, preset: st.preset });
+    savePrefs({ res: st.res, fps: st.fps, codec: st.codec, quality: st.quality, preset: st.preset, subtitles: st.subtitles });
     if (st.name && st.name !== store.project.name) store.mutate((p) => { p.name = st.name; });
     const preset = presetById(st.preset);
     const res = preset ? { w: preset.width, h: preset.height } : resOptions.find((r) => r.id === st.res);
@@ -167,7 +173,7 @@ export async function openExport() {
     const enc = encoderFor(st.codec);
     const output = st.output || await api.defaultExportPath(st.name || t('Видео'));
     const exists = await api.exists(output);
-    const settings = { width: res.w, height: res.h, fps: fps.v, codec: enc.enc, quality: st.quality, output };
+    const settings = { width: res.w, height: res.h, fps: fps.v, codec: enc.enc, quality: st.quality, output, subtitles: st.subtitles };
     // Что экспорт пропустит (эффекты и переходы пропавших плагинов) — показать до и после
     let warnings = [];
     try { warnings = buildExport(JSON.parse(JSON.stringify(store.project)), settings).warnings || []; } catch { /* ошибку покажет сам экспорт */ }

@@ -44,7 +44,7 @@
   "homepage": "https://github.com/…",
   "entry": "main.js",
   "contributes": {
-    "effects": [], "transitions": [], "audioEffects": [], "exportPresets": [],
+    "effects": [], "transitions": [], "audioEffects": [], "exportPresets": [], "textStyles": [],
     "keymaps": [], "actions": [], "panels": []
   },
   "permissions": ["project:read", "storage"],
@@ -75,7 +75,7 @@
 
 Инструменты для `ffm.tools.call`: `get_project`, `add_clip`, `update_clip`, `split_clip`, `delete_clip`,
 `reverse_clip`, `freeze_frame`, `set_transition`, `close_gaps`, `add_video_track`, `update_video_track`, `set_transform`,
-`undo`, `redo`, `set_playhead` (аргументы — как
+`add_text`, `update_text`, `set_subtitles` (без `path`), `update_subtitles`, `undo`, `redo`, `set_playhead` (аргументы — как
 у ИИ-ассистента, см. описание MCP). Файловые инструменты и экспорт плагинам недоступны. `ffm.commands.execute`
 не выполняет действия меню «Файл» и действия других плагинов.
 
@@ -134,6 +134,21 @@
   `compressor` (`threshold`, `ratio`, `attack`, `release`, `knee`), `gain` (`gain`). Без `webaudio`
   эффект слышно только в готовом файле (как шумоподавление).
 
+## Стиль текста
+
+```json
+"textStyles": [ {
+  "id": "neon", "name": { "ru": "Неон", "en": "Neon" }, "kind": "title", "duration": 4,
+  "text": { "content": "NEON", "font": "Inter", "size": 0.12, "weight": 800, "color": "#ff4dff",
+            "strokeWidth": 0.04, "strokeColor": "#2a003a", "shadowOpacity": 0.8, "shadowColor": "#ff00ff", "shadowBlur": 0.3 },
+  "transform": { "y": -0.2 }
+} ]
+```
+- Стиль появляется плиткой во вкладке «Текст»; щелчок ставит текстовый клип с этим оформлением.
+- `kind` — `title`, `lower`, `caption`, `credits` или `other`; `duration` — 0,5…600 с; `transform` — как у `set_transform`.
+- Поля `text`: `content`, `font` (имя шрифта: встроенные `Inter`, `Open Sans` или свой шрифт пользователя — если его нет, будет запасной), `size` (высота шрифта в долях высоты кадра), `weight`, `italic`, `color`, `align` (`left`/`center`/`right`), `lineHeight`, `letterSpacing` (em), `wrap` (ширина строки в долях кадра, 0 — без переноса), `strokeWidth`/`strokeColor` (обводка в долях размера шрифта), `shadowOpacity`/`shadowColor`/`shadowBlur`/`shadowX`/`shadowY`, `box`/`boxColor`/`boxOpacity`/`boxPad`/`boxRadius` (подложка), `motion` (`none` или `roll` — титры снизу вверх). Неизвестные поля — ошибка регистрации.
+- Текст рисует сама программа (один и тот же код для плеера и для экспорта), поэтому плагин задаёт только оформление.
+
 ## Пресет экспорта, пресет клавиш, действие, панель
 
 ```json
@@ -161,7 +176,7 @@ ffm.project.get()                                           // снимок пр
 ffm.project.subscribe((project) => {})                      // изменения проекта
 ffm.commands.list() / ffm.commands.execute('clip.split')    // действия программы (как горячие клавиши)
 ffm.tools.call('update_clip', { clip_id, volume: 0.5 })     // инструменты ИИ-ассистента (кроме файловых и экспорта)
-ffm.register.effect(desc) / .transition / .audioEffect / .exportPreset / .keymap
+ffm.register.effect(desc) / .transition / .audioEffect / .exportPreset / .textStyle / .keymap
 ffm.register.action({ id, title, keys }, handler)
 ffm.ui.notify('Готово', 'success')                          // 'info' | 'success' | 'error'
 ffm.storage.get() / ffm.storage.set({ … })

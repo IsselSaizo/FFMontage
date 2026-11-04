@@ -6,5 +6,6 @@ import panels from './en/panels.js';
 import mcp from './en/mcp.js';
 import plugins from './en/plugins.js';
 import fxcore from './en/fxcore.js';
+import text from './en/text.js';
 
-export const EN = Object.assign({}, core, timeline, clip, panels, mcp, plugins, fxcore);
+export const EN = Object.assign({}, core, timeline, clip, panels, mcp, plugins, fxcore, text);

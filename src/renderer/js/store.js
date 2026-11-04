@@ -5,6 +5,8 @@ import { speedOf, tlLen, clipEnd, srcAt, tlAt, MIN_SPEED, MAX_SPEED } from './cl
 import { newAudioFx } from './audioFx.js';
 import { MIN_DURATION as TR_MIN, MAX_DURATION as TR_MAX, DEFAULT_DURATION as TR_DEFAULT } from './transitions.js';
 import { cleanTransform } from './transform.js';
+import { isText, cleanText, textTitle, TEXT_MAX, TEXT_DEFAULT_DUR } from './textModel.js';
+import { cleanSubStyle } from './subtitles.js';
 
 export const MIN_CLIP = 0.1;   // минимальная длина клипа, с
 export const ADJ = 0.002;      // допуск «стоят впритык», с
@@ -63,6 +65,39 @@ export function vlaneOf(p, clip) {
 }
 export const allVideo = (p) => [...(p.videoClips || []), ...(p.videoTracks || []).flatMap((tr) => tr.clips || [])];
 
+// Текстовые клипы (M5.1) лежат на видеодорожках: { id, kind: 'text', in: 0, out: длина, start, fadeIn, fadeOut, text, transform?, transition? }
+// (без mediaId, звука и скорости). Оформление — textModel.js, отрисовка — textRender.js.
+// Дорожки субтитров (M5.5): p.subtitleTracks [{ id, name?, hidden?, locked?, style, cues: [{ id, start, end, text }] }] —
+// реплики по времени (могут перекрываться), стиль — subtitles.js cleanSubStyle; на экспорт — один .ass (libass) или мягкие субтитры.
+export const newSubtitleTrack = (extra = {}) => ({ id: uid('stk'), style: cleanSubStyle({}), cues: [], ...extra });
+export const MIN_CUE = 0.1;
+const cueTime = (x) => Math.round(Math.max(0, Number(x) || 0) * 1000) / 1000;
+export function fixCues(cues) {
+  const out = [];
+  for (const c of Array.isArray(cues) ? cues : []) {
+    if (!c || typeof c !== 'object') continue;
+    const start = cueTime(c.start);
+    const end = Math.max(start + MIN_CUE, cueTime(c.end));
+    const text = String(c.text ?? '').replace(/\r\n?/g, '\n').replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, '').slice(0, 2000);
+    out.push({ id: typeof c.id === 'string' && c.id ? c.id : uid('cue'), start, end: Math.round(end * 1000) / 1000, text });
+  }
+  return out.sort((a, b) => a.start - b.start || a.end - b.end);
+}
+function fixSubTracks(s) {
+  const list = Array.isArray(s.subtitleTracks) ? s.subtitleTracks.filter((x) => x && typeof x === 'object') : [];
+  for (const tr of list) {
+    if (!tr.id) tr.id = uid('stk');
+    tr.style = cleanSubStyle(tr.style || {});
+    tr.cues = fixCues(tr.cues);
+    if (tr.hidden) tr.hidden = true; else delete tr.hidden;
+    if (tr.locked) tr.locked = true; else delete tr.locked;
+    if (typeof tr.name !== 'string' || !tr.name.trim()) delete tr.name;
+    if (!/^[a-z]{2,3}$/.test(tr.lang || '')) delete tr.lang;
+  }
+  if (list.length) s.subtitleTracks = list; else delete s.subtitleTracks;
+}
+export const subsEnd = (p) => (p.subtitleTracks || []).reduce((e, tr) => tr.cues.reduce((x, c) => Math.max(x, c.end), e), 0);
+
 export function emptyProject() {
   return {
     version: 2,
@@ -89,6 +124,12 @@ export function normalizeProject(p) {
     c.muted = !!c.muted;
     c.fadeIn = Math.max(0, Number(c.fadeIn) || 0);
     c.fadeOut = Math.max(0, Number(c.fadeOut) || 0);
+    if (c.kind === 'text') {
+      c.text = cleanText(c.text);
+      const d = Math.min(TEXT_MAX, Math.max(MIN_CLIP, (Number(c.out) || 0) - (Number(c.in) || 0)) || TEXT_DEFAULT_DUR);
+      c.in = 0; c.out = d; c.muted = true;
+      delete c.mediaId; delete c.speed; delete c.link; delete c.noAudio; delete c.crop; delete c.fit; delete c.effects; delete c.afx;
+    } else if (c.kind !== undefined) delete c.kind;
   };
   const fixTracks = (tracks) => {
     for (const t of tracks) {
@@ -116,13 +157,15 @@ export function normalizeProject(p) {
   p.videoClips.forEach(fix);
   fixVTracks(p);
   fixTracks(p.audioTracks);
+  fixSubTracks(p);
   // Эпизоды (кроме открытого) хранят своё содержимое сами
   if (Array.isArray(p.episodes) && p.episodes.length) {
     if (!p.episodes.some((e) => e.id === p.activeEpisode)) p.activeEpisode = p.episodes[0].id;
     for (const e of p.episodes) {
-      if (e.id === p.activeEpisode) { delete e.videoClips; delete e.audioTracks; delete e.videoTracks; delete e.overlayClips; continue; }
+      if (e.id === p.activeEpisode) { delete e.videoClips; delete e.audioTracks; delete e.videoTracks; delete e.overlayClips; delete e.subtitleTracks; continue; }
       e.videoClips = e.videoClips || []; e.videoClips.forEach(fix);
       fixVTracks(e);
+      fixSubTracks(e);
       e.audioTracks = e.audioTracks && e.audioTracks.length ? e.audioTracks : [newTrack()];
       fixTracks(e.audioTracks);
     }
@@ -151,6 +194,8 @@ export function fixup(p) {
     list.sort(byStart);
     list.forEach(fades);
     list.forEach((c, i) => {
+      // Текст: in всегда 0 (обрезка слева у текста просто укорачивает/удлиняет клип)
+      if (isText(c) && c.in) { c.out = Math.max(MIN_CLIP, c.out - c.in); c.in = 0; }
       if (c.transform) { const tf = cleanTransform(c.transform); if (tf) c.transform = tf; else delete c.transform; }
       if (!c.transition) return;
       const prev = list[i - 1];
@@ -394,7 +439,9 @@ class Store {
     const s = this.selection;
     if (!s) return;
     let ok = s.kind === 'track' ? this.project.audioTracks.some((t) => t.id === s.id)
-      : s.kind === 'vtrack' ? !!vlane(this.project, s.id) : !!this.findClip(s.id);
+      : s.kind === 'vtrack' ? !!vlane(this.project, s.id)
+        : s.kind === 'cue' ? !!this.findCue(s.id)
+          : s.kind === 'strack' ? !!this.subtitleTrack(s.id) : !!this.findClip(s.id);
     if (ok && s.kind === 'transition') ok = !!this.junctionBefore(s.id);
     if (!ok) { this.selection = null; this.emit('selection'); }
   }
@@ -436,7 +483,7 @@ class Store {
     for (const t of this.project.audioTracks) for (const c of t.clips) e = Math.max(e, end(c));
     return e;
   }
-  duration() { return Math.max(this.videoEnd(), this.audioEnd(), this.upperEnd()); }
+  duration() { return Math.max(this.videoEnd(), this.audioEnd(), this.upperEnd(), subsEnd(this.project)); }
 
   // --- Клипы поверх ролика (анимации и т.п.): на верхнюю видеодорожку, где в этом месте свободно ---
   laneFree(laneId, start, dur, exclude = null) {
@@ -514,6 +561,7 @@ class Store {
   // Название клипа для показа: своё имя → имя исходного файла (у реверса/стоп-кадра — имя оригинала)
   clipName(c) {
     if (c.name) return c.name;
+    if (isText(c)) return textTitle(c) || t('Текст');
     const m = this.media(c.mediaId);
     if (!m) return '?';
     if (m.derived) { const src = this.media(m.derived.from); return src ? src.name : m.name; }
@@ -666,7 +714,7 @@ class Store {
   swapIn(p, id) {
     const cur = p.episodes.find((e) => e.id === p.activeEpisode);
     // Поля открытого эпизода, кроме клипов: имя и флаги основной видеодорожки, верхние видеодорожки
-    const OWN = ['videoTracks', 'videoName', 'videoHidden', 'videoLocked'];
+    const OWN = ['videoTracks', 'videoName', 'videoHidden', 'videoLocked', 'subtitleTracks'];
     if (cur) {
       cur.videoClips = p.videoClips; cur.audioTracks = p.audioTracks; cur.time = this.time;
       for (const k of OWN) { if (p[k] !== undefined) cur[k] = p[k]; else delete cur[k]; }
@@ -1020,7 +1068,7 @@ class Store {
   //   ripple = true:  всё, что начинается не раньше старого конца клипа (на всех дорожках), сдвигается на разницу.
   setSpeed(id, speed, { ripple = false } = {}, opts) {
     const f = this.findClip(id);
-    if (!f) return false;
+    if (!f || isText(f.clip)) return false;
     const m = this.media(f.clip.mediaId);
     if (m && m.isImage && !m.isAnimation) return false;   // у картинки скорости нет — только длительность
     const s = clamp(Number(speed) || 1, MIN_SPEED, MAX_SPEED);
@@ -1128,7 +1176,7 @@ class Store {
     if (!f) return false;
     const m = this.media(f.clip.mediaId);
     const sp = speedOf(f.clip);
-    const nout = clamp(f.clip.in + dur * sp, f.clip.in + MIN_CLIP * sp, m ? m.duration : f.clip.out);
+    const nout = clamp(f.clip.in + dur * sp, f.clip.in + MIN_CLIP * sp, isText(f.clip) ? TEXT_MAX : m ? m.duration : f.clip.out);
     this.mutate((p) => {
       const c = this.findClip(id).clip;
       const oldEnd = end(c);
@@ -1285,7 +1333,7 @@ class Store {
   // Вставить скопированный клип в позицию курсора
   paste(at = this.time, lane = null) {
     const cb = this.clipboard;
-    if (!cb || !this.media(cb.clip.mediaId)) return null;
+    if (!cb || (!isText(cb.clip) && !this.media(cb.clip.mediaId))) return null;
     const copy = { ...JSON.parse(JSON.stringify(cb.clip)), id: uid('clp'), start: Math.max(0, at) };
     this.mutate((p) => {
       if (cb.kind === 'video') {
@@ -1315,6 +1363,145 @@ class Store {
       b.transition = { type, duration: clamp(d, TR_MIN, Math.max(TR_MIN, maxTransition(j.a, b))) };
     });
     return true;
+  }
+
+  // ------------------------------------------------------------------------
+  // Текст (M5.1)
+  // ------------------------------------------------------------------------
+  // Новый текстовый клип. style — стиль из реестра (registry.textStyleById) или null; text — поля оформления поверх стиля.
+  //   at — время (по умолчанию курсор), lane — видеодорожка ('new' — новая верхняя; по умолчанию — верхняя, где свободно).
+  addTextClip({ style = null, text = {}, at = this.time, duration = null, lane = null, transform = null, select = true } = {}) {
+    const st = style || null;
+    const d = clamp(Number(duration) || (st && st.duration) || TEXT_DEFAULT_DUR, MIN_CLIP, TEXT_MAX);
+    const clip = {
+      id: uid('clp'), kind: 'text', in: 0, out: d, start: Math.max(0, Number(at) || 0), volume: 1, muted: true, fadeIn: 0, fadeOut: 0,
+      text: cleanText({ ...(st ? { style: st.id } : {}), ...(text || {}) }, st ? st.text : null),
+    };
+    if (!clip.text.content) clip.text.content = t('Текст');
+    const tf = cleanTransform(transform || (st && st.transform) || null);
+    if (tf) clip.transform = tf;
+    let ok = true;
+    this.mutate((p) => {
+      const tracks = p.videoTracks || [];
+      let tr = null;
+      if (lane && lane !== 'new') {
+        const L = vlane(p, lane);
+        if (!L || L.locked) { ok = false; return; }
+        L.clips.push(clip);
+        overwriteVideo(p, clip, clip.start);
+        return;
+      }
+      if (lane !== 'new') tr = [...tracks].reverse().find((x) => !x.locked && x.clips.every((c) => end(c) <= clip.start + ADJ || c.start >= clip.start + d - ADJ));
+      if (!tr) { tr = newVideoTrack(); p.videoTracks = [...tracks, tr]; }
+      tr.clips.push(clip);
+    });
+    if (!ok) return null;
+    if (select) this.select({ kind: 'video', id: clip.id });
+    return clip;
+  }
+
+  // Оформление текстовых клипов: patch поверх текущего (textModel.cleanText). live — без записи в историю.
+  setText(ids, patch, { live = false } = {}) {
+    const set = new Set(Array.isArray(ids) ? ids : [ids]);
+    const fn = (p) => { for (const c of allVideo(p)) if (set.has(c.id) && isText(c)) c.text = cleanText(patch, c.text); };
+    if (live) this.live(fn); else this.mutate(fn);
+  }
+
+  // ------------------------------------------------------------------------
+  // Субтитры (M5.5)
+  // ------------------------------------------------------------------------
+  subtitleTracks() { return this.project.subtitleTracks || []; }
+  subtitleTrack(id) { return this.subtitleTracks().find((x) => x.id === id) || null; }
+  findCue(id) {
+    for (const track of this.subtitleTracks()) { const cue = track.cues.find((c) => c.id === id); if (cue) return { cue, track }; }
+    return null;
+  }
+  subtitleTrackName(id) {
+    const i = this.subtitleTracks().findIndex((x) => x.id === id);
+    const tr = this.subtitleTracks()[i];
+    return (tr && tr.name) || t('Субтитры {n}', { n: i + 1 });
+  }
+  // Новая дорожка субтитров; возвращает id
+  addSubtitleTrack(extra = {}) {
+    const tr = newSubtitleTrack();
+    if (extra.name) tr.name = String(extra.name).slice(0, 60);
+    if (extra.style) tr.style = cleanSubStyle(extra.style);
+    if (extra.cues) tr.cues = fixCues(extra.cues);
+    this.mutate((p) => { p.subtitleTracks = [...(p.subtitleTracks || []), tr]; fixSubTracks(p); });
+    return tr.id;
+  }
+  removeSubtitleTrack(id) {
+    if (!this.subtitleTrack(id)) return false;
+    this.mutate((p) => { p.subtitleTracks = (p.subtitleTracks || []).filter((x) => x.id !== id); fixSubTracks(p); });
+    return true;
+  }
+  // name / hidden / locked / style (style — patch поверх текущего)
+  setSubtitleTrack(id, patch, opts) {
+    this.mutate((p) => {
+      const tr = (p.subtitleTracks || []).find((x) => x.id === id);
+      if (!tr) return;
+      if (patch.name !== undefined) { const n = String(patch.name || '').trim().slice(0, 60); if (n) tr.name = n; else delete tr.name; }
+      if (patch.hidden !== undefined) { if (patch.hidden) tr.hidden = true; else delete tr.hidden; }
+      if (patch.locked !== undefined) { if (patch.locked) tr.locked = true; else delete tr.locked; }
+      if (patch.style) tr.style = cleanSubStyle({ ...tr.style, ...patch.style });
+      if (patch.lang !== undefined) { if (/^[a-z]{2,3}$/.test(patch.lang || '')) tr.lang = patch.lang; else delete tr.lang; }
+    }, opts);
+  }
+  // Реплика на дорожке (нет дорожки — создаётся); возвращает id реплики
+  addCue(trackId, { start = this.time, end: e = null, text = '' } = {}) {
+    let tid = trackId && this.subtitleTrack(trackId) ? trackId : null;
+    if (!tid) tid = this.subtitleTracks()[0] ? this.subtitleTracks()[0].id : this.addSubtitleTrack();
+    const s = cueTime(start);
+    const cue = { id: uid('cue'), start: s, end: e === null ? s + 2 : Number(e), text: String(text ?? '') };
+    this.mutate((p) => {
+      const tr = p.subtitleTracks.find((x) => x.id === tid);
+      tr.cues = fixCues([...tr.cues, cue]);
+    });
+    return cue.id;
+  }
+  // patch: { start?, end?, text? }; live — без истории (перетаскивание)
+  setCue(id, patch, { live = false } = {}) {
+    const fn = (p) => {
+      for (const tr of p.subtitleTracks || []) {
+        const c = tr.cues.find((x) => x.id === id);
+        if (!c) continue;
+        if (patch.start !== undefined) c.start = patch.start;
+        if (patch.end !== undefined) c.end = patch.end;
+        if (patch.text !== undefined) c.text = String(patch.text ?? '');
+        tr.cues = fixCues(tr.cues);
+      }
+    };
+    if (live) this.live(fn); else this.mutate(fn);
+  }
+  deleteCue(id) {
+    if (!this.findCue(id)) return false;
+    this.mutate((p) => { for (const tr of p.subtitleTracks || []) tr.cues = tr.cues.filter((c) => c.id !== id); });
+    return true;
+  }
+  // Разрезать реплику по времени: левая часть — до t, правая — после, текст копируется
+  splitCue(id, at) {
+    const f = this.findCue(id);
+    if (!f || at <= f.cue.start + MIN_CUE || at >= f.cue.end - MIN_CUE) return false;
+    this.mutate((p) => {
+      const tr = p.subtitleTracks.find((x) => x.id === f.track.id);
+      const c = tr.cues.find((x) => x.id === id);
+      tr.cues = fixCues([...tr.cues, { id: uid('cue'), start: at, end: c.end, text: c.text }]);
+      tr.cues.find((x) => x.id === id).end = cueTime(at);
+    });
+    return true;
+  }
+  // Импорт реплик: на новую дорожку (trackId null) или заменить содержимое дорожки trackId; shift — сдвиг по времени
+  importCues(cues, { trackId = null, name = null, style = null, shift = 0 } = {}) {
+    const list = fixCues((cues || []).map((c) => ({ start: c.start + shift, end: c.end + shift, text: c.text })));
+    if (trackId && this.subtitleTrack(trackId)) {
+      this.mutate((p) => {
+        const tr = p.subtitleTracks.find((x) => x.id === trackId);
+        tr.cues = list;
+        if (style) tr.style = cleanSubStyle({ ...tr.style, ...style });
+      });
+      return trackId;
+    }
+    return this.addSubtitleTrack({ name, style: style ? cleanSubStyle(style) : null, cues: list });
   }
 
   serialize() {

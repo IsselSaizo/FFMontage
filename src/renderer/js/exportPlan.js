@@ -17,6 +17,7 @@ import { ffAudioFx, unknownFx } from './audioFx.js';
 import { TRANSITIONS } from './transitions.js';
 import { t } from './i18n.js';
 import { tfOf, isIdentity } from './transform.js';
+import { ffPath } from './core/ffEscape.js';
 
 export const QUALITY = {
   // Значение CQ: меньше — лучше качество и больше файл
@@ -99,6 +100,16 @@ export function buildExport(project, settings) {
     if (!TRANSITIONS.some((x) => x.id === type)) warnings.add(t('Переход «{id}» не найден (нет плагина) — заменён растворением', { id: String(type) }));
   };
 
+  // Подготовленные окном файлы (js/exportAssets.js): картинки текстов { [clipId]: { path, w, h, roll } }, субтитры
+  const assets = settings.assets || null;
+  const textImg = (assets && assets.texts) || {};
+  const warnText = (c) => { if (assets) warnings.add(t('Текст «{name}» не подготовлен к экспорту — пропущен', { name: String((c.text && c.text.content) || '').split('\n')[0].slice(0, 30) })); };
+  // Текстовый клип → картинка PNG W×H (или полоса титров W×h) с альфой; трансформ уже нарисован в ней
+  const asMedia = (c) => {
+    if (c.kind !== 'text') return media[c.mediaId];
+    const a = textImg[c.id];
+    return a && a.path ? { path: a.path, isImage: true, hasVideo: true, hasAudio: false, width: a.w, height: a.h, _text: a } : null;
+  };
   const still = (m) => m.isImage && !m.isAnimation;
   // alpha — видео с прозрачностью (WebM VP9 alpha читает только libvpx-vp9 — он ставится перед -i)
   const addInput = (m, ss, dur, alpha = false) => {
@@ -171,8 +182,9 @@ export function buildExport(project, settings) {
     // Метки основной дорожки — без префикса (как в 0.3), у верхних — свой префикс
     const P = li ? `l${li}_` : '';
     const alpha = !L.main;
+    for (const c of L.clips) if (c.kind === 'text' && !L.hidden && clipDuration(c) > 0.001 && !asMedia(c)) warnText(c);
     const vclips = L.clips
-      .filter((c) => clipDuration(c) > 0.001 && media[c.mediaId])
+      .filter((c) => clipDuration(c) > 0.001 && asMedia(c))
       .map((c, i) => ({ ...c, start: Number.isFinite(c.start) ? c.start : NaN, _i: i }));
     // Старые проекты без start: встык
     if (vclips.some((c) => !Number.isFinite(c.start))) { let t = 0; for (const c of vclips) { c.start = t; t += clipDuration(c); } }
@@ -196,7 +208,7 @@ export function buildExport(project, settings) {
       chain = null;
     };
     vclips.forEach((c, i) => {
-      const m = media[c.mediaId];
+      const m = asMedia(c);
       const len = clipDuration(c);
       const sp = still(m) ? 1 : speedOf(c);   // время таймлайна × sp = время файла
       const h = tin[i] / 2; const t = tout[i] / 2;
@@ -218,19 +230,25 @@ export function buildExport(project, settings) {
       const tail = (freezeHead > 0.0005 ? `,tpad=start_mode=clone:start_duration=${n6(freezeHead)}` : '') +
         `,tpad=stop_mode=clone:stop_duration=${n6(t + 2)},trim=duration=${n6(S)},setpts=PTS-STARTPTS` +
         `${vFades(c, h, len, alpha)}[${P}s${i}]`;
+      // Текст: картинка уже нужного размера и на своём месте; титры «roll» — полоса, которая едет снизу вверх
+      // (y — выражение overlay по времени: у одиночного клипа верхней дорожки t — время ролика, иначе — время клипа)
+      const tx = m._text;
+      const rollY = (t0) => `y=${H}-(t-${n6(t0)})/${n6(len)}*${H + tx.h}`;
+      const chainOf = (cc) => (tx ? `fps=${F},setsar=1,format=yuva420p` : layerChain(cc));
+      const posOf = (cc, local) => (tx ? (tx.roll ? `x=0:${rollY(local ? h : cc.start)}` : 'x=0:y=0') : layerPos(cc));
       if (showVideo) {
         warnFx(c);
-        const src = `[${k}:v]${vSpeed(sp)},${ffEffects(c, m.width)}`;
-        if (!alpha && isIdentity(tfOf(c))) {
+        const src = `[${k}:v]${vSpeed(sp)},${tx ? '' : ffEffects(c, m.width)}`;
+        if (!alpha && !tx && isIdentity(tfOf(c))) {
           filters.push(`${src}${scaleChain(c)}${tail}`);
         } else if (direct) {
-          filters.push(`${src}${layerChain(c)}${tail}`);
+          filters.push(`${src}${chainOf(c)}${tail}`);
         } else {
           // Слой на холсте во весь кадр: цвет фона (основная дорожка) или прозрачный (верхние, для переходов)
           const cv = alpha ? `color=c=black@0:s=${W}x${H}:r=${F},format=yuva420p` : `color=c=0x${bg}:s=${W}x${H}:r=${F},format=yuv420p`;
-          filters.push(`${src}${layerChain(c)}[${P}ly${i}]`);
+          filters.push(`${src}${chainOf(c)}[${P}ly${i}]`);
           filters.push(`${cv}[${P}cv${i}]`);
-          filters.push(`[${P}cv${i}][${P}ly${i}]overlay=${layerPos(c)}:shortest=1:format=auto,format=${alpha ? 'yuva420p' : 'yuv420p'},setsar=1${tail}`);
+          filters.push(`[${P}cv${i}][${P}ly${i}]overlay=${posOf(c, true)}:shortest=1:format=auto,format=${alpha ? 'yuva420p' : 'yuv420p'},setsar=1${tail}`);
         }
       } else if (L.main) {
         filters.push(`${black(S)}[${P}s${i}]`);
@@ -255,7 +273,7 @@ export function buildExport(project, settings) {
         chain = `[${P}s${i}]`;
         chainLen = S;
         runStart = c.start; runN = 1;
-        runPos = direct && showVideo ? layerPos(c) : null;
+        runPos = direct && showVideo ? posOf(c, false) : null;
       }
       cursor = c.start + len;
       if (L.main) videoEnd = Math.max(videoEnd, cursor); else upperEnd = Math.max(upperEnd, cursor);
@@ -313,8 +331,16 @@ export function buildExport(project, settings) {
     }
   });
 
-  const total = Math.max(videoEnd, audioEnd, upperEnd);
+  // --- Субтитры (M5.5): вшить — один .ass через libass (фильтр ass), мягкие — отдельные потоки mov_text ---
+  const subs = (assets && assets.subtitles) || null;
+  const burn = subs && subs.mode === 'burn' && subs.ass ? subs : null;
+  const soft = subs && subs.mode === 'soft' && Array.isArray(subs.tracks) ? subs.tracks.filter((x) => x && x.path) : [];
+  const subsEnd = subs && Number.isFinite(subs.end) ? subs.end : 0;
+  const subInputs = soft.map((s) => { inputs.push('-i', s.path); return { ...s, k: inputs.filter((x) => x === '-i').length - 1 }; });
+
+  const total = Math.max(videoEnd, audioEnd, upperEnd, subsEnd);
   if (total <= 0.01) throw new Error(t('Таймлайн пуст — нечего экспортировать.'));
+  const VOUT = burn ? '[vsub]' : '[vout]';
 
   // Если звук длиннее видео — добиваем чёрным кадром
   if (total - videoEnd > 0.0005) {
@@ -324,17 +350,21 @@ export function buildExport(project, settings) {
   // xfade может отдать 4:4:4 (FFmpeg 9) — high-профиль H.264 его не принимает, поэтому на выходе всегда 4:2:0
   // Верхние видеодорожки: каждый кусок (одиночный клип или цепочка клипов с переходами) ставится на своё время
   // и накладывается overlay снизу вверх; до начала и после конца куска видно то, что под ним (eof_action=pass)
-  const vbase = runs.length ? '[vbase]' : '[vout]';
+  const vbase = runs.length ? '[vbase]' : VOUT;
   if (pieces.length === 1) filters.push(`${pieces[0]}format=yuv420p${vbase}`);
   else filters.push(`${pieces.join('')}concat=n=${pieces.length}:v=1:a=0,format=yuv420p${vbase}`);
   let cur = vbase;
   runs.forEach((r, i) => {
-    const out = i === runs.length - 1 ? '[vout]' : `[vo${i}]`;
+    const out = i === runs.length - 1 ? VOUT : `[vo${i}]`;
     const a = r.start; const b = Math.min(total, r.start + r.len);
     filters.push(`${r.label}setpts=PTS-STARTPTS+${n6(a)}/TB[ov${i}]`);
     filters.push(`${cur}[ov${i}]overlay=${r.pos || '0:0'}:format=auto:eof_action=pass:enable='between(t,${n6(a)},${n6(b)})',format=yuv420p${out}`);
     cur = out;
   });
+  if (burn) {
+    // Шрифты — из папки, которую готовит программа (встроенные + свои); размер холста ASS = кадр экспорта
+    filters.push(`[vsub]ass=filename=${ffPath(burn.ass)}${burn.fontsdir ? `:fontsdir=${ffPath(burn.fontsdir)}` : ''}:original_size=${W}x${H},format=yuv420p[vout]`);
+  }
 
   const tail = `apad,atrim=duration=${n6(total)},alimiter=limit=0.98:attack=5:release=50:level=0[aout]`;
   if (!audio.length) filters.push(`anullsrc=r=48000:cl=stereo,atrim=duration=${n6(total)}[aout]`);
@@ -342,7 +372,22 @@ export function buildExport(project, settings) {
   else filters.push(`${audio.join('')}amix=inputs=${audio.length}:duration=longest:dropout_transition=0:normalize=0,${tail}`);
 
   const filter = filters.join(';\n');
-  return { inputs, filter, duration: total, W, H, F, warnings: [...warnings] };
+  return { inputs, filter, duration: total, W, H, F, warnings: [...warnings], subtitles: subInputs };
+}
+
+// Мягкие субтитры: -map k:s, кодек mov_text (MP4), язык и название потока
+function subtitleArgs(list) {
+  if (!list || !list.length) return [];
+  const out = [];
+  list.forEach((s) => out.push('-map', `${s.k}:s`));
+  out.push('-c:s', 'mov_text');
+  list.forEach((s, i) => {
+    if (/^[a-z]{2,3}$/.test(s.lang || '')) out.push(`-metadata:s:s:${i}`, `language=${s.lang}`);
+    const title = String(s.title || '').replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 64);
+    if (title) out.push(`-metadata:s:s:${i}`, `title=${title}`);
+  });
+  out.push('-disposition:s:0', 'default');
+  return out;
 }
 
 // Полная команда для программы: @@FILTER@@ и @@OUT@@ подставит export.rs
@@ -354,6 +399,7 @@ export function exportCommand(project, settings, ffMajor = 99) {
   const args = ['-hide_banner', '-y', '-nostdin', ...plan.inputs,
     ...filterArgs,
     '-map', '[vout]', '-map', '[aout]',
+    ...subtitleArgs(plan.subtitles),
     ...encoderArgs(settings.codec, settings.quality, plan.F),
     ...cfrArgs,
     '-c:a', 'aac', '-b:a', '192k', '-ar', '48000',

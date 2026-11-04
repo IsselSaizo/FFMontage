@@ -11,6 +11,8 @@ import { clipEffects, unknownEffects, effectById, effectValues } from './effects
 import { onRegistryChange } from './registry.js';
 import { speedOf, tlLen, fmtSpeed, SPEED_PRESETS, MIN_SPEED, MAX_SPEED } from './clipTime.js';
 import { tfOf, cleanTransform, TF_DEFAULT } from './transform.js';
+import { isText } from './textModel.js';
+import { renderTextClip, renderCue, renderSubTrack } from './textInspector.js';
 
 // Число как есть, но с десятичным разделителем языка: 0,8 / 0.8 (без лишних нулей, в отличие от i18n num)
 const dec = (x) => (getLang() === 'ru' ? String(x).replace('.', ',') : String(x));
@@ -113,8 +115,15 @@ export function initInspector() {
     root.innerHTML = '';
     const s = store.selection;
     if (s && s.kind === 'transition') return renderTransition(s.id);
+    // liveStart/liveEnd — правка «вживую» (ввод текста): панель не перерисовывается, в историю — одна запись
+    const liveStart = () => { if (!liveBefore) liveBefore = store.snapshot(); };
+    const liveEnd = () => { if (liveBefore) { const b = liveBefore; liveBefore = null; store.commitFrom(b); render(); } };
+    const ui = { root, liveSlider, secInput, transformSection, num, render, liveStart, liveEnd };
+    if (s && s.kind === 'cue' && store.findCue(s.id)) { renderCue(ui, s.id); applyFocus(); return; }
+    if (s && s.kind === 'strack' && store.subtitleTrack(s.id)) { renderSubTrack(ui, s.id); applyFocus(); return; }
     const sel = s ? store.findClip(s.id) : null;
     if (!sel) return renderProject();
+    if (isText(sel.clip)) { renderTextClip(ui, sel); applyFocus(); return; }
     const { kind, clip } = sel;
     const m = store.media(clip.mediaId) || {};
     const srcMedia = m.derived ? store.media(m.derived.from) || m : m;

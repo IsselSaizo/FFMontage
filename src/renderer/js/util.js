@@ -220,6 +220,8 @@ const P = {
   unlock: '<rect x="5" y="10.5" width="14" height="10" rx="2" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M8 10.5V7.5a4 4 0 0 1 7.7-1.5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>',
   up: '<path d="M6 14l6-6 6 6" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>',
   down: '<path d="M6 10l6 6 6-6" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>',
+  text: '<path d="M5 6.5V5h14v1.5M12 5v14M9 19h6" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>',
+  subtitles: '<rect x="3" y="5" width="18" height="14" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M6.5 15h5M13.5 15h4M6.5 11.5h3M11.5 11.5h6" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>',
   transform: '<rect x="6" y="6" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-dasharray="2.5 2"/><path d="M3 3h4v4H3zM17 3h4v4h-4zM3 17h4v4H3zM17 17h4v4h-4z" fill="currentColor"/>',
 };
 export function icon(name, size = 20) {
