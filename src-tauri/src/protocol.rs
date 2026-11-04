@@ -1,5 +1,8 @@
 // Протокол media:// — отдаёт окну медиафайлы (видео, звук, миниатюры) с поддержкой Range для перемотки.
 // В Windows адрес выглядит как http://media.localhost/<путь>, в Linux/macOS — media://localhost/<путь>.
+// Linux (0.4.2): WebKitGTK играет <video>/<audio> через GStreamer, а у того нет источника для своих схем
+// (webkitwebsrc понимает только http/https/blob) — media:// даёт MEDIA_ERR_SRC_NOT_SUPPORTED. Поэтому на Linux тот же
+// обработчик отдаётся ещё и по HTTP на 127.0.0.1 со случайным портом и секретным токеном в пути (http_start).
 use crate::paths;
 use percent_encoding::{percent_decode_str, utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
 use std::collections::HashSet;
@@ -41,6 +44,9 @@ pub fn is_allowed(p: &Path) -> bool {
 
 pub fn url(p: &Path) -> String {
     let enc = utf8_percent_encode(&p.to_string_lossy(), KEEP).to_string();
+    if let Some(base) = HTTP_BASE.get() {
+        return format!("{base}/{enc}");
+    }
     if cfg!(windows) || cfg!(target_os = "android") {
         format!("http://media.localhost/{enc}")
     } else {
@@ -173,6 +179,122 @@ pub fn handle(req: &Request<Vec<u8>>) -> Response<Vec<u8>> {
         .unwrap()
 }
 
+// ---- HTTP для <video>/<audio> на Linux (WebKitGTK + GStreamer) ----
+// Только 127.0.0.1, порт случайный, в пути — 128-битный токен (другие программы и страницы в браузере его не знают),
+// Host должен быть 127.0.0.1:<порт> (защита от DNS rebinding), файлы — те же, что разрешены media:// (is_allowed).
+// Один запрос на соединение (Connection: close) — WebKit сам открывает новые для Range.
+static HTTP_BASE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// Запустить HTTP-мост; дальше url() отдаёт http://127.0.0.1:<порт>/<токен>/<путь>. Повторный вызов — тот же адрес.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub fn http_start() -> Option<String> {
+    if let Some(b) = HTTP_BASE.get() {
+        return Some(b.clone());
+    }
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).ok()?;
+    let port = listener.local_addr().ok()?.port();
+    let mut t = [0u8; 16];
+    getrandom::fill(&mut t).ok()?;
+    let token: String = t.iter().map(|b| format!("{b:02x}")).collect();
+    let host = format!("127.0.0.1:{port}");
+    let base = format!("http://{host}/{token}");
+    let (host2, token2) = (host.clone(), token.clone());
+    std::thread::Builder::new()
+        .name("ffm-media-http".into())
+        .spawn(move || {
+            for conn in listener.incoming().flatten() {
+                let (h, t) = (host2.clone(), token2.clone());
+                let _ = std::thread::Builder::new().name("ffm-media-conn".into()).spawn(move || {
+                    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| http_serve(conn, &h, &t)));
+                });
+            }
+        })
+        .ok()?;
+    Some(HTTP_BASE.get_or_init(|| base).clone())
+}
+
+/// Разобрать запрос «METHOD /путь HTTP/1.x» с заголовками; None — не HTTP или слишком длинный
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn http_parse(head: &str) -> Option<(String, String, Vec<(String, String)>)> {
+    let mut lines = head.split("\r\n");
+    let mut first = lines.next()?.split(' ');
+    let (method, target, version) = (first.next()?, first.next()?, first.next()?);
+    if !version.starts_with("HTTP/1.") || !target.starts_with('/') {
+        return None;
+    }
+    let headers = lines.filter_map(|l| l.split_once(':')).map(|(k, v)| (k.trim().to_ascii_lowercase(), v.trim().to_string())).collect();
+    Some((method.to_string(), target.to_string(), headers))
+}
+
+/// Ответ на запрос к мосту (без сети — для тестов): проверка Host и токена, затем обычный handle()
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn http_respond(method: &str, target: &str, headers: &[(String, String)], host: &str, token: &str) -> Response<Vec<u8>> {
+    let header = |k: &str| headers.iter().find(|(n, _)| n == k).map(|(_, v)| v.as_str());
+    if header("host") != Some(host) {
+        return reply(StatusCode::FORBIDDEN, b"Forbidden".to_vec());
+    }
+    let Some(rest) = target.strip_prefix(&format!("/{token}/")) else {
+        return reply(StatusCode::NOT_FOUND, b"Not found".to_vec());
+    };
+    match method {
+        "OPTIONS" => {
+            return Response::builder()
+                .status(StatusCode::NO_CONTENT)
+                .header("Access-Control-Allow-Origin", "*")
+                .header("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS")
+                .header("Access-Control-Allow-Headers", "Range")
+                .header("Access-Control-Max-Age", "600")
+                .body(vec![])
+                .unwrap();
+        }
+        "GET" | "HEAD" => {}
+        _ => return reply(StatusCode::METHOD_NOT_ALLOWED, vec![]),
+    }
+    let mut b = Request::builder().method(method).uri(format!("http://127.0.0.1/{}", rest.split('?').next().unwrap_or("")));
+    if let Some(r) = header("range") {
+        b = b.header("range", r);
+    }
+    match b.body(vec![]) {
+        Ok(req) => handle(&req),
+        Err(_) => reply(StatusCode::BAD_REQUEST, vec![]),
+    }
+}
+
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn http_serve(mut conn: std::net::TcpStream, host: &str, token: &str) {
+    use std::io::Write;
+    let _ = conn.set_read_timeout(Some(std::time::Duration::from_secs(30)));
+    let _ = conn.set_write_timeout(Some(std::time::Duration::from_secs(60)));
+    let mut buf = Vec::with_capacity(2048);
+    let mut chunk = [0u8; 2048];
+    while !buf.windows(4).any(|w| w == b"\r\n\r\n") {
+        match conn.read(&mut chunk) {
+            Ok(0) | Err(_) => return,
+            Ok(n) => buf.extend_from_slice(&chunk[..n]),
+        }
+        if buf.len() > 16 * 1024 {
+            return;
+        }
+    }
+    let head = String::from_utf8_lossy(&buf);
+    let head = head.split("\r\n\r\n").next().unwrap_or("");
+    let Some((method, target, headers)) = http_parse(head) else { return };
+    let resp = http_respond(&method, &target, &headers, host, token);
+    let mut out = format!("HTTP/1.1 {} {}\r\n", resp.status().as_u16(), resp.status().canonical_reason().unwrap_or(""));
+    for (k, v) in resp.headers() {
+        out.push_str(&format!("{}: {}\r\n", k.as_str(), v.to_str().unwrap_or("")));
+    }
+    if !resp.headers().contains_key("content-length") {
+        out.push_str(&format!("Content-Length: {}\r\n", resp.body().len()));
+    }
+    out.push_str("Connection: close\r\n\r\n");
+    let _ = conn.write_all(out.as_bytes());
+    if method != "HEAD" {
+        let _ = conn.write_all(resp.body());
+    }
+    let _ = conn.flush();
+}
+
 // ---- Пул потоков для протоколов media:// и plugin:// (R-6) ----
 // Раньше на каждый запрос создавался поток; с несколькими видеодорожками плеер шлёт десятки запросов сразу.
 type Job = Box<dyn FnOnce() + Send + 'static>;
@@ -238,6 +360,67 @@ mod tests {
         assert_eq!(parse_range(&format!("bytes={}-", big - 5), big), Some((big - 5, big - 1)));
         // кусок не больше CHUNK
         assert_eq!(parse_range("bytes=0-", 10 * CHUNK), Some((0, CHUNK - 1)));
+    }
+
+    #[test]
+    fn http_bridge_checks() {
+        let h = |pairs: &[(&str, &str)]| pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect::<Vec<_>>();
+        let host = "127.0.0.1:5555";
+        let ok = h(&[("host", host)]);
+        // Чужой Host (DNS rebinding), нет токена, чужой метод
+        assert_eq!(http_respond("GET", "/tok/x", &h(&[("host", "evil.example:5555")]), host, "tok").status(), StatusCode::FORBIDDEN);
+        assert_eq!(http_respond("GET", "/tok/x", &[], host, "tok").status(), StatusCode::FORBIDDEN);
+        assert_eq!(http_respond("GET", "/other/x", &ok, host, "tok").status(), StatusCode::NOT_FOUND);
+        assert_eq!(http_respond("GET", "/tokx", &ok, host, "tok").status(), StatusCode::NOT_FOUND);
+        assert_eq!(http_respond("POST", "/tok/x", &ok, host, "tok").status(), StatusCode::METHOD_NOT_ALLOWED);
+        assert_eq!(http_respond("OPTIONS", "/tok/x", &ok, host, "tok").status(), StatusCode::NO_CONTENT);
+        // Неразрешённый файл — как у media://
+        let p = paths::test_dir("http-deny").join("secret.txt");
+        let enc = utf8_percent_encode(&p.to_string_lossy(), KEEP).to_string();
+        assert_eq!(http_respond("GET", &format!("/tok/{enc}"), &ok, host, "tok").status(), StatusCode::FORBIDDEN);
+        assert!(http_parse("GET /a HTTP/1.1\r\nHost: x\r\nRange: bytes=0-1").is_some());
+        assert!(http_parse("GET a HTTP/1.1").is_none());
+        assert!(http_parse("garbage").is_none());
+    }
+
+    #[test]
+    fn http_bridge_serves_ranges() {
+        use std::io::Write;
+        let dir = paths::test_dir("http-bridge");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("клип 1.mp4"); // i18n-ignore — имя файла в тесте
+        let data: Vec<u8> = (0..1000u32).map(|i| (i % 251) as u8).collect();
+        std::fs::write(&file, &data).unwrap();
+        allow(&file);
+        let base = http_start().unwrap();
+        assert_eq!(http_start().unwrap(), base, "second start returns the same address");
+        let u = url(&file);
+        assert!(u.starts_with(&base) && u.starts_with("http://127.0.0.1:"), "{u}");
+        let hostport = base.trim_start_matches("http://").split('/').next().unwrap().to_string();
+        let path = &u[format!("http://{hostport}").len()..];
+        let get = |req: String| -> Vec<u8> {
+            let mut s = std::net::TcpStream::connect(&hostport).unwrap();
+            s.write_all(req.as_bytes()).unwrap();
+            let mut out = vec![];
+            s.read_to_end(&mut out).unwrap();
+            out
+        };
+        let split = |r: &[u8]| -> (String, Vec<u8>) {
+            let i = r.windows(4).position(|w| w == b"\r\n\r\n").unwrap();
+            (String::from_utf8_lossy(&r[..i]).to_string(), r[i + 4..].to_vec())
+        };
+        let (head, body) = split(&get(format!("GET {path} HTTP/1.1\r\nHost: {hostport}\r\nRange: bytes=100-199\r\n\r\n")));
+        assert!(head.starts_with("HTTP/1.1 206"), "{head}");
+        assert!(head.to_lowercase().contains("content-range: bytes 100-199/1000"), "{head}");
+        assert!(head.to_lowercase().contains("access-control-allow-origin: *"), "{head}");
+        assert_eq!(body, data[100..200].to_vec());
+        let (head, body) = split(&get(format!("HEAD {path} HTTP/1.1\r\nHost: {hostport}\r\n\r\n")));
+        assert!(head.starts_with("HTTP/1.1 200") && head.to_lowercase().contains("content-length: 1000"), "{head}");
+        assert!(body.is_empty());
+        let (head, _) = split(&get(format!("GET {path} HTTP/1.1\r\nHost: localhost\r\n\r\n")));
+        assert!(head.starts_with("HTTP/1.1 403"), "{head}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

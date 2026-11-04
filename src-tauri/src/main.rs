@@ -81,6 +81,13 @@ fn run() {
     if !p.first_run && control::focus_existing() {
         return;
     }
+    // Linux: <video>/<audio> WebKitGTK (GStreamer) не открывают media:// — медиа идут по HTTP на 127.0.0.1 (protocol.rs)
+    #[cfg(target_os = "linux")]
+    {
+        if protocol::http_start().is_none() {
+            eprintln!("media http: cannot listen on 127.0.0.1");
+        }
+    }
 
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
