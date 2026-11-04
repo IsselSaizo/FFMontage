@@ -1,10 +1,10 @@
 {
- "instructions": "FF Montage is a desktop video editor; these tools edit the project open in its window (the user sees every change and can undo with Ctrl+Z).\nModel: one main video track (clips in time order, gaps allowed, transitions only between adjacent clips) plus audio tracks for music/voice. All times are seconds.\nWorkflow: get_project → import_media (absolute paths) → add_clip (track \"video\"/\"audio\") → trim/move with update_clip, split_clip, delete_clip (ripple), close_gaps → set_transition (clip_id = second clip of the cut) → get_frame / detect_silence to inspect → save_project → export_video, then export_status with wait.\nIds come from get_project; re-read it after edits because splitting creates new clip ids.\nDo not use force=true in new_project/open_project without asking the user.",
+ "instructions": "FF Montage is a desktop video editor; these tools edit the project open in its window (the user sees every change and can undo with Ctrl+Z).\nModel: video tracks stacked bottom to top — the main track \"video\" (bottom, over the background colour) and optional upper tracks (ids vtk_…, transparent where empty, each covers the tracks below: picture-in-picture, overlays, logos). On every video track clips go in time order, gaps allowed, transitions only between adjacent clips of the same track. Each video clip has a transform (x, y offset of its centre in frame fractions, scale, rotate in degrees, opacity) and a crop. Plus audio tracks for music/voice. All times are seconds.\nWorkflow: get_project → import_media (absolute paths) → add_clip (track \"video\"/\"audio\") → trim/move with update_clip, split_clip, delete_clip (ripple), close_gaps → set_transition (clip_id = second clip of the cut) → add_video_track + add_clip video_track_id + set_transform for picture-in-picture/overlays → get_frame / detect_silence to inspect → save_project → export_video, then export_status with wait.\nIds come from get_project; re-read it after edits because splitting creates new clip ids.\nDo not use force=true in new_project/open_project without asking the user.",
  "tools": [
   {
    "name": "get_project",
    "title": "Get project",
-   "description": "Return the whole project state: media library (ids, paths, durations, resolution, fps), the main video track (clips with timeline start/end and source in/out, volume, fades, transitions, reversed/freeze flags), audio tracks, gaps, playhead, undo/redo availability and export status. All times are in seconds. Call this first and after edits.",
+   "description": "Return the whole project state: media library (ids, paths, durations, resolution, fps), the main video track and upper_video_tracks (bottom to top; clips with timeline start/end and source in/out, volume, fades, transitions, transform, crop, reversed/freeze flags), audio tracks, gaps, playhead, undo/redo availability and export status. All times are in seconds. Call this first and after edits.",
    "inputSchema": {
     "type": "object",
     "properties": {}
@@ -44,7 +44,7 @@
   {
    "name": "add_clip",
    "title": "Add clip to timeline",
-   "description": "Place a media file (or a part of it) on the timeline. track \"video\" = the single main video track (the clip also carries the file's own sound); track \"audio\" = an audio track (music, voice-over). Video without start is appended to the end of the video track. If start is given and the place is occupied, the clip snaps to a nearby gap or is inserted before/after the clip it hits (later clips move right); with insert=true it is placed exactly at start and later clips are pushed right. Audio without start goes to 0 s; if the chosen track is busy, a free or new track is used. source_in/source_out select the fragment of the file (seconds, default whole file).",
+   "description": "Place a media file (or a part of it) on the timeline. track \"video\" = the single main video track (the clip also carries the file's own sound); track \"audio\" = an audio track (music, voice-over). Video without start is appended to the end of the video track. If start is given and the place is occupied, the clip snaps to a nearby gap or is inserted before/after the clip it hits (later clips move right); with insert=true it is placed exactly at start and later clips are pushed right. Audio without start goes to 0 s; if the chosen track is busy, a free or new track is used. source_in/source_out select the fragment of the file (seconds, default whole file). For picture-in-picture or overlays put the video on an upper track (video_track_id) at the playhead/start and then call set_transform.",
    "inputSchema": {
     "type": "object",
     "properties": {
@@ -86,6 +86,14 @@
      "separate_audio": {
       "type": "boolean",
       "description": "Video only: put the clip's sound (every audio stream of the file) as separate linked clips on audio tracks, like the app does on drag&drop (default false: sound stays inside the video clip)"
+     },
+     "video_track_id": {
+      "type": "string",
+      "description": "Video track id: \"video\" (main, bottom; default) or an upper track id from get_project.upper_video_tracks / add_video_track"
+     },
+     "overwrite": {
+      "type": "boolean",
+      "description": "Video only: put the clip exactly at start and cut away whatever lies under it on that track (like dropping in the editor)"
      }
     },
     "required": [
@@ -198,6 +206,14 @@
         "maximum": 0.95
        }
       }
+     },
+     "video_track_id": {
+      "type": "string",
+      "description": "Move the video clip (and nothing else) to this video track; keeps start unless start is given"
+     },
+     "overwrite": {
+      "type": "boolean",
+      "description": "Video only: put the clip exactly at start and cut away whatever lies under it on that track (like dropping in the editor)"
      }
     },
     "required": [
@@ -381,7 +397,7 @@
     "properties": {
      "track": {
       "type": "string",
-      "description": "\"video\" or audio track id"
+      "description": "\"video\", an upper video track id or an audio track id"
      },
      "time": {
       "type": "number",
@@ -397,6 +413,128 @@
     "readOnlyHint": false,
     "destructiveHint": false,
     "idempotentHint": false,
+    "openWorldHint": false
+   }
+  },
+  {
+   "name": "add_video_track",
+   "title": "Add video track",
+   "description": "Create a new upper video track (transparent where empty; it covers the tracks below). By default it goes on top; with above it is inserted right above that track. Returns its id and the track order from bottom to top.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "name": {
+      "type": "string",
+      "description": "Track name (optional)"
+     },
+     "above": {
+      "type": "string",
+      "description": "Insert right above this video track id (\"video\" = just above the main track)"
+     }
+    }
+   },
+   "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": false,
+    "idempotentHint": false,
+    "openWorldHint": false
+   }
+  },
+  {
+   "name": "update_video_track",
+   "title": "Change video track",
+   "description": "Rename, hide/show (hidden tracks are not visible in preview and export, their clips still sound), lock/unlock (locked tracks reject edits), move one step up/down in the stack, or remove an upper video track with its clips (remove: true). The main track \"video\" can be renamed, hidden and locked but not moved or removed. Do not unlock a track the user locked without asking.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "video_track_id": {
+      "type": "string",
+      "description": "\"video\" or an upper video track id"
+     },
+     "name": {
+      "type": "string"
+     },
+     "hidden": {
+      "type": "boolean"
+     },
+     "locked": {
+      "type": "boolean"
+     },
+     "move": {
+      "type": "string",
+      "enum": [
+       "up",
+       "down"
+      ],
+      "description": "One step up (covers more tracks) or down"
+     },
+     "remove": {
+      "type": "boolean",
+      "description": "Delete the upper track and its clips (with their linked sound)"
+     }
+    },
+    "required": [
+     "video_track_id"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": true,
+    "idempotentHint": false,
+    "openWorldHint": false
+   }
+  },
+  {
+   "name": "set_transform",
+   "title": "Position, scale, rotate a video clip",
+   "description": "Set the transform of one or more video clips (on any video track). Applied after crop and fit: the clip is fitted into a box of frame×scale, rotated around its centre and its centre moved by x, y. x/y are fractions of the frame (0,0 = centred; x 0.25 = a quarter frame to the right, y -0.25 = up). scale 1 = fit the frame, 0.5 = half size. rotate in degrees clockwise. opacity 0..1. Only the given fields change; reset: true starts from the default (with given fields applied). Picture-in-picture top-right at 1/3 size: scale 0.33, x 0.3, y -0.3 on an upper track.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "clip_id": {
+      "type": "string"
+     },
+     "clip_ids": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      },
+      "description": "Several clips at once (instead of clip_id)"
+     },
+     "x": {
+      "type": "number",
+      "minimum": -2,
+      "maximum": 2
+     },
+     "y": {
+      "type": "number",
+      "minimum": -2,
+      "maximum": 2
+     },
+     "scale": {
+      "type": "number",
+      "minimum": 0.05,
+      "maximum": 8
+     },
+     "rotate": {
+      "type": "number",
+      "minimum": -360,
+      "maximum": 360
+     },
+     "opacity": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+     },
+     "reset": {
+      "type": "boolean"
+     }
+    }
+   },
+   "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": false,
+    "idempotentHint": true,
     "openWorldHint": false
    }
   },

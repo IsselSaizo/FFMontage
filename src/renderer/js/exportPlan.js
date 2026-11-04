@@ -16,6 +16,7 @@ import { speedOf, atempoChain } from './clipTime.js';
 import { ffAudioFx, unknownFx } from './audioFx.js';
 import { TRANSITIONS } from './transitions.js';
 import { t } from './i18n.js';
+import { tfOf, isIdentity } from './transform.js';
 
 export const QUALITY = {
   // Значение CQ: меньше — лучше качество и больше файл
@@ -99,7 +100,9 @@ export function buildExport(project, settings) {
   };
 
   const still = (m) => m.isImage && !m.isAnimation;
-  const addInput = (m, ss, dur) => {
+  // alpha — видео с прозрачностью (WebM VP9 alpha читает только libvpx-vp9 — он ставится перед -i)
+  const addInput = (m, ss, dur, alpha = false) => {
+    if (alpha && /\.webm$/i.test(m.path || '')) inputs.push('-c:v', 'libvpx-vp9');
     // Картинка: один кадр, повторяется нужное время
     if (still(m)) inputs.push('-loop', '1', '-framerate', String(F), '-t', n6(dur + 0.5), '-i', m.path);
     else inputs.push('-ss', n6(Math.max(0, ss)), '-t', n6(dur + 0.5), '-i', m.path);
@@ -116,12 +119,34 @@ export function buildExport(project, settings) {
       ? `fps=${F},scale=${W}:${H}:flags=lanczos,setsar=1,format=yuv420p`
       : `fps=${F},scale=${W}:${H}:force_original_aspect_ratio=decrease:flags=lanczos,` +
         `pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2:color=0x${bg},setsar=1,format=yuv420p`);
+  // Слой клипа с трансформом (transform.js): кадрирование → подгонка в рамку W·scale × H·scale → прозрачность → поворот.
+  // На выходе — картинка с альфой своего размера; где она стоит в кадре — решает overlay (центр + сдвиг).
+  const layerChain = (c) => {
+    const tf = tfOf(c);
+    const bw = even(W * tf.scale); const bh = even(H * tf.scale);
+    const fit = c.fit === 'cover'
+      ? `scale=${bw}:${bh}:force_original_aspect_ratio=increase:force_divisible_by=2:flags=lanczos,crop=${bw}:${bh}`
+      : c.fit === 'stretch'
+        ? `scale=${bw}:${bh}:flags=lanczos`
+        : `scale=${bw}:${bh}:force_original_aspect_ratio=decrease:force_divisible_by=2:flags=lanczos`;
+    const rad = (tf.rotate * Math.PI) / 180;
+    return cropChain(c) + `fps=${F},${fit},setsar=1,format=yuva420p` +
+      (tf.opacity < 1 ? `,colorchannelmixer=aa=${n6(tf.opacity)}` : '') +
+      (Math.abs(rad) > 1e-6 ? `,rotate=a=${n6(rad)}:c=none:ow=rotw(${n6(rad)}):oh=roth(${n6(rad)})` : '');
+  };
+  // Где центр слоя: overlay=x=…:y=… (overlay_w/overlay_h — размер слоя после поворота)
+  const layerPos = (c) => {
+    const tf = tfOf(c);
+    return `x=${n6(W / 2 + tf.x * W)}-overlay_w/2:y=${n6(H / 2 + tf.y * H)}-overlay_h/2`;
+  };
   const audioFmt = 'aresample=48000,aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo';
   const black = (dur) => `color=c=0x${bg}:s=${W}x${H}:r=${F},format=yuv420p,setsar=1,trim=duration=${n6(dur)},setpts=PTS-STARTPTS`;
-  const vFades = (c, head, len) => {
+  // alpha — на верхних дорожках клип проявляется из прозрачности, а не из цвета фона
+  const vFades = (c, head, len, alpha = false) => {
+    const how = alpha ? ':alpha=1' : `:color=0x${bg}`;
     let s = '';
-    if (c.fadeIn > 0.001) s += `,fade=t=in:st=${n6(head)}:d=${n6(Math.min(c.fadeIn, len))}:color=0x${bg}`;
-    if (c.fadeOut > 0.001) s += `,fade=t=out:st=${n6(head + len - Math.min(c.fadeOut, len))}:d=${n6(Math.min(c.fadeOut, len))}:color=0x${bg}`;
+    if (c.fadeIn > 0.001) s += `,fade=t=in:st=${n6(head)}:d=${n6(Math.min(c.fadeIn, len))}${how}`;
+    if (c.fadeOut > 0.001) s += `,fade=t=out:st=${n6(head + len - Math.min(c.fadeOut, len))}:d=${n6(Math.min(c.fadeOut, len))}${how}`;
     return s;
   };
   const aFades = (c, head, len) => {
@@ -131,79 +156,126 @@ export function buildExport(project, settings) {
     return s;
   };
 
-  // --- Основная дорожка ---
-  const vclips = (project.videoClips || [])
-    .filter((c) => clipDuration(c) > 0.001 && media[c.mediaId])
-    .map((c, i) => ({ ...c, start: Number.isFinite(c.start) ? c.start : NaN, _i: i }));
-  // Старые проекты без start: встык
-  if (vclips.some((c) => !Number.isFinite(c.start))) { let t = 0; for (const c of vclips) { c.start = t; t += clipDuration(c); } }
-  vclips.sort((a, b) => a.start - b.start);
+  // --- Видеодорожки: основная (снизу, на цвете фона) и верхние (прозрачные, накладываются по порядку) ---
+  // Старые проекты 0.3.x: overlayClips — одна верхняя дорожка
+  const lanes = [
+    { clips: project.videoClips || [], main: true, hidden: !!project.videoHidden },
+    ...(Array.isArray(project.videoTracks) ? project.videoTracks : []).map((tr) => ({ clips: tr.clips || [], main: false, hidden: !!tr.hidden })),
+    ...(Array.isArray(project.overlayClips) && project.overlayClips.length ? [{ clips: project.overlayClips, main: false, hidden: false }] : []),
+  ];
+  const pieces = [];   // основная дорожка: куски по порядку (пустоты — цвет фона) → concat
+  const runs = [];     // верхние дорожки: { label, start, len, pos? } — накладываются overlay (pos — свой x/y у одиночного клипа)
+  let videoEnd = 0;    // конец основной дорожки
+  let upperEnd = 0;
+  lanes.forEach((L, li) => {
+    // Метки основной дорожки — без префикса (как в 0.3), у верхних — свой префикс
+    const P = li ? `l${li}_` : '';
+    const alpha = !L.main;
+    const vclips = L.clips
+      .filter((c) => clipDuration(c) > 0.001 && media[c.mediaId])
+      .map((c, i) => ({ ...c, start: Number.isFinite(c.start) ? c.start : NaN, _i: i }));
+    // Старые проекты без start: встык
+    if (vclips.some((c) => !Number.isFinite(c.start))) { let t = 0; for (const c of vclips) { c.start = t; t += clipDuration(c); } }
+    vclips.sort((a, b) => a.start - b.start);
 
-  // Длительности переходов (перед клипом i), с проверкой «впритык» и ограничением по длине
-  const tin = vclips.map((c, i) => {
-    if (!c.transition || i === 0) return 0;
-    const p = vclips[i - 1];
-    if (Math.abs(p.start + clipDuration(p) - c.start) > ADJ) return 0;
-    const d = Math.min(Number(c.transition.duration) || 0, clipDuration(p), clipDuration(c), 3);
-    return d >= 0.05 ? d : 0;
-  });
-  const tout = vclips.map((_c, i) => tin[i + 1] || 0);
+    // Длительности переходов (перед клипом i), с проверкой «впритык» и ограничением по длине
+    const tin = vclips.map((c, i) => {
+      if (!c.transition || i === 0) return 0;
+      const p = vclips[i - 1];
+      if (Math.abs(p.start + clipDuration(p) - c.start) > ADJ) return 0;
+      const d = Math.min(Number(c.transition.duration) || 0, clipDuration(p), clipDuration(c), 3);
+      return d >= 0.05 ? d : 0;
+    });
+    const tout = vclips.map((_c, i) => tin[i + 1] || 0);
 
-  const pieces = [];
-  let chain = null; let chainLen = 0; let cursor = 0; let videoEnd = 0;
-  vclips.forEach((c, i) => {
-    const m = media[c.mediaId];
-    const len = clipDuration(c);
-    const sp = still(m) ? 1 : speedOf(c);   // время таймлайна × sp = время файла
-    const h = tin[i] / 2; const t = tout[i] / 2;
-    if (!tin[i]) {
-      if (chain) { pieces.push(chain); chain = null; }
-      const gap = c.start - cursor;
-      if (gap > 0.0005) { filters.push(`${black(gap)}[g${i}]`); pieces.push(`[g${i}]`); }
-    }
-    const ss = still(m) ? c.in - h : Math.max(0, c.in - h * sp);
-    const head = (c.in - ss) / sp;       // сколько кадров «до» реально есть в файле (в секундах таймлайна)
-    const freezeHead = h - head;         // недостающее — повтор первого кадра
-    const S = h + len + t;
-    // noAudio — звук клипа вынесен на аудиодорожки (связанные клипы)
-    const hasSound = m.hasAudio && !c.noAudio && !c.muted && c.volume > 0;
-    const k = (m.hasVideo || hasSound) ? addInput(m, ss, (head + len + t) * sp) : -1;
-    if (m.hasVideo) {
-      warnFx(c);
-      filters.push(`[${k}:v]${vSpeed(sp)},${ffEffects(c, m.width)}${scaleChain(c)}` +
-        (freezeHead > 0.0005 ? `,tpad=start_mode=clone:start_duration=${n6(freezeHead)}` : '') +
+    let chain = null; let chainLen = 0; let cursor = 0; let runStart = 0; let runN = 0; let runPos = null;
+    const endRun = () => {
+      if (!chain) return;
+      if (L.main) pieces.push(chain);
+      else runs.push({ label: chain, start: runStart, len: chainLen, pos: runN === 1 ? runPos : null });
+      chain = null;
+    };
+    vclips.forEach((c, i) => {
+      const m = media[c.mediaId];
+      const len = clipDuration(c);
+      const sp = still(m) ? 1 : speedOf(c);   // время таймлайна × sp = время файла
+      const h = tin[i] / 2; const t = tout[i] / 2;
+      if (!tin[i]) {
+        endRun();
+        const gap = c.start - cursor;
+        if (L.main && gap > 0.0005) { filters.push(`${black(gap)}[g${i}]`); pieces.push(`[g${i}]`); }
+      }
+      const ss = still(m) ? c.in - h : Math.max(0, c.in - h * sp);
+      const head = (c.in - ss) / sp;       // сколько кадров «до» реально есть в файле (в секундах таймлайна)
+      const freezeHead = h - head;         // недостающее — повтор первого кадра
+      const S = h + len + t;
+      // noAudio — звук клипа вынесен на аудиодорожки (связанные клипы)
+      const hasSound = m.hasAudio && !c.noAudio && !c.muted && c.volume > 0;
+      const showVideo = m.hasVideo && !L.hidden;
+      const k = (showVideo || hasSound) ? addInput(m, ss, (head + len + t) * sp, alpha && showVideo) : -1;
+      // Одиночный клип верхней дорожки (без переходов) накладывается сам, со своим x/y — без холста во весь кадр
+      const direct = alpha && !tin[i] && !tout[i];
+      const tail = (freezeHead > 0.0005 ? `,tpad=start_mode=clone:start_duration=${n6(freezeHead)}` : '') +
         `,tpad=stop_mode=clone:stop_duration=${n6(t + 2)},trim=duration=${n6(S)},setpts=PTS-STARTPTS` +
-        `${vFades(c, h, len)}[s${i}]`);
-    } else {
-      filters.push(`${black(S)}[s${i}]`);
-    }
-    if (tin[i]) {
-      warnTr(c.transition.type);
-      filters.push(`${chain}[s${i}]xfade=${xfadeTransition(c.transition.type)}:duration=${n6(tin[i])}:offset=${n6(chainLen - tin[i])}[x${i}]`);
-      chain = `[x${i}]`;
-      chainLen = chainLen + S - tin[i];
-    } else {
-      chain = `[s${i}]`;
-      chainLen = S;
-    }
-    cursor = c.start + len;
-    videoEnd = Math.max(videoEnd, cursor);
+        `${vFades(c, h, len, alpha)}[${P}s${i}]`;
+      if (showVideo) {
+        warnFx(c);
+        const src = `[${k}:v]${vSpeed(sp)},${ffEffects(c, m.width)}`;
+        if (!alpha && isIdentity(tfOf(c))) {
+          filters.push(`${src}${scaleChain(c)}${tail}`);
+        } else if (direct) {
+          filters.push(`${src}${layerChain(c)}${tail}`);
+        } else {
+          // Слой на холсте во весь кадр: цвет фона (основная дорожка) или прозрачный (верхние, для переходов)
+          const cv = alpha ? `color=c=black@0:s=${W}x${H}:r=${F},format=yuva420p` : `color=c=0x${bg}:s=${W}x${H}:r=${F},format=yuv420p`;
+          filters.push(`${src}${layerChain(c)}[${P}ly${i}]`);
+          filters.push(`${cv}[${P}cv${i}]`);
+          filters.push(`[${P}cv${i}][${P}ly${i}]overlay=${layerPos(c)}:shortest=1:format=auto,format=${alpha ? 'yuva420p' : 'yuv420p'},setsar=1${tail}`);
+        }
+      } else if (L.main) {
+        filters.push(`${black(S)}[${P}s${i}]`);
+      }
+      if (!showVideo && !L.main) {
+        // Верхняя дорожка скрыта (или в клипе нет картинки) — видео нет, остаётся только звук
+        endRun();
+      } else if (tin[i] && chain) {
+        warnTr(c.transition.type);
+        const xf = `xfade=${xfadeTransition(c.transition.type)}:duration=${n6(tin[i])}:offset=${n6(chainLen - tin[i])}`;
+        if (alpha) {
+          // С прозрачностью смешивать можно только premultiplied: иначе из прозрачного чёрного проступает серая кайма
+          filters.push(`${chain}premultiply=inplace=1[${P}pa${i}]`, `[${P}s${i}]premultiply=inplace=1[${P}pb${i}]`,
+            `[${P}pa${i}][${P}pb${i}]${xf},unpremultiply=inplace=1[${P}x${i}]`);
+        } else {
+          filters.push(`${chain}[${P}s${i}]${xf}[${P}x${i}]`);
+        }
+        chain = `[${P}x${i}]`;
+        chainLen = chainLen + S - tin[i];
+        runN++;
+      } else {
+        chain = `[${P}s${i}]`;
+        chainLen = S;
+        runStart = c.start; runN = 1;
+        runPos = direct && showVideo ? layerPos(c) : null;
+      }
+      cursor = c.start + len;
+      if (L.main) videoEnd = Math.max(videoEnd, cursor); else upperEnd = Math.max(upperEnd, cursor);
 
-    // Звук клипа: со «ступеньками» для перехода, на своём месте
-    if (hasSound) {
-      warnAfx(c.afx);
-      const L = head + len + t;
-      let af = `[${k}:a]${audioFmt}${aSpeed(sp)},volume=${n6(c.volume)}${ffAudioFx(c.afx)},asetpts=PTS-STARTPTS,apad,atrim=duration=${n6(L)}`;
-      if (tin[i]) af += `,afade=t=in:st=0:d=${n6(head + h)}`;
-      af += aFades(c, head, len);
-      if (t > 0) af += `,afade=t=out:st=${n6(head + len - t)}:d=${n6(2 * t)}`;
-      const delay = Math.max(0, Math.round((c.start - head) * 1000));
-      af += `,adelay=delays=${delay}:all=1[va${i}]`;
-      filters.push(af);
-      audio.push(`[va${i}]`);
-    }
+      // Звук клипа: со «ступеньками» для перехода, на своём месте
+      if (hasSound) {
+        warnAfx(c.afx);
+        const L2 = head + len + t;
+        let af = `[${k}:a]${audioFmt}${aSpeed(sp)},volume=${n6(c.volume)}${ffAudioFx(c.afx)},asetpts=PTS-STARTPTS,apad,atrim=duration=${n6(L2)}`;
+        if (tin[i]) af += `,afade=t=in:st=0:d=${n6(head + h)}`;
+        af += aFades(c, head, len);
+        if (t > 0) af += `,afade=t=out:st=${n6(head + len - t)}:d=${n6(2 * t)}`;
+        const delay = Math.max(0, Math.round((c.start - head) * 1000));
+        af += `,adelay=delays=${delay}:all=1[${P}va${i}]`;
+        filters.push(af);
+        audio.push(`[${P}va${i}]`);
+      }
+    });
+    endRun();
   });
-  if (chain) pieces.push(chain);
 
   // --- Аудиодорожки (музыка, голос и т.п.) ---
   let audioEnd = 0;
@@ -241,8 +313,7 @@ export function buildExport(project, settings) {
     }
   });
 
-  const ovEnd = (project.overlayClips || []).reduce((s, c) => (media[c.mediaId] ? Math.max(s, c.start + clipDuration(c)) : s), 0);
-  const total = Math.max(videoEnd, audioEnd, ovEnd);
+  const total = Math.max(videoEnd, audioEnd, upperEnd);
   if (total <= 0.01) throw new Error(t('Таймлайн пуст — нечего экспортировать.'));
 
   // Если звук длиннее видео — добиваем чёрным кадром
@@ -251,20 +322,17 @@ export function buildExport(project, settings) {
     pieces.push('[vtail]');
   }
   // xfade может отдать 4:4:4 (FFmpeg 9) — high-профиль H.264 его не принимает, поэтому на выходе всегда 4:2:0
-  // Дорожка «Наложения»: видео с прозрачностью поверх ролика (VP9 alpha читает только libvpx-vp9 — он ставится перед -i)
-  const ovs = (project.overlayClips || []).filter((c) => media[c.mediaId] && clipDuration(c) > 0.001 && c.start < total - 0.001);
-  const vbase = ovs.length ? '[vbase]' : '[vout]';
+  // Верхние видеодорожки: каждый кусок (одиночный клип или цепочка клипов с переходами) ставится на своё время
+  // и накладывается overlay снизу вверх; до начала и после конца куска видно то, что под ним (eof_action=pass)
+  const vbase = runs.length ? '[vbase]' : '[vout]';
   if (pieces.length === 1) filters.push(`${pieces[0]}format=yuv420p${vbase}`);
   else filters.push(`${pieces.join('')}concat=n=${pieces.length}:v=1:a=0,format=yuv420p${vbase}`);
   let cur = vbase;
-  ovs.forEach((c, i) => {
-    const m = media[c.mediaId];
-    const dur = Math.min(clipDuration(c), total - c.start);
-    if (/\.webm$/i.test(m.path || '')) inputs.push('-c:v', 'libvpx-vp9');
-    const k = addInput(m, c.in, dur);
-    const out = i === ovs.length - 1 ? '[vout]' : `[vo${i}]`;
-    filters.push(`[${k}:v]trim=duration=${n6(dur)},setpts=PTS-STARTPTS+${n6(c.start)}/TB,fps=${F},scale=${W}:${H},format=yuva420p[ov${i}]`);
-    filters.push(`${cur}[ov${i}]overlay=0:0:format=auto:eof_action=pass:enable='between(t,${n6(c.start)},${n6(c.start + dur)})',format=yuv420p${out}`);
+  runs.forEach((r, i) => {
+    const out = i === runs.length - 1 ? '[vout]' : `[vo${i}]`;
+    const a = r.start; const b = Math.min(total, r.start + r.len);
+    filters.push(`${r.label}setpts=PTS-STARTPTS+${n6(a)}/TB[ov${i}]`);
+    filters.push(`${cur}[ov${i}]overlay=${r.pos || '0:0'}:format=auto:eof_action=pass:enable='between(t,${n6(a)},${n6(b)})',format=yuv420p${out}`);
     cur = out;
   });
 

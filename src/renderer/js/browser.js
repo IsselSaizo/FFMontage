@@ -29,7 +29,7 @@ const cssOf = (e, w) => { try { return typeof e.css === 'function' ? e.css(w) ||
 export function targetJunction() {
   const s = store.selection;
   if (s && s.kind === 'transition' && store.junctionBefore(s.id)) return s.id;
-  const list = store.project.videoClips;
+  const list = store.allVideo();
   const joints = list.map((c) => ({ id: c.id, j: store.junctionBefore(c.id) })).filter((x) => x.j);
   if (!joints.length) return null;
   if (s && s.kind === 'video') {

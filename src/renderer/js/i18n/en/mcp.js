@@ -58,4 +58,8 @@ export default {
   'Ассистент меняет открытый проект: добавляет и удаляет клипы, может открыть другой проект или запустить экспорт. Каждое его действие видно на таймлайне и отмечается уведомлением «ИИ: …»; любую правку можно отменить Ctrl+Z. Несохранённый проект ассистент без явного разрешения не закроет. Команды принимаются только с этого компьютера и только с секретным ключом, который лежит в папке кэша программы.':
     'The assistant changes the open project: it adds and deletes clips and can open another project or start an export. Every action it takes is visible on the timeline and is marked with an “AI: …” notification; any edit can be undone with Ctrl+Z. The assistant will not close an unsaved project without explicit permission. Commands are accepted only from this computer and only with the secret key stored in the program’s cache folder.',
   'Готово': 'Done',
+  'новая видеодорожка': 'new video track',
+  'видеодорожка удалена': 'video track deleted',
+  'видеодорожка изменена': 'video track changed',
+  'трансформ клипа': 'clip transform',
 };

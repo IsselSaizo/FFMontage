@@ -13,6 +13,15 @@ pub const AUDIO_EXT: &[&str] = &["mp3", "m4a", "aac", "wav", "ogg", "oga", "opus
 
 fn s(p: &Path) -> String { p.to_string_lossy().to_string() }
 
+/// Файловая работа команд — в пуле блокирующих задач, а не в главном потоке окна (R-3)
+async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> R<T> {
+    tauri::async_runtime::spawn_blocking(f).await.map_err(|e| e.to_string())
+}
+
+/// config.json меняется по очереди (settings_set / setup_save из разных потоков)
+static CONFIG_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+fn config_lock() -> std::sync::MutexGuard<'static, ()> { CONFIG_LOCK.lock().unwrap_or_else(|p| p.into_inner()) }
+
 #[tauri::command]
 pub async fn app_info(app: AppHandle) -> Value {
     let p = paths::get();
@@ -45,11 +54,13 @@ pub async fn app_info(app: AppHandle) -> Value {
 // Окно настроек папок / первого запуска
 // ---------------------------------------------------------------------------
 #[tauri::command]
-pub fn setup_info(app: AppHandle) -> Value {
-    let p = paths::get();
-    let cfg = paths::load_config(&p.config_file)
-        .unwrap_or_else(|| paths::suggest_defaults(app.path().video_dir().ok(), app.path().document_dir().ok()));
-    json!({ "firstRun": p.first_run, "platform": std::env::consts::OS, "appDir": s(&p.app_dir), "configFile": s(&p.config_file), "config": cfg })
+pub async fn setup_info(app: AppHandle) -> Value {
+    let (video, docs) = (app.path().video_dir().ok(), app.path().document_dir().ok());
+    blocking(move || {
+        let p = paths::get();
+        let cfg = paths::load_config(&p.config_file).unwrap_or_else(|| paths::suggest_defaults(video, docs));
+        json!({ "firstRun": p.first_run, "platform": std::env::consts::OS, "appDir": s(&p.app_dir), "configFile": s(&p.config_file), "config": cfg })
+    }).await.unwrap_or(Value::Null)
 }
 
 #[tauri::command]
@@ -82,7 +93,12 @@ pub struct SetupCfg {
 }
 
 #[tauri::command]
-pub fn setup_save(app: AppHandle, cfg: SetupCfg) -> Value {
+pub async fn setup_save(app: AppHandle, cfg: SetupCfg) -> Value {
+    blocking(move || setup_save_sync(app, cfg)).await.unwrap_or_else(|e| json!({ "ok": false, "error": e }))
+}
+
+fn setup_save_sync(app: AppHandle, cfg: SetupCfg) -> Value {
+    let _lock = config_lock();
     let p = paths::get();
     let mut clean = paths::Config { settings: paths::load_settings(), ..Default::default() };
     for (k, v) in [("cache", &cfg.cache_dir), ("output", &cfg.output_dir), ("projects", &cfg.projects_dir)] {
@@ -133,13 +149,18 @@ pub fn app_restart(app: AppHandle) -> bool {
 // Настройки интерфейса (config.json → "settings"): язык, хоткеи, …
 // ---------------------------------------------------------------------------
 #[tauri::command]
-pub fn settings_get() -> Value {
-    json!({ "settings": paths::load_settings(), "lang": i18n::lang(), "systemLang": i18n::system_lang() })
+pub async fn settings_get() -> Value {
+    blocking(|| json!({ "settings": paths::load_settings(), "lang": i18n::lang(), "systemLang": i18n::system_lang() })).await.unwrap_or(Value::Null)
 }
 
 /// Меняет ключи верхнего уровня (null — удалить ключ) и возвращает все настройки
 #[tauri::command]
-pub fn settings_set(patch: Value) -> R<Value> {
+pub async fn settings_set(patch: Value) -> R<Value> {
+    blocking(move || settings_set_sync(patch)).await?
+}
+
+fn settings_set_sync(patch: Value) -> R<Value> {
+    let _lock = config_lock();
     let p = paths::get();
     let mut cfg = paths::load_config(&p.config_file)
         .ok_or_else(|| tr!("Файл настроек не найден: {}", "Settings file not found: {}", p.config_file.display()))?;
@@ -286,13 +307,15 @@ pub fn safe_name(base: &str, fallback: &str) -> String {
 }
 
 #[tauri::command]
-pub fn export_default_path(base: Option<String>) -> String {
-    let dir = &paths::get().output_dir;
-    let safe = safe_name(&base.unwrap_or_default(), tr!("Видео", "Video"));
-    let mut p = dir.join(format!("{safe}.mp4"));
-    let mut i = 2;
-    while p.exists() { p = dir.join(format!("{safe} ({i}).mp4")); i += 1; }
-    s(&p)
+pub async fn export_default_path(base: Option<String>) -> String {
+    blocking(move || {
+        let dir = &paths::get().output_dir;
+        let safe = safe_name(&base.unwrap_or_default(), tr!("Видео", "Video"));
+        let mut p = dir.join(format!("{safe}.mp4"));
+        let mut i = 2;
+        while p.exists() { p = dir.join(format!("{safe} ({i}).mp4")); i += 1; }
+        s(&p)
+    }).await.unwrap_or_default()
 }
 
 #[tauri::command]
@@ -360,9 +383,12 @@ pub async fn project_save(window: WebviewWindow, args: SaveArgs) -> R<Option<Str
             }
         }
     };
-    if let Some(d) = p.parent() { let _ = std::fs::create_dir_all(d); }
-    std::fs::write(&p, args.text).map_err(|e| e.to_string())?;
-    Ok(Some(s(&p)))
+    let text = args.text;
+    blocking(move || {
+        if let Some(d) = p.parent() { let _ = std::fs::create_dir_all(d); }
+        std::fs::write(&p, text).map_err(|e| e.to_string())?;
+        Ok(Some(s(&p)))
+    }).await?
 }
 
 #[tauri::command]
@@ -373,30 +399,44 @@ pub async fn project_open(window: WebviewWindow) -> R<Value> {
     let Some(p) = tauri::async_runtime::spawn_blocking(move || d.blocking_pick_file()).await.ok().flatten().and_then(|f| f.into_path().ok()) else {
         return Ok(Value::Null);
     };
-    let text = std::fs::read_to_string(&p).map_err(|e| e.to_string())?;
-    Ok(json!({ "filePath": s(&p), "text": text }))
+    read_project(p).await
+}
+
+async fn read_project(p: PathBuf) -> R<Value> {
+    blocking(move || {
+        let text = std::fs::read_to_string(&p).map_err(|e| e.to_string())?;
+        Ok(json!({ "filePath": s(&p), "text": text }))
+    }).await?
 }
 
 #[tauri::command]
-pub fn project_read(path: String) -> R<Value> {
-    let p = paths::absolute(Path::new(&path), &std::env::current_dir().unwrap_or_default());
-    let text = std::fs::read_to_string(&p).map_err(|e| e.to_string())?;
-    Ok(json!({ "filePath": s(&p), "text": text }))
+pub async fn project_read(path: String) -> R<Value> {
+    read_project(paths::absolute(Path::new(&path), &std::env::current_dir().unwrap_or_default())).await
+}
+
+/// Автосохранения идут по очереди: два одновременных вызова не должны делить один .tmp
+static AUTOSAVE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[tauri::command]
+pub async fn autosave_write(text: String) -> R<bool> {
+    blocking(move || {
+        let _lock = AUTOSAVE_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let a = &paths::get().autosave;
+        let tmp = a.with_extension("ffproj.tmp");
+        std::fs::write(&tmp, text).and_then(|_| std::fs::rename(&tmp, a)).map_err(|e| e.to_string())?;
+        Ok(true)
+    }).await?
 }
 
 #[tauri::command]
-pub fn autosave_write(text: String) -> R<bool> {
-    let a = &paths::get().autosave;
-    let tmp = a.with_extension("ffproj.tmp");
-    std::fs::write(&tmp, text).and_then(|_| std::fs::rename(&tmp, a)).map_err(|e| e.to_string())?;
-    Ok(true)
+pub async fn autosave_read() -> Option<String> {
+    blocking(|| std::fs::read_to_string(&paths::get().autosave).ok()).await.ok().flatten()
 }
 
 #[tauri::command]
-pub fn autosave_read() -> Option<String> { std::fs::read_to_string(&paths::get().autosave).ok() }
-
-#[tauri::command]
-pub fn shell_show(path: String) -> bool { tauri_plugin_opener::reveal_item_in_dir(&path).is_ok() }
+pub async fn shell_show(path: String) -> bool {
+    blocking(move || tauri_plugin_opener::reveal_item_in_dir(&path).is_ok()).await.unwrap_or(false)
+}
 
 /// Что можно открыть системной программой: существующую папку или медиафайл / проект (.ffproj).
 /// Папки самой программы (экспорт, проекты, кэш, журналы, плагины) создаются, если их ещё нет.
@@ -415,9 +455,11 @@ fn openable(path: &str) -> Result<PathBuf, String> {
 }
 
 #[tauri::command]
-pub fn shell_open(path: String) -> String {
-    let p = match openable(&path) { Ok(p) => p, Err(e) => return e };
-    match tauri_plugin_opener::open_path(s(&p), None::<&str>) { Ok(_) => String::new(), Err(e) => e.to_string() }
+pub async fn shell_open(path: String) -> String {
+    blocking(move || {
+        let p = match openable(&path) { Ok(p) => p, Err(e) => return e };
+        match tauri_plugin_opener::open_path(s(&p), None::<&str>) { Ok(_) => String::new(), Err(e) => e.to_string() }
+    }).await.unwrap_or_else(|e| e)
 }
 
 /// Инструменты разработчика (F12): в debug-сборке всегда, в release — только с cargo-feature `devtools`
@@ -439,7 +481,7 @@ pub fn win_devtools(window: WebviewWindow) -> bool {
 pub fn win_title(window: WebviewWindow, title: String) -> bool { let _ = window.set_title(&title); true }
 
 #[tauri::command]
-pub fn fs_exists(path: String) -> bool { Path::new(&path).exists() }
+pub async fn fs_exists(path: String) -> bool { blocking(move || Path::new(&path).exists()).await.unwrap_or(false) }
 
 // ---------------------------------------------------------------------------
 // ИИ-ассистент и журнал
@@ -453,10 +495,17 @@ pub fn mcp_result(window: WebviewWindow, id: String, payload: Value) {
 }
 
 #[tauri::command]
-pub fn log_line(window: WebviewWindow, level: String, message: String) {
-    use std::io::Write;
-    let file = paths::get().logs.join(format!("{}.log", if window.label() == "main" { "renderer" } else { window.label() }));
-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(file) {
-        let _ = writeln!(f, "[{level}] {message}");
-    }
+pub async fn log_line(window: WebviewWindow, level: String, message: String) {
+    let label = window.label().to_string();
+    let _ = blocking(move || {
+        use std::io::Write;
+        let _lock = LOG_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let file = paths::get().logs.join(format!("{}.log", if label == "main" { "renderer" } else { &label }));
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(file) {
+            let _ = writeln!(f, "[{level}] {message}");
+        }
+    }).await;
 }
+
+/// Строки журнала из разных потоков не перемешиваются
+static LOG_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());

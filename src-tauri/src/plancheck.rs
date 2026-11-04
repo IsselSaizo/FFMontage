@@ -354,6 +354,17 @@ mod tests {
         assert_eq!(parse_graph("color@bg=c=black@0.0").unwrap()[0].name, "color");
     }
 
+    /// M1.7: значение, экранированное js/core/ffEscape.js ffValue (тот же вектор — в tests/ffescape-test.js),
+    /// доходит до опции фильтра без изменений, а разделители внутри него не режут граф
+    #[test]
+    fn ffescape_vectors() {
+        let g = r"drawbox=c=C\\:/a\\\'b/\[x\]\,y\;z\\\\w.png:t=2,null";
+        let f = parse_graph(g).unwrap();
+        assert_eq!(f.len(), 2);
+        assert_eq!(f[0].opts, vec![(Some("c".into()), r"C:/a'b/[x],y;z\w.png".into()), (Some("t".into()), "2".into())]);
+        assert_eq!(f[1].name, "null");
+    }
+
     #[test]
     fn dangerous_graphs_rejected() {
         for g in [

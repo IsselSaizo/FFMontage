@@ -2,7 +2,8 @@
 // через программу (src-tauri/src/control.rs), и окно «ИИ-ассистент» с готовыми настройками для клиентов.
 //
 // Все правки идут через store — с историей, поэтому пользователь видит их сразу и может отменить Ctrl+Z.
-import { store, placeVideo, MIN_CLIP, newTrack } from './store.js';
+import { store, placeVideo, overwriteVideo, moveToLane, MIN_CLIP, newTrack, MAIN_LANE } from './store.js';
+import { TF_LIMITS, tfOf, isIdentity } from './transform.js';
 import { importPaths } from './media.js';
 import { toggleReverse, freezeFrameAt, isReversed, isFreeze } from './fx.js';
 import { TRANSITIONS, MIN_DURATION as TR_MIN, MAX_DURATION as TR_MAX } from './transitions.js';
@@ -86,6 +87,15 @@ function audioTrackArg(id) {
   return id;
 }
 
+// Видеодорожка: "video" (основная) или id верхней (vtk_…); allowLocked — можно и с замком (только чтение/флаги)
+function videoTrackArg(id, { allowLocked = false } = {}) {
+  if (id === undefined || id === null || id === '') return undefined;
+  const lane = typeof id === 'string' ? store.vlane(id) : null;
+  if (!lane || lane.id !== id) fail(`Video track "${id}" not found. Existing: ${store.vlanes().map((l) => l.id).join(', ')} ("video" = main, bottom).`);
+  if (lane.locked && !allowLocked) fail(`Video track "${id}" is locked by the user. Ask them to unlock it (or call update_video_track locked:false only if they agree).`);
+  return id;
+}
+
 const cleanErr = errText;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -143,6 +153,11 @@ function describeClip(c, kind, track = null) {
   if (kind === 'video' && Array.isArray(c.effects) && c.effects.length) o.effects = c.effects;
   if (kind === 'video' && (c.fit === 'cover' || c.fit === 'stretch')) o.fit = c.fit;
   if (kind === 'video' && c.crop) o.crop = { left: c.crop.l, top: c.crop.t, right: c.crop.r, bottom: c.crop.b };
+  if (kind === 'video') {
+    const vf = store.findClip(c.id);
+    if (vf && vf.lane) o.video_track_id = vf.lane.id;
+    if (!isIdentity(tfOf(c))) { const tf = tfOf(c); o.transform = { x: tf.x, y: tf.y, scale: tf.scale, rotate: tf.rotate, opacity: tf.opacity }; }
+  }
   if (store.busy[c.id]) o.processing = store.busy[c.id].label;
   return o;
 }
@@ -157,7 +172,7 @@ const gapsR = (g) => g.map(([a, b]) => [r3(a), r3(b)]);
 function projectSummary() {
   return {
     name: store.project.name, file_path: store.filePath, unsaved_changes: !!store.dirty,
-    duration: r3(store.duration()), video_clips: store.project.videoClips.length,
+    duration: r3(store.duration()), video_clips: store.allVideo().length, video_tracks: store.vlanes().length,
     audio_clips: store.project.audioTracks.reduce((s, t) => s + t.clips.length, 0),
     media: Object.values(store.project.media).filter((m) => !m.hidden).length,
   };
@@ -177,13 +192,19 @@ function getProject() {
     can_undo: store.undoStack.length > 0,
     can_redo: store.redoStack.length > 0,
     media: Object.values(store.project.media).filter((m) => !m.hidden).map(describeMedia),
-    video_track: { clips: v, gaps: gapsR(store.gaps('video')) },
+    video_track: { clips: v, gaps: gapsR(store.gaps('video')), hidden: !!store.project.videoHidden, locked: !!store.project.videoLocked, name: store.trackName(MAIN_LANE) },
+    // Верхние видеодорожки снизу вверх: каждая перекрывает те, что ниже; пустоты прозрачные
+    upper_video_tracks: store.videoTracks().map((tr, i) => ({
+      id: tr.id, index: i + 2, name: store.trackName(tr.id), hidden: !!tr.hidden, locked: !!tr.locked,
+      clips: store.videoLayout(tr.id).map((s) => describeClip(s.clip, 'video')),
+      gaps: gapsR(store.gaps(tr.id)),
+    })),
     audio_tracks: store.project.audioTracks.map((t, i) => ({
       id: t.id, index: i + 1, name: store.trackName(t.id), muted: !!t.muted, volume: r3(t.volume ?? 1), solo: !!t.solo,
       clips: [...t.clips].sort((a, b) => a.start - b.start).map((c) => describeClip(c, 'audio', t)),
       gaps: gapsR(store.gaps(t.id)),
     })),
-    transitions: store.transitions().map((x) => ({ from_clip: x.a.id, to_clip: x.b.id, type: x.type, duration: r3(x.d), at: r3(x.seam) })),
+    transitions: store.transitions('*').map((x) => ({ from_clip: x.a.id, to_clip: x.b.id, type: x.type, duration: r3(x.d), at: r3(x.seam), video_track_id: x.laneId })),
     transition_types: TRANSITIONS.map((t) => t.id),
     format: (() => { const f = store.sourceFormat(); return { width: f.width, height: f.height, fps: r3(f.fps) }; })(),
     export: exportStatus(),
@@ -343,7 +364,9 @@ const TOOLS = {
     let clip;
     if (track === 'video') {
       if (!m.hasVideo) fail(`"${m.name}" has no video — use track "audio".`);
-      clip = store.insertVideoClip(m.id, start === undefined ? null : start, boolArg(args, 'insert') ? 'insert' : 'auto', { in: sin, out: sout }, { linkAudio: boolArg(args, 'separate_audio') === true });
+      const lane = videoTrackArg(strArg(args, 'video_track_id')) || MAIN_LANE;
+      const mode = boolArg(args, 'overwrite') ? 'overwrite' : boolArg(args, 'insert') ? 'insert' : 'auto';
+      clip = store.insertVideoClip(m.id, start === undefined ? null : start, mode, { in: sin, out: sout }, { linkAudio: boolArg(args, 'separate_audio') === true, lane });
     } else {
       if (!m.hasAudio) fail(`"${m.name}" has no sound — use track "video".`);
       const tid = audioTrackArg(strArg(args, 'audio_track_id'));
@@ -404,6 +427,10 @@ const TOOLS = {
       if (crop.l + crop.r > 0.95 || crop.t + crop.b > 0.95) fail('The crop leaves less than 5% of the frame.');
     }
     if (speed !== undefined && m.isImage && !m.isAnimation) fail('A still image has no speed; change its \"duration\" instead.');
+    let vtid = strArg(args, 'video_track_id');
+    if (vtid !== undefined && f.kind !== 'video') fail('"video_track_id" applies only to video clips.');
+    vtid = videoTrackArg(vtid);
+    if (f.kind === 'video' && f.lane.locked) fail(`The clip is on the locked video track "${f.lane.id}". Ask the user to unlock it first.`);
     let tid = strArg(args, 'audio_track_id');
     if (tid !== undefined && f.kind !== 'audio') fail('"audio_track_id" applies only to audio clips.');
     tid = audioTrackArg(tid);
@@ -428,7 +455,9 @@ const TOOLS = {
       if (fadeOut !== undefined) cc.fadeOut = fadeOut;
       if (name !== undefined) { if (name.trim()) cc.name = name.trim(); else delete cc.name; }
       if (cur.kind === 'video') {
-        if (start !== undefined) placeVideo(p, cc, start, insert ? 'insert' : 'auto');
+        const moving = vtid && vtid !== cur.lane.id;
+        if (boolArg(args, 'overwrite') && (start !== undefined || moving)) { if (moving) moveToLane(p, cc, vtid); overwriteVideo(p, cc, start ?? cc.start); }
+        else if (start !== undefined || moving) placeVideo(p, cc, start ?? cc.start, insert ? 'insert' : 'auto', vtid || null);
         else if (lengthChanged) placeVideo(p, cc, cc.start, 'insert'); // длиннее — следующие сдвигаются вправо
       } else {
         if (start !== undefined) cc.start = start;
@@ -447,7 +476,7 @@ const TOOLS = {
     const out = { clip: d };
     if (start !== undefined && Math.abs(d.start - start) > EPS) out.note = `The requested place was occupied; the clip is at ${d.start} s.`;
     if (lengthChanged && f.kind === 'video') {
-      const g = store.gaps('video').find(([a]) => Math.abs(a - d.end) < 0.01);
+      const g = store.gaps(store.findClip(c.id).lane.id).find(([a]) => Math.abs(a - d.end) < 0.01);
       if (g) out.note = `${out.note ? `${out.note} ` : ''}A gap ${r3(g[0])}–${r3(g[1])} s follows the clip (close_gaps to remove).`;
     }
     return out;
@@ -468,13 +497,13 @@ const TOOLS = {
       if (!seg) fail(`No video clip under ${at} s (or the time is too close to a clip edge). Pass clip_id to split an audio clip.`);
       target = seg.clip;
     }
-    const before = new Set(store.project.videoClips.map((c) => c.id));
+    const before = new Set(store.allVideo().map((c) => c.id));
     for (const tr of store.project.audioTracks) for (const c of tr.clips) before.add(c.id);
     const n = store.splitAt(at, target.id);
     if (!n) fail('Nothing was split (the cut is too close to the clip edge).');
     // Связанный звук режется вместе с видео — правую половину ищем на дорожке самого клипа
     const tf = store.findClip(target.id);
-    const pool = tf?.kind === 'video' ? store.project.videoClips : (tf?.track?.clips || []);
+    const pool = tf?.kind === 'video' ? tf.lane.clips : (tf?.track?.clips || []);
     const right = pool.find((c) => !before.has(c.id));
     ai(t('разрез на {t} с', { t: r3(at) }));
     return { left: describeById(target.id), right: right ? describeById(right.id) : null };
@@ -527,15 +556,15 @@ const TOOLS = {
     }
     const j = store.junctionBefore(f.clip.id);
     if (!j) {
-      const list = store.project.videoClips;
+      const list = f.lane.clips;
       const i = list.findIndex((c) => c.id === f.clip.id);
       if (i <= 0) fail('This is the first video clip — a transition needs a previous clip. clip_id must be the SECOND clip of the junction.');
       const prev = list[i - 1];
-      fail(`There is a gap of ${r3(f.clip.start - end(prev))} s between clip ${prev.id} and this clip. Close it first (close_gaps track "video").`);
+      fail(`There is a gap of ${r3(f.clip.start - end(prev))} s between clip ${prev.id} and this clip. Close it first (close_gaps track "${f.lane.id}").`);
     }
     const dur = numArg(args, 'duration', { min: TR_MIN, max: TR_MAX });
     store.setTransition(f.clip.id, type, dur ?? null);
-    const b = store.project.videoClips.find((c) => c.id === f.clip.id);
+    const b = store.allVideo().find((c) => c.id === f.clip.id);
     if (!b || !b.transition) fail(`The clips are too short for a transition (each must be at least ${TR_MIN} s).`);
     ai(t('переход «{name}»', { name: (TRANSITIONS.find((x) => x.id === type) || {}).name || type }));
     const out = { transition: { from_clip: j.a.id, to_clip: b.id, type: b.transition.type, duration: r3(b.transition.duration), at: r3(b.start) } };
@@ -545,9 +574,11 @@ const TOOLS = {
 
   close_gaps(args) {
     const lane = strArg(args, 'track', { required: true });
-    if (lane !== 'video' && !store.project.audioTracks.find((t) => t.id === lane)) {
-      fail(`"track" must be "video" or an audio track id (${store.project.audioTracks.map((t) => t.id).join(', ')}).`);
+    const isV = store.vlane(lane) && store.vlane(lane).id === lane;
+    if (!isV && !store.project.audioTracks.find((t) => t.id === lane)) {
+      fail(`"track" must be "video", an upper video track id (${store.videoTracks().map((t) => t.id).join(', ') || 'none'}) or an audio track id (${store.project.audioTracks.map((t) => t.id).join(', ')}).`);
     }
+    if (isV) videoTrackArg(lane);
     const at = numArg(args, 'time', { min: 0 });
     if (at !== undefined) {
       const shift = store.closeGap(lane, at);
@@ -558,6 +589,65 @@ const TOOLS = {
     const n = store.closeAllGaps(lane);
     if (n) ai(t('убрано пустот: {n}', { n }));
     return { closed: n, gaps_left: gapsR(store.gaps(lane)), duration: r3(store.duration()) };
+  },
+
+  // --- видеодорожки и трансформ (M4) ---
+  add_video_track(args) {
+    const name = strArg(args, 'name', { max: 80 });
+    const below = videoTrackArg(strArg(args, 'above'), { allowLocked: true });
+    const id = store.addVideoTrack(below ?? null, name && name.trim() ? { name: name.trim() } : {});
+    ai(t('новая видеодорожка'));
+    const tr = store.videoTracks().find((x) => x.id === id);
+    return { video_track: { id, index: store.videoTracks().indexOf(tr) + 2, name: store.trackName(id) }, order_bottom_to_top: store.vlanes().map((l) => l.id) };
+  },
+
+  update_video_track(args) {
+    const id = videoTrackArg(strArg(args, 'video_track_id', { required: true }), { allowLocked: true });
+    const isMain = id === MAIN_LANE;
+    if (boolArg(args, 'remove')) {
+      if (isMain) fail('The main video track cannot be removed (delete its clips instead).');
+      if (store.vlane(id).locked) fail('The track is locked by the user.');
+      const n = store.vlane(id).clips.length;
+      store.removeVideoTrack(id);
+      ai(t('видеодорожка удалена'));
+      return { removed: id, clips_removed: n, order_bottom_to_top: store.vlanes().map((l) => l.id) };
+    }
+    const patch = {};
+    const name = strArg(args, 'name', { max: 80 });
+    if (name !== undefined) patch.name = name.trim();
+    const hidden = boolArg(args, 'hidden'); if (hidden !== undefined) patch.hidden = hidden;
+    const locked = boolArg(args, 'locked'); if (locked !== undefined) patch.locked = locked;
+    if (Object.keys(patch).length) store.setVideoTrack(id, patch);
+    const move = enumArg(args, 'move', ['up', 'down']);
+    if (move) {
+      if (isMain) fail('The main video track is always at the bottom; move the upper tracks instead.');
+      if (!store.moveVideoTrack(id, move === 'up' ? 1 : -1)) fail(`The track is already at the ${move === 'up' ? 'top' : 'bottom (just above the main track)'}.`);
+    }
+    if (!Object.keys(patch).length && !move) fail('Nothing to change: pass name, hidden, locked, move or remove.');
+    ai(t('видеодорожка изменена'));
+    const l = store.vlane(id);
+    return { video_track: { id, name: store.trackName(id), hidden: l.hidden, locked: l.locked }, order_bottom_to_top: store.vlanes().map((x) => x.id) };
+  },
+
+  set_transform(args) {
+    const ids = Array.isArray(args.clip_ids) ? args.clip_ids : [args.clip_id];
+    if (!ids.length || ids.some((x) => typeof x !== 'string' || !x)) fail('"clip_id" (or "clip_ids") is required.');
+    for (const id of ids) {
+      const f = clipArg(id);
+      if (f.kind !== 'video') fail(`Clip ${id} is an audio clip; transform applies only to video clips.`);
+      if (f.lane.locked) fail(`Clip ${id} is on the locked video track "${f.lane.id}".`);
+    }
+    const reset = !!boolArg(args, 'reset');
+    const patch = {};
+    for (const k of ['x', 'y', 'scale', 'rotate', 'opacity']) {
+      const [lo, hi] = TF_LIMITS[k];
+      const v = numArg(args, k, { min: lo, max: hi });
+      if (v !== undefined) patch[k] = v;
+    }
+    if (!reset && !Object.keys(patch).length) fail('Pass at least one of x, y, scale, rotate, opacity — or reset: true.');
+    store.setTransform(ids, reset && !Object.keys(patch).length ? null : patch, { replace: reset });
+    ai(t('трансформ клипа'));
+    return { clips: ids.map(describeById) };
   },
 
   undo() {

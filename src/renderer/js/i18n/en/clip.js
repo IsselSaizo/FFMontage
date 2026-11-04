@@ -176,4 +176,18 @@ export default {
     'The frame size is taken from the largest video on the timeline (with its aspect ratio applied). You can choose a different one when exporting.',
   'Формат кадра и фон — кнопки над плеером. Горячие клавиши — меню ☰ → «Горячие клавиши».':
     'Aspect ratio and background: buttons above the player. Keyboard shortcuts: menu ☰ → “Keyboard shortcuts”.',
+  'Трансформ': 'Transform',
+  'По горизонтали': 'Horizontal',
+  'По вертикали': 'Vertical',
+  'Масштаб': 'Scale',
+  'Поворот': 'Rotation',
+  'Непрозрачность': 'Opacity',
+  'Сброс': 'Reset',
+  'По центру ½': 'Centre ½',
+  'Угол ↗ ⅓': 'Corner ↗ ⅓',
+  'Угол ↘ ⅓': 'Corner ↘ ⅓',
+  'Левая половина': 'Left half',
+  'Правая половина': 'Right half',
+  'Дорожка закрыта замком — снимите его в заголовке дорожки.': 'The track is locked — unlock it in the track header.',
+  'В плеере выделенный клип можно двигать мышью, тянуть за углы (масштаб) и за кружок сверху (поворот; Shift — шагом 15°). Двойной щелчок по ползунку — сброс.': 'In the player, drag the selected clip to move it, its corners to scale and the dot on top to rotate (Shift — 15° steps). Double-click a slider to reset.',
 };

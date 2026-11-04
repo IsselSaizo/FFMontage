@@ -113,7 +113,8 @@ export async function freezeFrameAt(time = store.time, dur = 3) {
     let newId = null;
     store.mutate((p) => {
       const id = ensureDerived(info, { kind: 'freeze', from: m.id, at: local });
-      const cc = p.videoClips.find((x) => x.id === c.id);
+      const lane = store.findClip(c.id) && store.findClip(c.id).lane;
+      const cc = lane && lane.clips.find((x) => x.id === c.id);
       if (!cc) return;
       const at = tlAt(cc, local);
       // Разрезаем, если курсор внутри клипа
@@ -121,11 +122,11 @@ export async function freezeFrameAt(time = store.time, dur = 3) {
         const right = { ...JSON.parse(JSON.stringify(cc)), id: uid('clp'), in: local, start: at, fadeIn: 0 };
         delete right.transition;
         cc.out = local; cc.fadeOut = 0;
-        p.videoClips.push(right);
+        lane.clips.push(right);
       }
       const fz = { id: uid('clp'), mediaId: id, in: 0, out: fdur, start: at, volume: 1, muted: false, fadeIn: 0, fadeOut: 0, name: t('Стоп-кадр') };
       const insertAt = at - cc.start < MIN_CLIP ? cc.start : (clipEnd(cc) - at < MIN_CLIP ? clipEnd(cc) : at);
-      placeVideo(p, fz, insertAt, 'insert');
+      placeVideo(p, fz, insertAt, 'insert', lane.id);
       newId = fz.id;
     });
     if (newId) {

@@ -59,7 +59,7 @@ export function initViewbar() {
       h('button', {
         class: 'btn ghost small wide-left', dataset: { act: 'fit-all' },
         onclick: () => {
-          store.setFit(store.project.videoClips.map((x) => x.id), cur);
+          store.setFit(store.allVideo().map((x) => x.id), cur);
           toast(t('Подгонка «{name}» — для всех видеоклипов', { name: FITS.find((f) => f[0] === cur)[1] }), 'success', 2200);
         },
       }, t('Применить ко всем видеоклипам')));

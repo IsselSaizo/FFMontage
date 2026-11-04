@@ -217,8 +217,11 @@ kbd {
 .stage .slot.cover { object-fit: cover; }
 .stage .slot.stretch { object-fit: fill; }
 .stage-overlay { position: absolute; inset: 0; z-index: 3; opacity: 0; pointer-events: none; background: #fff; }
+/* Слой видеодорожки (свой контекст наложения; z-index = порядок дорожки) */
+.lane-view { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+.lane-view.lane-hidden { opacity: 0; }
 .stage-msg {
-  position: absolute; inset: 0; display: none; align-items: center; justify-content: center; text-align: center;
+  position: absolute; inset: 0; z-index: 40; display: none; align-items: center; justify-content: center; text-align: center;
   color: var(--text-2); font-size: 14px; padding: 20px;
 }
 .stage-msg.on { display: flex; }
@@ -598,6 +601,20 @@ body[data-mode="anim"] #anim-presets, body[data-mode="anim"] #anim-params { disp
 .sec-wrap span:first-child { padding-left: 8px; }
 /* ---------- Кадрирование в плеере ---------- */
 .crop-layer { position: absolute; inset: 0; z-index: 20; }
+/* Гизмо трансформа (gizmo.js) */
+.gz-layer { position: absolute; inset: 0; z-index: 25; pointer-events: none; }
+.gz-box { position: absolute; display: none; box-sizing: border-box; border: 1.5px solid var(--accent); box-shadow: 0 0 0 1px rgba(0,0,0,.45); pointer-events: auto; cursor: move; transform-origin: 50% 50%; }
+.gz-box.locked { border-style: dashed; cursor: not-allowed; }
+.gz-box.locked .gz-h, .gz-box.locked .gz-rot, .gz-box.locked .gz-stem { display: none; }
+.gz-h { position: absolute; width: 11px; height: 11px; margin: -6px; background: #fff; border: 1.5px solid var(--accent); border-radius: 2px; }
+.gz-h.nw { left: 0; top: 0; cursor: nwse-resize; } .gz-h.se { right: 0; bottom: 0; margin: -6px; cursor: nwse-resize; }
+.gz-h.ne { right: 0; top: 0; cursor: nesw-resize; } .gz-h.sw { left: 0; bottom: 0; cursor: nesw-resize; }
+.gz-rot { position: absolute; left: 50%; top: -30px; width: 12px; height: 12px; margin-left: -6px; border-radius: 50%; background: #fff; border: 1.5px solid var(--accent); cursor: grab; }
+.gz-stem { position: absolute; left: 50%; top: -18px; width: 1.5px; height: 18px; margin-left: -.75px; background: var(--accent); pointer-events: none; }
+.gz-guide { position: absolute; display: none; background: #ff4fd8; pointer-events: none; }
+.gz-guide.v { top: 0; bottom: 0; width: 1px; }
+.gz-guide.h { left: 0; right: 0; height: 1px; }
+body.cropping .gz-layer { display: none; }
 .crop-box { position: absolute; border: 1.5px solid #fff; box-shadow: 0 0 0 9999px rgba(0,0,0,.6); cursor: move; touch-action: none;
   background-image: linear-gradient(rgba(255,255,255,.25) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.25) 1px, transparent 1px);
   background-size: 33.333% 33.333%; background-position: -1px -1px; }
@@ -627,8 +644,7 @@ body.cropping #viewbar .vb-crop { background: var(--accent-soft); color: var(--t
 .th-fx { font-size: 10px; font-weight: 700; color: #9fe3ff; margin-left: 2px; }
 body[data-mode="audio"] .tl-row.video { opacity: .55; }
 /* ---------- Вкладка «Анимации» и дорожка «Наложения» ---------- */
-.stage video.ov { z-index: 4; }
-.anim-canvas { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 5; pointer-events: none; }
+.anim-canvas { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 30; pointer-events: none; }
 .anim-preset { display: flex; gap: 10px; align-items: center; width: 100%; text-align: left; padding: 10px; margin-bottom: 8px; border-radius: 10px;
   background: var(--panel-2); border: 1px solid var(--line); color: var(--text); cursor: pointer; }
 .anim-preset.on { border-color: var(--accent); background: var(--accent-soft); }
@@ -641,12 +657,21 @@ body[data-mode="audio"] .tl-row.video { opacity: .55; }
 .anim-img.on { border-color: var(--accent); }
 .anim-actions { display: flex; flex-direction: column; gap: 8px; margin-top: 14px; }
 #anim-seed { width: 80px; }
-.tl-row.overlay .tl-head { min-height: 34px; }
-.overlay-lane { position: relative; background: rgba(255,211,107,.04); }
-.ov-clip { position: absolute; top: 3px; bottom: 3px; border-radius: 6px; background: linear-gradient(180deg, #c9a640, #9c7c22); border: 1px solid rgba(255,255,255,.25);
-  overflow: hidden; cursor: grab; display: flex; align-items: center; padding: 0 6px; font-size: 11px; color: #1c1606; font-weight: 600; white-space: nowrap; }
-.ov-clip.selected { outline: 2px solid #fff; outline-offset: -1px; }
-.ov-name { overflow: hidden; text-overflow: ellipsis; }
+/* ---------- Видеодорожки (M4) ---------- */
+.tl-row.vtrack { margin-top: 6px; }
+.tl-row.vtrack + .tl-row.video { margin-top: 6px; }
+.vtrack-lane { cursor: default; background: rgba(124, 92, 255, .035); }
+.vtrack-lane:hover .junction { opacity: 1; transform: none; }
+.tl-head.video-head { flex-direction: column; align-items: stretch; justify-content: center; gap: 2px; padding: 0 6px 0 10px; }
+.th-vbtn { width: 22px; height: 22px; display: grid; place-items: center; border: 0; background: transparent; color: var(--text-3); border-radius: 5px; cursor: pointer; padding: 0; }
+.th-vbtn:hover { color: var(--text); background: rgba(255,255,255,.06); }
+.th-vbtn.on { color: #ffd76a; }
+.tl-row.lane-hidden .tl-lane { opacity: .4; }
+.tl-row.lane-locked .tl-lane { background-image: repeating-linear-gradient(135deg, rgba(255,255,255,.035) 0 6px, transparent 6px 12px); }
+.tl-row.lane-locked .clip { cursor: not-allowed; }
+.tl-row.vtrack.drop-hot .tl-lane, .tl-row.video.drop-hot .tl-lane { box-shadow: inset 0 0 0 2px var(--accent); }
+.clip .ci.tf { color: #b9a6ff; }
+.tl-head.corner .btn.tiny { padding: 2px 8px; }
 /* ---------- Окно настроек ---------- */
 .modal.settings { width: 940px; height: min(680px, calc(100vh - 60px)); display: flex; flex-direction: column; overflow: hidden; }
 .set-wrap { flex: 1; min-height: 0; display: grid; grid-template-columns: 200px 1fr; border-top: 1px solid var(--line); }

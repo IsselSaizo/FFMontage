@@ -2,7 +2,8 @@
 // Два <video>: обычно один играет, а во второй заранее грузится следующий клип;
 // на переходе играют оба, а картинку смешивает CSS (см. transitions.js).
 // Музыка — отдельные <audio>, громкость (можно > 100%) и затухания — через Web Audio.
-import { store } from './store.js';
+import { store, MAIN_LANE } from './store.js';
+import { cssTransform } from './transform.js';
 import { playUrl, audioUrl, playbackFailed } from './media.js';
 import { h, $, icon, fmtTime } from './util.js';
 import { applyTransition, resetLayer } from './transitions.js';
@@ -32,26 +33,11 @@ export class Preview {
   constructor(root) {
     this.root = root;
     this.stage = h('div', { class: 'stage' });
-    this.slots = [0, 1].map((i) => {
-      const v = h('video', { class: 'slot', preload: 'auto', playsinline: true, disablepictureinpicture: true, crossorigin: 'anonymous' });
-      v.dataset.slot = i;
-      v.clipId = null;
-      v.addEventListener('error', () => {
-        v.failed = true; this.updateMessage();
-        // Файл не декодируется (нет кодека в системе) — переключить этот файл на прокси
-        const f = v.clipId && store.findClip(v.clipId);
-        if (f && v.error && v.error.code >= 3) playbackFailed(f.clip.mediaId);
-      });
-      v.addEventListener('loadeddata', () => { v.failed = false; this.updateMessage(); });
-      return v;
-    });
-    this.imgSlots = [0, 1].map(() => h('img', { class: 'slot img', draggable: 'false', alt: '' }));
-    this.overlay = h('div', { class: 'stage-overlay' });
     this.msg = h('div', { class: 'stage-msg' });
-    // Дорожка «Наложения» (анимации с прозрачностью) — свой <video> поверх всего
-    this.ovEl = h('video', { class: 'slot ov', preload: 'auto', playsinline: true, disablepictureinpicture: true, crossorigin: 'anonymous' });
-    this.ovEl.muted = true;
-    this.stage.append(...this.slots, ...this.imgSlots, this.overlay, this.ovEl, this.msg);
+    // Слои видеодорожек (M4.3): у каждой дорожки свой «вид» — 2 <video> + 2 <img> + заливка перехода;
+    // порядок в .stage = порядок дорожек (основная снизу), пустоты верхних дорожек прозрачные
+    this.views = new Map();      // laneId -> LaneView
+    this.stage.append(this.msg);
     store.on('preview-transition', (info) => this.hoverTransition(info));
     store.on('preview-effect', (info) => this.hoverEffect(info));
     this.frame = h('div', { class: 'stage-frame' }, this.stage);
@@ -62,11 +48,12 @@ export class Preview {
     this.routes = new Map();     // element -> { g, nodes, sig, dest } — цепочка эффектов клипа
     this.buses = new Map();      // trackId -> { input, nodes, sig } — эффекты дорожки
     this.audio = new Map();      // clipId -> { el, url }
-    this.visible = new Set();    // показанные сейчас <video>
     this.master = null;          // { el, clip } — по нему идут часы воспроизведения
-    this.current = null;         // что показано: результат layersAt()
+    this.masterTrans = false;    // часы-мастер сейчас на переходе (время берём с часов, а не с видео)
+    this.current = null;         // что показано на основной дорожке: результат layersAt()
     this.playing = false;
     this.clock = { wall: 0, t: 0 };
+    this.view(MAIN_LANE);
 
     store.on('time', (src) => { if (src !== 'preview') this.onExternalSeek(); });
     store.on('project', () => { this.layoutStage(); if (!this.playing) this.seek(store.time); else this.syncAudio(store.time, true); this.cleanupAudio(); });
@@ -101,7 +88,7 @@ export class Preview {
       this.out = this.ctx.createGain();
       this.out.gain.value = this.monitor();
       this.out.connect(this.ctx.destination);
-      for (const v of this.slots) this.attach(v);
+      for (const v of this.allSlots()) this.attach(v);
     }
     if (this.ctx.state === 'suspended') this.ctx.resume();
   }
@@ -192,11 +179,61 @@ export class Preview {
     return track.volume ?? 1;
   }
 
-  // --- что показывать в момент t ---
+  // --- слои видеодорожек ---
+  // Вид дорожки: { id, root, slots (2 <video>), imgSlots (2 <img>), overlay, visible, current, master }
+  view(id) {
+    let v = this.views.get(id);
+    if (v) return v;
+    const root = h('div', { class: 'lane-view', dataset: { lane: id } });
+    const slots = [0, 1].map((i) => {
+      const el = h('video', { class: 'slot', preload: 'auto', playsinline: true, disablepictureinpicture: true, crossorigin: 'anonymous' });
+      el.dataset.slot = i;
+      el.clipId = null;
+      el.addEventListener('error', () => {
+        el.failed = true; this.updateMessage();
+        // Файл не декодируется (нет кодека в системе) — переключить этот файл на прокси
+        const f = el.clipId && store.findClip(el.clipId);
+        if (f && el.error && el.error.code >= 3) playbackFailed(f.clip.mediaId);
+      });
+      el.addEventListener('loadeddata', () => { el.failed = false; this.updateMessage(); });
+      return el;
+    });
+    const imgSlots = [0, 1].map(() => h('img', { class: 'slot img', draggable: 'false', alt: '' }));
+    const overlay = h('div', { class: 'stage-overlay' });
+    root.append(...slots, ...imgSlots, overlay);
+    v = { id, root, slots, imgSlots, overlay, visible: new Set(), current: null, master: null };
+    this.views.set(id, v);
+    if (this.ctx) for (const el of slots) this.attach(el);
+    return v;
+  }
+  // Виды — по дорожкам проекта: новые создаются, лишние убираются, порядок в .stage — как у дорожек
+  syncViews(lanes) {
+    const ids = new Set(lanes.map((l) => l.id));
+    for (const [id, v] of this.views) {
+      if (ids.has(id)) continue;
+      for (const el of v.slots) { el.pause(); el.removeAttribute('src'); el.load(); const g = this.gains.get(el); if (g) { g.disconnect(); this.gains.delete(el); this.routes.delete(el); } }
+      v.root.remove();
+      this.views.delete(id);
+    }
+    lanes.forEach((l, i) => { this.view(l.id).root.style.zIndex = String(i + 1); });
+    // Порядок в DOM: снизу вверх, перед сообщением
+    let ref = this.msg;
+    for (let i = lanes.length - 1; i >= 0; i--) { const r = this.view(lanes[i].id).root; if (r.nextSibling !== ref) this.stage.insertBefore(r, ref); ref = r; }
+  }
+  get mainView() { return this.view(MAIN_LANE); }
+  // Совместимость (тесты, кадрирование): элементы основной дорожки
+  get slots() { return this.mainView.slots; }
+  get imgSlots() { return this.mainView.imgSlots; }
+  get overlay() { return this.mainView.overlay; }
+  get visible() { return this.mainView.visible; }
+  // Все <video> всех дорожек
+  allSlots() { return [...this.views.values()].flatMap((v) => v.slots); }
+
+  // --- что показывать в момент t на дорожке lane ---
   // { A: {clip, mt}, B?: {clip, mt}, trans?: {type, p}, master: 'A'|'B' } или null (пустота)
-  layersAt(t) {
+  layersAt(t, lane = store.vlane(MAIN_LANE)) {
     const o = this.override;
-    if (o) {
+    if (o && (o.laneId || MAIN_LANE) === lane.id) {
       return {
         A: { clip: o.a, mt: o.a.out - 0.05 },
         B: { clip: o.b, mt: o.b.in },
@@ -204,7 +241,7 @@ export class Preview {
         master: o.p < 0.5 ? 'A' : 'B',
       };
     }
-    for (const tr of store.transitions()) {
+    for (const tr of store.transitions(lane.id)) {
       if (t >= tr.from - EPS && t < tr.to - EPS) {
         return {
           A: { clip: tr.a, mt: srcAt(tr.a, t) },
@@ -214,22 +251,22 @@ export class Preview {
         };
       }
     }
-    const layout = store.videoLayout();
+    const layout = store.videoLayout(lane.id);
     let s = layout.find((x) => t >= x.start - EPS && t < x.end - EPS);
-    if (!s && layout.length) {
+    if (!s && layout.length && lane.main) {
       // ровно в конце клипа (например, в конце ролика) — показываем последний кадр
       s = layout.find((x) => Math.abs(t - x.end) < 0.02 && !layout.some((y) => Math.abs(y.start - x.end) < 0.02));
     }
     return s ? { A: { clip: s.clip, mt: srcAt(s.clip, t) }, master: 'A' } : null;
   }
 
-  // Следующее, что понадобится показать после t (для предзагрузки)
-  nextLayerAfter(t) {
+  // Следующее, что понадобится показать на дорожке после t (для предзагрузки)
+  nextLayerAfter(t, lane = store.vlane(MAIN_LANE)) {
     let best = null;
-    for (const s of store.videoLayout()) {
+    for (const s of store.videoLayout(lane.id)) {
       if (s.start > t + EPS && (!best || s.start < best.at)) best = { at: s.start, clip: s.clip, mt: s.clip.in };
     }
-    for (const tr of store.transitions()) {
+    for (const tr of store.transitions(lane.id)) {
       if (tr.from > t + EPS && (!best || tr.from < best.at)) best = { at: tr.from, clip: tr.b, mt: tr.b.in - (tr.d / 2) * speedOf(tr.b) };
     }
     return best;
@@ -248,16 +285,16 @@ export class Preview {
     if (Math.abs(el.currentTime - time) > 0.001) el.currentTime = Math.max(0, time);
   }
 
-  // Раздаёт слои по двум <video>: тот же клип → тот же элемент; тот же файл с близким временем
+  // Раздаёт слои по двум <video> вида: тот же клип → тот же элемент; тот же файл с близким временем
   // (продолжение после разреза) → тот же элемент; иначе — свободный
-  assign(layers) {
+  assign(v, layers) {
     const used = new Set();
-    const pick = (fn) => this.slots.find((s) => !used.has(s) && fn(s));
+    const pick = (fn) => v.slots.find((s) => !used.has(s) && fn(s));
     return layers.map((L) => {
       const s = pick((x) => x.clipId === L.clip.id && x.dataset.url === L.url)
         || pick((x) => x.dataset.url === L.url && Math.abs(x.currentTime - L.mt) < 0.35)
         || pick((x) => x.dataset.url === L.url)
-        || pick((x) => !this.visible.has(x))
+        || pick((x) => !v.visible.has(x))
         || pick(() => true);
       used.add(s);
       s.clipId = L.clip.id;
@@ -265,10 +302,27 @@ export class Preview {
     });
   }
 
-  // Показ кадра (и, при воспроизведении, управление элементами) для момента t
+  // Показ кадра всех видеодорожек (и, при воспроизведении, управление элементами) для момента t
   present(t, force = false) {
-    const L = this.layersAt(t);
-    this.current = L;
+    const lanes = store.vlanes();
+    this.syncViews(lanes);
+    let master = null; let masterTrans = false;
+    for (const lane of lanes) {
+      const v = this.view(lane.id);
+      // Скрытая дорожка не видна, но её видео продолжают играть — звук клипов остаётся (как в экспорте).
+      // hideOverlay — редактор анимаций рисует свой холст и прячет верхние дорожки
+      v.root.classList.toggle('lane-hidden', lane.hidden || (!lane.main && !!this.hideOverlay));
+      const L = this.layersAt(t, lane);
+      this.presentLane(v, L, t, force, lane);
+      if (lane.main) this.current = L;
+      if (!master && v.master) { master = v.master; masterTrans = !!(L && L.trans); }
+    }
+    this.master = master; this.masterTrans = masterTrans;
+    this.updateMessage();
+  }
+
+  presentLane(v, L, t, force, lane) {
+    v.current = L;
     const layers = [];
     if (L) {
       for (const role of ['A', 'B']) {
@@ -281,15 +335,15 @@ export class Preview {
     // Картинки показываются в <img>, видео — в <video>
     const vLayers = layers.filter((x) => !isStill(x.clip));
     const iLayers = layers.filter((x) => isStill(x.clip));
-    const els = this.assign(vLayers);
-    this.visible = new Set(els);
-    this.master = null;
+    const els = this.assign(v, vLayers);
+    v.visible = new Set(els);
+    v.master = null;
     iLayers.forEach((x, i) => {
-      const el = this.imgSlots[i];
+      const el = v.imgSlots[i];
       if (el.dataset.url !== x.url) { el.dataset.url = x.url; el.src = x.url; }
       x.el = el; x.fade = fadeFactor(x.clip, t);
     });
-    for (const s of this.imgSlots) s.classList.toggle('on', iLayers.some((x) => x.el === s));
+    for (const s of v.imgSlots) s.classList.toggle('on', iLayers.some((x) => x.el === s));
 
     vLayers.forEach((x, i) => {
       const el = els[i];
@@ -307,7 +361,7 @@ export class Preview {
         this.load(el, x.url, mt);
         if (!before && !after) el.play().catch(() => {});
       } else {
-        const isMaster = x.role === L.master && !L.trans;
+        const isMaster = x.role === L.master && !L.trans && this.master && this.master.el === el;
         const drift = Math.abs(el.currentTime - mt);
         if (before || after) {
           if (!el.paused) el.pause();
@@ -319,15 +373,15 @@ export class Preview {
           el.currentTime = mt;
         }
       }
-      if (x.role === L.master) this.master = { el, clip: x.clip };
+      if (x.role === L.master) v.master = { el, clip: x.clip };
       const fade = fadeFactor(x.clip, t);
       const mix = L.trans ? (x.role === 'A' ? 1 - L.trans.p : L.trans.p) : 1;
       this.setGain(el, this.clipGain(x.clip) * fade * mix);
       x.el = el; x.fade = fade;
     });
 
-    for (const s of this.slots) {
-      const on = this.visible.has(s);
+    for (const s of v.slots) {
+      const on = v.visible.has(s);
       s.classList.toggle('on', on);
       if (!on && !s.paused) s.pause();
     }
@@ -335,29 +389,31 @@ export class Preview {
     const B = layers.find((x) => x.role === 'B');
     for (const x of layers) if (x.el) x.el.style.filter = '';
     if (L && L.trans) {
-      applyTransition(L.trans.type, L.trans.p, A ? A.el : null, B ? B.el : null, this.overlay, A ? A.fade : 1, B ? B.fade : 1);
+      applyTransition(L.trans.type, L.trans.p, A ? A.el : null, B ? B.el : null, v.overlay, A ? A.fade : 1, B ? B.fade : 1);
     } else {
       if (A) resetLayer(A.el, A.fade);
-      this.overlay.style.opacity = '0';
+      v.overlay.style.opacity = '0';
     }
-    // «Заполнить/вписать» и эффекты клипа (поверх фильтра перехода, например размытия)
+    // «Заполнить/вписать», трансформ и эффекты клипа (поверх стилей перехода, например размытия или сдвига)
     const shownW = this.stage.clientWidth;
     for (const x of layers) {
       if (!x.el) continue;
-      // В режиме кадрирования клип показывается целиком (вписан), рамку рисует cropMode.js
+      // В режиме кадрирования клип показывается целиком (вписан, без трансформа), рамку рисует cropMode.js
       const editing = this.cropEdit === x.clip.id;
       x.el.classList.toggle('cover', !editing && x.clip.fit === 'cover');
       x.el.classList.toggle('stretch', !editing && x.clip.fit === 'stretch');
       // Кадрирование: object-view-box вырезает часть кадра, а object-fit подгоняет уже её (как crop→scale в экспорте)
       const vb = editing ? '' : cropViewBox(x.clip.crop);
       if (x.el.style.objectViewBox !== vb) x.el.style.objectViewBox = vb;
+      // Трансформ клипа — внутри стиля перехода (как в экспорте: сначала слой собирается, потом переход)
+      const ct = editing ? null : cssTransform(x.clip);
+      if (ct && ct.transform) x.el.style.transform = `${x.el.style.transform || ''} ${ct.transform}`.trim();
+      if (ct && ct.opacity) x.el.style.opacity = String((Number(x.el.style.opacity) || (x.el.style.opacity === '' ? 1 : 0)) * Number(ct.opacity));
       const ov = this.effectOverride && this.effectOverride.clipId === x.clip.id ? { ...x.clip, effects: this.effectOverride.effects } : x.clip;
       const tf = x.el.style.filter;
       x.el.style.filter = cssEffects(ov, shownW, tf ? [tf] : []);
     }
-    if (!this.override) this.preload(t);
-    this.syncOverlay(t, force);
-    this.updateMessage();
+    if (!this.override) this.preload(v, lane, t);
   }
 
   // --- показ перехода/эффекта при наведении (проект не меняется) ---
@@ -375,7 +431,7 @@ export class Preview {
       if (s && s.kind === 'transition') bId = s.id;
       else {
         let best = null;
-        for (const v of store.project.videoClips) {
+        for (const v of store.allVideo()) {
           const j = store.junctionBefore(v.id);
           if (j && (!best || Math.abs(j.seam - store.time) < Math.abs(best.seam - store.time))) best = { id: v.id, seam: j.seam };
         }
@@ -385,7 +441,7 @@ export class Preview {
     const j = bId && store.junctionBefore(bId);
     if (!j) return;
     const d = Math.max(0.4, info.duration || (j.b.transition && j.b.transition.duration) || 0.8);
-    this.override = { a: j.a, b: j.b, type: info.type, p: 0, seam: j.seam };
+    this.override = { a: j.a, b: j.b, type: info.type, p: 0, seam: j.seam, laneId: j.laneId };
     const t0 = performance.now();
     const loop = (now) => {
       // Элемент, на который навели, исчез или мышь ушла (mouseleave мог не прийти) — показ закончен
@@ -412,36 +468,18 @@ export class Preview {
     this.present(t, true);
   }
 
-  // Наложение в момент t: показываем, перематываем и запускаем вместе с роликом.
-  // hideOverlay — редактор анимаций рисует свой холст и прячет готовое наложение
-  syncOverlay(t, force) {
-    const el = this.ovEl;
-    const c = this.hideOverlay ? null : (store.project.overlayClips || []).find((x) => t >= x.start - EPS && t < clipEnd(x) - 0.01);
-    const url = c ? playUrl(c.mediaId) : null;
-    if (!url) { el.classList.remove('on'); if (!el.paused) el.pause(); return; }
-    const mt = srcAt(c, t);
-    if (el.dataset.url !== url) { el.dataset.url = url; el.src = url; el.currentTime = mt; }
-    el.classList.add('on');
-    if (this.playing) {
-      if (el.paused) { el.currentTime = mt; el.play().catch(() => {}); } else if (force || Math.abs(el.currentTime - mt) > 0.15) el.currentTime = mt;
-    } else {
-      if (!el.paused) el.pause();
-      if (Math.abs(el.currentTime - mt) > 0.03) el.currentTime = mt;
-    }
-  }
-
-  // Заранее грузим следующий клип в свободный элемент
-  preload(t) {
-    const n = this.nextLayerAfter(t);
+  // Заранее грузим следующий клип дорожки в свободный элемент её вида
+  preload(v, lane, t) {
+    const n = this.nextLayerAfter(t, lane);
     if (!n || n.at - t > 5) return;
     const url = playUrl(n.clip.mediaId);
     if (!url) return;
     const mt = this.clampMt(n.clip, n.mt);
     // Продолжение того же файла в играющем элементе (после разреза) — грузить нечего
-    if (this.slots.some((s) => this.visible.has(s) && s.dataset.url === url && Math.abs(s.currentTime + (n.at - t) * speedOf(n.clip) - mt) < 0.35)) return;
+    if (v.slots.some((s) => v.visible.has(s) && s.dataset.url === url && Math.abs(s.currentTime + (n.at - t) * speedOf(n.clip) - mt) < 0.35)) return;
     // Уже загружено в свободный элемент
-    if (this.slots.some((s) => !this.visible.has(s) && s.dataset.url === url && s.clipId === n.clip.id && Math.abs(s.currentTime - mt) < 0.3)) return;
-    const free = this.slots.find((s) => !this.visible.has(s));
+    if (v.slots.some((s) => !v.visible.has(s) && s.dataset.url === url && s.clipId === n.clip.id && Math.abs(s.currentTime - mt) < 0.3)) return;
+    const free = v.slots.find((s) => !v.visible.has(s));
     if (free) { free.clipId = n.clip.id; this.load(free, url, mt); }
   }
 
@@ -454,12 +492,12 @@ export class Preview {
   updateMessage() {
     const L = this.current;
     let text = '';
-    if (!store.project.videoClips.length && !store.audioEnd()) {
+    if (!store.allVideo().length && !store.audioEnd()) {
       text = Object.keys(store.project.media).length
         ? t('Перетащите видео на таймлайн внизу')
         : t('Импортируйте видео, чтобы начать');
-    } else if (L) {
-      const c = L[L.master].clip;
+    } else if (L || this.master) {
+      const c = L ? L[L.master].clip : this.master.clip;
       const rt = store.runtime[c.mediaId] || {};
       if (rt.missing) text = t('Файл не найден');
       else if (!playUrl(c.mediaId)) text = rt.status === 'rebuild' ? t('Восстановление эффекта…') : t('Подготовка файла… {p}%', { p: Math.round((rt.progress || 0) * 100) });
@@ -491,8 +529,7 @@ export class Preview {
     this.playing = false;
     store.playing = false;
     cancelAnimationFrame(this.raf);
-    for (const s of this.slots) s.pause();
-    this.ovEl.pause();
+    for (const s of this.allSlots()) s.pause();
     for (const { el } of this.audio.values()) el.pause();
     store.emit('playstate', false);
     this.seek(store.time);
@@ -517,11 +554,10 @@ export class Preview {
     if (!this.playing) return;
     const dur = store.duration();
     const now = performance.now();
-    const L = this.current;
     let t = this.clock.t + (now - this.clock.wall) / 1000;  // по умолчанию — часы
     const ms = this.master;
-    // Вне переходов время берём с играющего видео: так картинка и звук не расходятся
-    if (L && !L.trans && ms && store.findClip(ms.clip.id) && !ms.el.failed && !ms.el.ended && playUrl(ms.clip.mediaId)) {
+    // Вне переходов время берём с играющего видео (основная дорожка, иначе нижняя из верхних): картинка и звук не расходятся
+    if (ms && !this.masterTrans && store.findClip(ms.clip.id) && !ms.el.failed && !ms.el.ended && playUrl(ms.clip.mediaId)) {
       const mt = ms.el.currentTime;
       if (ms.el.readyState >= 2 && !ms.el.seeking && !ms.el.paused) {
         t = tlAt(ms.clip, mt);

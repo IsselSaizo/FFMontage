@@ -4,6 +4,7 @@ import { t } from './i18n.js';
 import { speedOf, tlLen, clipEnd, srcAt, tlAt, MIN_SPEED, MAX_SPEED } from './clipTime.js';
 import { newAudioFx } from './audioFx.js';
 import { MIN_DURATION as TR_MIN, MAX_DURATION as TR_MAX, DEFAULT_DURATION as TR_DEFAULT } from './transitions.js';
+import { cleanTransform } from './transform.js';
 
 export const MIN_CLIP = 0.1;   // минимальная длина клипа, с
 export const ADJ = 0.002;      // допуск «стоят впритык», с
@@ -32,6 +33,35 @@ const byStart = (a, b) => a.start - b.start;
 // по времени файла (syncLinks): двигаем видео — едет и звук; разрезаем/удаляем — вместе.
 // stream — номер звукового потока файла (0 — первый).
 export const newTrack = (extra = {}) => ({ id: uid('trk'), muted: false, solo: false, volume: 1, clips: [], ...extra });
+
+// Видеодорожки (M4). Основная V1 — p.videoClips (снизу; под ней фон проекта, у неё videoName/videoHidden/videoLocked).
+// Верхние — p.videoTracks [{ id, name?, hidden?, locked?, clips }]: порядок = z, последняя — сверху; пустоты прозрачные.
+// Правила у всех одинаковые: клипы по времени без наложений, переходы — только внутри дорожки.
+// У клипа любой видеодорожки: transform { x, y, scale, rotate, opacity } (transform.js) и crop { l, t, r, b }.
+// hidden — дорожку не видно (в плеере и в экспорте; звук её клипов остаётся), locked — клипы нельзя двигать и менять мышью.
+export const MAIN_LANE = 'video';
+export const newVideoTrack = (extra = {}) => ({ id: uid('vtk'), clips: [], ...extra });
+
+// Все видеодорожки снизу вверх: { id, main, track, clips (чтение и запись), hidden, locked }
+export function vlanes(p) {
+  const main = {
+    id: MAIN_LANE, main: true, track: null,
+    get clips() { return p.videoClips; }, set clips(v) { p.videoClips = v; },
+    get hidden() { return !!p.videoHidden; }, get locked() { return !!p.videoLocked; },
+  };
+  return [main, ...(p.videoTracks || []).map((tr) => ({
+    id: tr.id, main: false, track: tr,
+    get clips() { return tr.clips; }, set clips(v) { tr.clips = v; },
+    get hidden() { return !!tr.hidden; }, get locked() { return !!tr.locked; },
+  }))];
+}
+export const vlane = (p, id) => vlanes(p).find((l) => l.id === (id || MAIN_LANE)) || null;
+// Дорожка, на которой лежит клип (объект клипа или его id)
+export function vlaneOf(p, clip) {
+  const id = typeof clip === 'string' ? clip : clip && clip.id;
+  return vlanes(p).find((l) => l.clips.some((c) => c === clip || c.id === id)) || null;
+}
+export const allVideo = (p) => [...(p.videoClips || []), ...(p.videoTracks || []).flatMap((tr) => tr.clips || [])];
 
 export function emptyProject() {
   return {
@@ -68,17 +98,31 @@ export function normalizeProject(p) {
       t.clips = t.clips || []; t.clips.forEach(fix);
     }
   };
+  // Верхние видеодорожки; бывшая дорожка «Наложения» (0.3.x, overlayClips) становится верхней видеодорожкой
+  const fixVTracks = (s) => {
+    const list = Array.isArray(s.videoTracks) ? s.videoTracks : [];
+    if (Array.isArray(s.overlayClips) && s.overlayClips.length) list.push({ id: uid('vtk'), name: t('Наложения'), clips: s.overlayClips });
+    delete s.overlayClips;
+    s.videoTracks = list.filter((tr) => tr && typeof tr === 'object');
+    for (const tr of s.videoTracks) {
+      if (!tr.id) tr.id = uid('vtk');
+      tr.clips = Array.isArray(tr.clips) ? tr.clips : [];
+      tr.clips.forEach(fix);
+      if (tr.hidden) tr.hidden = true; else delete tr.hidden;
+      if (tr.locked) tr.locked = true; else delete tr.locked;
+    }
+    if (!s.videoTracks.length) delete s.videoTracks;
+  };
   p.videoClips.forEach(fix);
-  // Дорожка «Наложения» (временная, до многодорожечного видео): анимации с прозрачностью поверх ролика
-  p.overlayClips = Array.isArray(p.overlayClips) ? p.overlayClips : [];
-  p.overlayClips.forEach(fix);
+  fixVTracks(p);
   fixTracks(p.audioTracks);
   // Эпизоды (кроме открытого) хранят своё содержимое сами
   if (Array.isArray(p.episodes) && p.episodes.length) {
     if (!p.episodes.some((e) => e.id === p.activeEpisode)) p.activeEpisode = p.episodes[0].id;
     for (const e of p.episodes) {
-      if (e.id === p.activeEpisode) { delete e.videoClips; delete e.audioTracks; continue; }
+      if (e.id === p.activeEpisode) { delete e.videoClips; delete e.audioTracks; delete e.videoTracks; delete e.overlayClips; continue; }
       e.videoClips = e.videoClips || []; e.videoClips.forEach(fix);
+      fixVTracks(e);
       e.audioTracks = e.audioTracks && e.audioTracks.length ? e.audioTracks : [newTrack()];
       fixTracks(e.audioTracks);
     }
@@ -96,29 +140,33 @@ export function maxTransition(a, b) {
 // Наводит порядок после любого изменения: сортировка, затухания, переходы только у стоящих впритык клипов
 export function fixup(p) {
   syncLinks(p);
-  p.videoClips.sort(byStart);
   const fades = (c) => {
     const d = len(c);
     c.fadeIn = clamp(c.fadeIn || 0, 0, Math.min(MAX_FADE, d));
     c.fadeOut = clamp(c.fadeOut || 0, 0, Math.min(MAX_FADE, d - c.fadeIn));
   };
-  p.videoClips.forEach(fades);
   for (const t of p.audioTracks) t.clips.forEach(fades);
-  p.videoClips.forEach((c, i) => {
-    if (!c.transition) return;
-    const prev = p.videoClips[i - 1];
-    // Неизвестный тип не удаляем: это может быть переход пропавшего (выключенного) плагина — экспорт заменит его растворением
-    if (!prev || Math.abs(end(prev) - c.start) > ADJ || typeof c.transition.type !== 'string' || !c.transition.type) { delete c.transition; return; }
-    const mx = maxTransition(prev, c);
-    if (mx < TR_MIN) { delete c.transition; return; }
-    c.transition.duration = clamp(Number(c.transition.duration) || TR_DEFAULT, TR_MIN, mx);
-  });
+  for (const lane of vlanes(p)) {
+    const list = lane.clips;
+    list.sort(byStart);
+    list.forEach(fades);
+    list.forEach((c, i) => {
+      if (c.transform) { const tf = cleanTransform(c.transform); if (tf) c.transform = tf; else delete c.transform; }
+      if (!c.transition) return;
+      const prev = list[i - 1];
+      // Неизвестный тип не удаляем: это может быть переход пропавшего (выключенного) плагина — экспорт заменит его растворением
+      if (!prev || Math.abs(end(prev) - c.start) > ADJ || typeof c.transition.type !== 'string' || !c.transition.type) { delete c.transition; return; }
+      const mx = maxTransition(prev, c);
+      if (mx < TR_MIN) { delete c.transition; return; }
+      c.transition.duration = clamp(Number(c.transition.duration) || TR_DEFAULT, TR_MIN, mx);
+    });
+  }
 }
 
 // Связанный звук ставится по видео: тот же момент файла — тот же момент таймлайна
 export function syncLinks(p) {
   const vmap = new Map();
-  for (const v of p.videoClips) if (v.link) vmap.set(v.link, v);
+  for (const v of allVideo(p)) if (v.link) vmap.set(v.link, v);
   for (const t of p.audioTracks) {
     for (const c of t.clips) {
       if (!c.link) continue;
@@ -159,13 +207,15 @@ export function carve(list, s, e, keep = () => false) {
   return out;
 }
 
-// Наложение: клип clip (уже в p.videoClips) ставится в start и «затирает» то, что под ним, —
-// и на видеодорожке, и звук под ним (звук затёртых видео и свой связанный звук на его дорожках)
+// Наложение: клип clip (уже лежит на своей видеодорожке) ставится в start и «затирает» то, что под ним, —
+// и на этой видеодорожке, и звук под ним (звук затёртых видео и свой связанный звук на его дорожках)
 export function overwriteVideo(p, clip, start) {
   clip.start = Math.max(0, start);
   const s = clip.start; const e = end(clip);
-  const hitLinks = new Set(p.videoClips.filter((c) => c !== clip && c.link && c.start < e - ADJ && end(c) > s + ADJ).map((c) => c.link));
-  p.videoClips = carve(p.videoClips, s, e, (c) => c === clip);
+  const lane = vlaneOf(p, clip) || vlane(p, MAIN_LANE);
+  if (!lane.clips.includes(clip)) lane.clips.push(clip);
+  const hitLinks = new Set(lane.clips.filter((c) => c !== clip && c.link && c.start < e - ADJ && end(c) > s + ADJ).map((c) => c.link));
+  lane.clips = carve(lane.clips, s, e, (c) => c === clip);
   syncLinks(p);
   const own = clip.link;
   for (const t of p.audioTracks) {
@@ -208,8 +258,11 @@ function pushFrom(list, from, cursor, exclude = null) {
 //  - если рядом есть подходящая пустота (сдвиг не больше половины клипа) — «примагничиваем» в неё;
 //  - иначе вставляем перед/после клипа, на который попали, и раздвигаем следующие.
 // mode 'insert' — ставим ровно в at и раздвигаем следующие.
-export function placeVideo(p, clip, desired, mode = 'auto') {
-  const others = p.videoClips.filter((c) => c !== clip && c.id !== clip.id).sort(byStart);
+// laneId — видеодорожка (по умолчанию та, где клип уже лежит, иначе основная); клип с другой дорожки переносится.
+export function placeVideo(p, clip, desired, mode = 'auto', laneId = null) {
+  const lane = (laneId && vlane(p, laneId)) || vlaneOf(p, clip) || vlane(p, MAIN_LANE);
+  for (const l of vlanes(p)) if (l.id !== lane.id && l.clips.some((c) => c === clip || c.id === clip.id)) l.clips = l.clips.filter((c) => c !== clip && c.id !== clip.id);
+  const others = lane.clips.filter((c) => c !== clip && c.id !== clip.id).sort(byStart);
   const d = len(clip);
   let s = Math.max(0, desired);
   const overlap = (st) => others.find((o) => st < end(o) - ADJ && st + d > o.start + ADJ);
@@ -239,9 +292,18 @@ export function placeVideo(p, clip, desired, mode = 'auto') {
       pushFrom(others, at, at + d);
     }
   }
-  if (!p.videoClips.includes(clip)) p.videoClips.push(clip);
-  p.videoClips.sort(byStart);
+  if (!lane.clips.includes(clip)) lane.clips.push(clip);
+  lane.clips.sort(byStart);
   return clip.start;
+}
+
+// Перенести клип на другую видеодорожку (объект клипа остаётся тем же)
+export function moveToLane(p, clip, laneId) {
+  const to = vlane(p, laneId);
+  if (!to) return false;
+  for (const l of vlanes(p)) if (l.id !== to.id && l.clips.includes(clip)) l.clips = l.clips.filter((c) => c !== clip);
+  if (!to.clips.includes(clip)) to.clips.push(clip);
+  return true;
 }
 
 class Store {
@@ -327,12 +389,12 @@ class Store {
   }
 
   // --- выделение и время ---
-  select(sel) { this.selection = sel; this.emit('selection'); }
+  select(sel) { this.selection = sel && sel.kind === 'overlay' ? { ...sel, kind: 'video' } : sel; this.emit('selection'); }
   validateSelection() {
     const s = this.selection;
     if (!s) return;
     let ok = s.kind === 'track' ? this.project.audioTracks.some((t) => t.id === s.id)
-      : s.kind === 'overlay' ? !!this.findOverlay(s.id) : !!this.findClip(s.id);
+      : s.kind === 'vtrack' ? !!vlane(this.project, s.id) : !!this.findClip(s.id);
     if (ok && s.kind === 'transition') ok = !!this.junctionBefore(s.id);
     if (!ok) { this.selection = null; this.emit('selection'); }
   }
@@ -354,40 +416,99 @@ class Store {
   // --- производные ---
   media(id) { return this.project.media[id]; }
 
-  videoLayout() {
-    return [...this.project.videoClips].sort(byStart).map((c, index) => ({ clip: c, index, start: c.start, end: end(c) }));
+  // Видеодорожки снизу вверх (см. vlanes): основная — id 'video'
+  vlanes() { return vlanes(this.project); }
+  vlane(id) { return vlane(this.project, id); }
+  videoTracks() { return this.project.videoTracks || []; }
+  allVideo() { return allVideo(this.project); }
+
+  // Клипы видеодорожки по времени: [{ clip, index, start, end }] (по умолчанию — основной)
+  videoLayout(laneId = MAIN_LANE) {
+    const lane = vlane(this.project, laneId);
+    return lane ? [...lane.clips].sort(byStart).map((c, index) => ({ clip: c, index, start: c.start, end: end(c) })) : [];
   }
+  // Конец основной видеодорожки (новые клипы по умолчанию встают туда)
   videoEnd() { return this.project.videoClips.reduce((s, c) => Math.max(s, end(c)), 0); }
+  // Конец верхних видеодорожек
+  upperEnd() { return this.videoTracks().reduce((s, tr) => tr.clips.reduce((x, c) => Math.max(x, end(c)), s), 0); }
   audioEnd() {
     let e = 0;
     for (const t of this.project.audioTracks) for (const c of t.clips) e = Math.max(e, end(c));
     return e;
   }
-  duration() { return Math.max(this.videoEnd(), this.audioEnd(), this.overlayEnd()); }
-  overlayEnd() { return (this.project.overlayClips || []).reduce((s, c) => Math.max(s, end(c)), 0); }
+  duration() { return Math.max(this.videoEnd(), this.audioEnd(), this.upperEnd()); }
 
-  // --- Дорожка «Наложения»: клипы не перекрываются; новый клип встаёт в ближайшее свободное место ---
-  findOverlay(id) { return (this.project.overlayClips || []).find((c) => c.id === id) || null; }
-  overlayFree(start, dur, exclude = null) {
-    const list = (this.project.overlayClips || []).filter((c) => c.id !== exclude).sort(byStart);
-    let s = Math.max(0, start);
-    for (const c of list) if (s < end(c) - ADJ && s + dur > c.start + ADJ) s = end(c);
-    return s;
+  // --- Клипы поверх ролика (анимации и т.п.): на верхнюю видеодорожку, где в этом месте свободно ---
+  laneFree(laneId, start, dur, exclude = null) {
+    const lane = vlane(this.project, laneId);
+    if (!lane) return false;
+    return lane.clips.every((c) => c.id === exclude || end(c) <= start + ADJ || c.start >= start + dur - ADJ);
   }
+  findOverlay(id) { const f = this.findClip(id); return f && f.kind === 'video' ? f.clip : null; }
   addOverlayClip(mediaId, at = this.time) {
     const m = this.media(mediaId);
     if (!m) return null;
-    const clip = { ...this.newClip(mediaId), muted: true };
-    clip.start = this.overlayFree(at, len(clip));
-    this.mutate((p) => { p.overlayClips = [...(p.overlayClips || []), clip]; });
-    this.select({ kind: 'overlay', id: clip.id });
+    const clip = { ...this.newClip(mediaId), muted: true, start: Math.max(0, at) };
+    const d = len(clip);
+    this.mutate((p) => {
+      const tracks = p.videoTracks || [];
+      let tr = [...tracks].reverse().find((x) => !x.locked && x.clips.every((c) => end(c) <= clip.start + ADJ || c.start >= clip.start + d - ADJ));
+      if (!tr) { tr = newVideoTrack(); p.videoTracks = [...tracks, tr]; }
+      tr.clips.push(clip);
+    });
+    this.select({ kind: 'video', id: clip.id });
     return clip;
   }
-  setOverlay(id, patch, opts) {
-    this.mutate((p) => { const c = (p.overlayClips || []).find((x) => x.id === id); if (c) Object.assign(c, patch); }, opts);
+  setOverlay(id, patch, opts) { this.setClip(id, patch, opts); }
+  removeOverlay(id) { this.deleteClip(id); }
+
+  // --- видеодорожки ---
+  // Новая верхняя видеодорожка (над всеми или над дорожкой below); возвращает id
+  addVideoTrack(below = null, extra = {}) {
+    const tr = newVideoTrack(extra);
+    this.mutate((p) => {
+      const list = [...(p.videoTracks || [])];
+      const i = below && below !== MAIN_LANE ? list.findIndex((x) => x.id === below) : (below === MAIN_LANE ? -1 : list.length - 1);
+      list.splice(i + 1, 0, tr);
+      p.videoTracks = list;
+    });
+    return tr.id;
   }
-  removeOverlay(id) {
-    this.mutate((p) => { p.overlayClips = (p.overlayClips || []).filter((c) => c.id !== id); });
+  // Удалить верхнюю видеодорожку (вместе с клипами и их связанным звуком)
+  removeVideoTrack(id) {
+    const tr = this.videoTracks().find((x) => x.id === id);
+    if (!tr) return false;
+    const links = new Set(tr.clips.map((c) => c.link).filter(Boolean));
+    this.mutate((p) => {
+      p.videoTracks = (p.videoTracks || []).filter((x) => x.id !== id);
+      if (!p.videoTracks.length) delete p.videoTracks;
+      if (links.size) for (const t of p.audioTracks) t.clips = t.clips.filter((c) => !c.link || !links.has(c.link));
+    });
+    return true;
+  }
+  // Поднять (+1) / опустить (−1) верхнюю видеодорожку; основная всегда снизу
+  moveVideoTrack(id, dir) {
+    const list = this.videoTracks();
+    const i = list.findIndex((x) => x.id === id);
+    const j = i + (dir > 0 ? 1 : -1);
+    if (i < 0 || j < 0 || j >= list.length) return false;
+    this.mutate((p) => { const l = [...p.videoTracks]; [l[i], l[j]] = [l[j], l[i]]; p.videoTracks = l; });
+    return true;
+  }
+  // hidden / locked / name у видеодорожки (основная — 'video')
+  setVideoTrack(id, patch, opts) {
+    this.mutate((p) => {
+      const put = (o, k, v) => { if (v) o[k] = /name$/i.test(k) ? String(v) : true; else delete o[k]; };
+      if (id === MAIN_LANE) {
+        if (patch.name !== undefined) put(p, 'videoName', patch.name);
+        if (patch.hidden !== undefined) put(p, 'videoHidden', patch.hidden);
+        if (patch.locked !== undefined) put(p, 'videoLocked', patch.locked);
+        return;
+      }
+      const tr = (p.videoTracks || []).find((x) => x.id === id);
+      if (!tr) return;
+      for (const k of ['name', 'hidden', 'locked']) if (patch[k] !== undefined) put(tr, k, patch[k]);
+    }, opts);
   }
 
   // Название клипа для показа: своё имя → имя исходного файла (у реверса/стоп-кадра — имя оригинала)
@@ -399,9 +520,12 @@ class Store {
     return m.name;
   }
 
+  // { kind: 'video', clip, lane } (lane — видеодорожка) или { kind: 'audio', clip, track }
   findClip(id) {
-    const v = this.project.videoClips.find((c) => c.id === id);
-    if (v) return { kind: 'video', clip: v };
+    for (const lane of vlanes(this.project)) {
+      const v = lane.clips.find((c) => c.id === id);
+      if (v) return { kind: 'video', clip: v, lane };
+    }
     for (const t of this.project.audioTracks) {
       const a = t.clips.find((c) => c.id === id);
       if (a) return { kind: 'audio', clip: a, track: t };
@@ -409,25 +533,29 @@ class Store {
     return null;
   }
 
-  // Стык перед видеоклипом id: { a, b } если предыдущий клип стоит впритык
+  // Стык перед видеоклипом id (на его дорожке): { a, b, seam, laneId } если предыдущий клип стоит впритык
   junctionBefore(id) {
-    const list = this.project.videoClips;
+    const lane = vlaneOf(this.project, id);
+    if (!lane) return null;
+    const list = lane.clips;
     const i = list.findIndex((c) => c.id === id);
     if (i <= 0) return null;
     const a = list[i - 1]; const b = list[i];
-    return Math.abs(end(a) - b.start) <= ADJ ? { a, b, seam: b.start } : null;
+    return Math.abs(end(a) - b.start) <= ADJ ? { a, b, seam: b.start, laneId: lane.id } : null;
   }
 
-  // Все действующие переходы: [{ a, b, type, d, seam, from, to }]
-  transitions() {
+  // Действующие переходы дорожки (по умолчанию — основной): [{ a, b, type, d, seam, from, to }]; laneId '*' — всех
+  transitions(laneId = MAIN_LANE) {
     const out = [];
-    const list = this.project.videoClips;
-    for (let i = 1; i < list.length; i++) {
-      const b = list[i];
-      if (!b.transition) continue;
-      const a = list[i - 1];
-      const d = b.transition.duration;
-      out.push({ a, b, type: b.transition.type, d, seam: b.start, from: b.start - d / 2, to: b.start + d / 2 });
+    for (const lane of laneId === '*' ? vlanes(this.project) : [vlane(this.project, laneId)].filter(Boolean)) {
+      const list = lane.clips;
+      for (let i = 1; i < list.length; i++) {
+        const b = list[i];
+        if (!b.transition) continue;
+        const a = list[i - 1];
+        const d = b.transition.duration;
+        out.push({ a, b, type: b.transition.type, d, seam: b.start, from: b.start - d / 2, to: b.start + d / 2, laneId: lane.id });
+      }
     }
     return out;
   }
@@ -435,7 +563,10 @@ class Store {
   // Формат проекта по умолчанию — по самому крупному видео на таймлайне
   // (чтобы короткая заставка в 480p не уменьшила весь ролик), частота — максимальная
   sourceFormat() {
-    let list = this.project.videoClips.map((c) => this.media(c.mediaId)).filter((m) => m && m.hasVideo);
+    // Сначала основная дорожка; если на ней пусто — верхние; иначе — все видео в медиатеке
+    const ofClips = (clips) => clips.map((c) => this.media(c.mediaId)).filter((m) => m && m.hasVideo);
+    let list = ofClips(this.project.videoClips);
+    if (!list.length) list = ofClips(this.videoTracks().flatMap((tr) => tr.clips));
     if (!list.length) list = Object.values(this.project.media).filter((m) => m.hasVideo);
     if (!list.length) return { width: 1920, height: 1080, fps: 30, fromClip: false };
     const best = list.reduce((a, b) => (b.width * b.height > a.width * a.height ? b : a));
@@ -501,7 +632,7 @@ class Store {
       for (const s of [p, ...(p.episodes || []).filter((e) => e.videoClips)]) {
         s.videoClips = s.videoClips.filter((c) => !ids.has(c.mediaId));
         for (const t of s.audioTracks || []) t.clips = t.clips.filter((c) => !ids.has(c.mediaId));
-        if (s.overlayClips) s.overlayClips = s.overlayClips.filter((c) => !ids.has(c.mediaId));
+        for (const tr of s.videoTracks || []) tr.clips = tr.clips.filter((c) => !ids.has(c.mediaId));
       }
     });
   }
@@ -512,7 +643,7 @@ class Store {
     for (const s of [this.project, ...(this.project.episodes || []).filter((e) => e.videoClips)]) {
       n += s.videoClips.filter((c) => ids.has(c.mediaId)).length;
       for (const t of s.audioTracks || []) n += t.clips.filter((c) => ids.has(c.mediaId)).length;
-      n += (s.overlayClips || []).filter((c) => ids.has(c.mediaId)).length;
+      for (const tr of s.videoTracks || []) n += tr.clips.filter((c) => ids.has(c.mediaId)).length;
     }
     return n;
   }
@@ -534,14 +665,19 @@ class Store {
   // Убрать открытый эпизод в хранилище, достать другой
   swapIn(p, id) {
     const cur = p.episodes.find((e) => e.id === p.activeEpisode);
-    if (cur) { cur.videoClips = p.videoClips; cur.audioTracks = p.audioTracks; cur.overlayClips = p.overlayClips || []; cur.videoName = p.videoName; cur.time = this.time; }
+    // Поля открытого эпизода, кроме клипов: имя и флаги основной видеодорожки, верхние видеодорожки
+    const OWN = ['videoTracks', 'videoName', 'videoHidden', 'videoLocked'];
+    if (cur) {
+      cur.videoClips = p.videoClips; cur.audioTracks = p.audioTracks; cur.time = this.time;
+      for (const k of OWN) { if (p[k] !== undefined) cur[k] = p[k]; else delete cur[k]; }
+    }
     const next = p.episodes.find((e) => e.id === id);
     p.videoClips = next.videoClips || [];
     p.audioTracks = next.audioTracks && next.audioTracks.length ? next.audioTracks : [newTrack()];
-    p.overlayClips = next.overlayClips || [];
-    if (next.videoName) p.videoName = next.videoName; else delete p.videoName;
+    for (const k of OWN) { if (next[k] !== undefined) p[k] = next[k]; else delete p[k]; }
     const t = next.time || 0;
-    delete next.videoClips; delete next.audioTracks; delete next.overlayClips; delete next.videoName; delete next.time;
+    delete next.videoClips; delete next.audioTracks; delete next.time;
+    for (const k of OWN) delete next[k];
     p.activeEpisode = id;
     return t;
   }
@@ -584,17 +720,17 @@ class Store {
     return true;
   }
 
-  // Содержимое эпизода (копия): { videoClips, audioTracks }
+  // Содержимое эпизода (копия): { videoClips, videoTracks, audioTracks }
   episodeContent(id) {
     const src = id === this.activeEpisode() ? this.project : this.episodes().find((e) => e.id === id);
-    return JSON.parse(JSON.stringify({ videoClips: (src && src.videoClips) || [], audioTracks: (src && src.audioTracks) || [] }));
+    return JSON.parse(JSON.stringify({ videoClips: (src && src.videoClips) || [], videoTracks: (src && src.videoTracks) || [], audioTracks: (src && src.audioTracks) || [] }));
   }
 
   // Длительность эпизода
   episodeDuration(id) {
     const c = this.episodeContent(id);
     let e = 0;
-    for (const v of c.videoClips) e = Math.max(e, end(v));
+    for (const v of allVideo(c)) e = Math.max(e, end(v));
     for (const t of c.audioTracks) for (const a of t.clips) e = Math.max(e, end(a));
     return e;
   }
@@ -605,7 +741,7 @@ class Store {
   insertEpisode(srcId, dstId = 'main', at = null) {
     if (srcId === dstId) return false;
     const content = this.episodeContent(srcId);
-    if (!content.videoClips.length && !content.audioTracks.some((t) => t.clips.length)) return false;
+    if (!allVideo(content).length && !content.audioTracks.some((t) => t.clips.length)) return false;
     const linkMap = new Map();
     const reid = (c) => {
       c.id = uid('clp');
@@ -621,8 +757,9 @@ class Store {
       const vEnd = dst.videoClips.reduce((s, c) => Math.max(s, end(c)), 0);
       const start = at === null ? vEnd : Math.max(0, at);
       let dur = 0;
-      for (const v of content.videoClips) dur = Math.max(dur, end(v));
+      for (const v of allVideo(content)) dur = Math.max(dur, end(v));
       for (const t of content.audioTracks) for (const a of t.clips) dur = Math.max(dur, end(a));
+      dst.videoTracks = dst.videoTracks || [];
       // Раздвигаем то, что правее точки вставки (клип, на который попала точка, сначала разрезается)
       if (at !== null) {
         const cut = (list) => {
@@ -640,11 +777,21 @@ class Store {
           return out;
         };
         dst.videoClips = cut(dst.videoClips);
+        for (const tr of dst.videoTracks) tr.clips = cut(tr.clips);
         for (const t of dst.audioTracks) t.clips = cut(t.clips);
-        for (const c of dst.videoClips) if (c.start >= start - ADJ) c.start += dur;
+        for (const c of allVideo(dst)) if (c.start >= start - ADJ) c.start += dur;
         for (const t of dst.audioTracks) for (const c of t.clips) if (c.start >= start - ADJ) c.start += dur;
       }
       for (const v of content.videoClips) { reid(v); v.start += start; dst.videoClips.push(v); }
+      // Верхние видеодорожки — по порядку (1-я к 1-й…); если там в этом месте занято — новая дорожка над ними
+      content.videoTracks.forEach((vt, i) => {
+        if (!vt.clips.length) return;
+        const s = Math.min(...vt.clips.map((a) => a.start)) + start; const e = Math.max(...vt.clips.map(end)) + start;
+        let tr = dst.videoTracks[i];
+        if (!tr || !tr.clips.every((c) => end(c) <= s + ADJ || c.start >= e - ADJ)) { tr = newVideoTrack(vt.name ? { name: vt.name } : {}); dst.videoTracks.push(tr); }
+        for (const v of vt.clips) { reid(v); v.start += start; tr.clips.push(v); }
+      });
+      if (!dst.videoTracks.length) delete dst.videoTracks;
       // Звуковые дорожки: по порядку, но если там уже что-то звучит в этом месте (музыка) — на свободную или новую
       const used = new Set();
       const free = (tr, s, e) => tr.clips.every((c) => end(c) <= s + ADJ || c.start >= e - ADJ);
@@ -657,7 +804,11 @@ class Store {
         used.add(tr);
         for (const a of t.clips) { reid(a); a.start += start; tr.clips.push(a); }
       });
-      if (dst !== p) { dst.videoClips.sort(byStart); syncLinks({ videoClips: dst.videoClips, audioTracks: dst.audioTracks }); }
+      if (dst !== p) {
+        dst.videoClips.sort(byStart);
+        for (const tr of dst.videoTracks || []) tr.clips.sort(byStart);
+        syncLinks({ videoClips: dst.videoClips, videoTracks: dst.videoTracks, audioTracks: dst.audioTracks });
+      }
     });
     return true;
   }
@@ -668,17 +819,20 @@ class Store {
     return { id: uid('clp'), mediaId, in: 0, out, start: 0, volume: 1, muted: false, fadeIn: 0, fadeOut: 0, ...extra };
   }
 
-  // Видео на основную дорожку: по умолчанию в конец, иначе около времени at.
+  // Видео на видеодорожку lane (по умолчанию — основная): на основную — в конец, на верхнюю — к курсору; иначе около времени at.
   //   mode 'auto' — «магнит» в пустоту или раздвинуть соседей; 'insert' — ровно в at, раздвинуть; 'overwrite' — затереть то, что под ним.
   //   linkAudio — звук файла отдельными связанными клипами на аудиодорожках (каждый звуковой поток — свой клип)
-  insertVideoClip(mediaId, at = null, mode = 'auto', extra = {}, { linkAudio = true } = {}) {
+  insertVideoClip(mediaId, at = null, mode = 'auto', extra = {}, { linkAudio = true, lane = MAIN_LANE } = {}) {
     const m = this.media(mediaId);
     if (!m || !m.hasVideo) return null;
+    const ln = vlane(this.project, lane) || vlane(this.project, MAIN_LANE);
+    if (at === null && !ln.main) at = this.time;
     const clip = this.newClip(mediaId, extra);
     const split = linkAudio && m.hasAudio && !m.isImage;
     if (split) { clip.link = uid('lnk'); clip.noAudio = true; }
     this.mutate((p) => {
-      if (mode === 'overwrite' && at !== null) { p.videoClips.push(clip); overwriteVideo(p, clip, at); } else placeVideo(p, clip, at === null ? this.videoEnd() : at, at === null ? 'insert' : mode);
+      const L = vlane(p, ln.id);
+      if (mode === 'overwrite' && at !== null) { L.clips.push(clip); overwriteVideo(p, clip, at); } else placeVideo(p, clip, at === null ? this.videoEnd() : at, at === null ? 'insert' : mode, ln.id);
       if (split) this.addLinkedAudio(p, clip, mode === 'overwrite');
     });
     this.select({ kind: 'video', id: clip.id });
@@ -718,7 +872,7 @@ class Store {
     const f = this.findClip(id);
     if (!f || !f.clip.link) return [];
     const out = [];
-    for (const v of this.project.videoClips) if (v.link === f.clip.link && v.id !== id) out.push({ kind: 'video', clip: v });
+    for (const v of allVideo(this.project)) if (v.link === f.clip.link && v.id !== id) out.push({ kind: 'video', clip: v });
     for (const t of this.project.audioTracks) for (const c of t.clips) if (c.link === f.clip.link && c.id !== id) out.push({ kind: 'audio', clip: c, track: t });
     return out;
   }
@@ -729,7 +883,7 @@ class Store {
     if (!f || !f.clip.link) return false;
     const L = f.clip.link;
     this.mutate((p) => {
-      for (const v of p.videoClips) if (v.link === L) delete v.link;
+      for (const v of allVideo(p)) if (v.link === L) delete v.link;
       for (const t of p.audioTracks) for (const c of t.clips) if (c.link === L) delete c.link;
     });
     return true;
@@ -741,7 +895,7 @@ class Store {
     if (!f || f.kind !== 'video') return false;
     const L = f.clip.link;
     this.mutate((p) => {
-      const v = p.videoClips.find((x) => x.id === id);
+      const v = allVideo(p).find((x) => x.id === id);
       delete v.noAudio; delete v.link;
       if (L) for (const t of p.audioTracks) t.clips = t.clips.filter((c) => c.link !== L);
     });
@@ -755,7 +909,7 @@ class Store {
     const m = this.media(f.clip.mediaId);
     if (!m || !m.hasAudio) return false;
     this.mutate((p) => {
-      const v = p.videoClips.find((x) => x.id === id);
+      const v = allVideo(p).find((x) => x.id === id);
       v.link = uid('lnk'); v.noAudio = true;
       const vol = v.volume; const muted = v.muted;
       this.addLinkedAudio(p, v);
@@ -814,26 +968,29 @@ class Store {
   }
   anySolo() { return this.project.audioTracks.some((t) => t.solo); }
 
-  // name, volume, …; trackId 'video' — видеодорожка (только name)
+  // name, volume, …; trackId 'video' или id верхней видеодорожки — видеодорожка (name, hidden, locked)
   setTrack(trackId, patch, opts) {
+    if (vlane(this.project, trackId) && (trackId === MAIN_LANE || trackId.startsWith('vtk'))) { this.setVideoTrack(trackId, patch, opts); return; }
     this.mutate((p) => {
-      if (trackId === 'video') { if (patch.name !== undefined) p.videoName = patch.name || undefined; return; }
       const t = p.audioTracks.find((x) => x.id === trackId);
       if (t) Object.assign(t, patch);
     }, opts);
   }
   trackName(trackId) {
-    if (trackId === 'video') return this.project.videoName || t('Видео');
+    if (trackId === MAIN_LANE) return this.project.videoName || t('Видео');
+    const vi = this.videoTracks().findIndex((x) => x.id === trackId);
+    if (vi >= 0) return this.videoTracks()[vi].name || t('Видео {n}', { n: vi + 2 });
     const i = this.project.audioTracks.findIndex((x) => x.id === trackId);
     const tk = this.project.audioTracks[i];
     return (tk && tk.name) || t('Аудио {n}', { n: i + 1 });
   }
 
-  // Переместить видеоклип к времени start (с размещением как при перетаскивании)
-  moveVideoClip(id, start, mode = 'auto') {
+  // Переместить видеоклип к времени start (с размещением как при перетаскивании); laneId — на другую видеодорожку
+  moveVideoClip(id, start, mode = 'auto', laneId = null) {
     this.mutate((p) => {
-      const c = p.videoClips.find((x) => x.id === id);
-      if (c) placeVideo(p, c, start, mode);
+      const c = allVideo(p).find((x) => x.id === id);
+      if (!c) return;
+      if (mode === 'overwrite') { if (laneId) moveToLane(p, c, laneId); overwriteVideo(p, c, start); } else placeVideo(p, c, start, mode, laneId);
     });
   }
 
@@ -870,7 +1027,7 @@ class Store {
     const ids = new Set([id, ...this.linkedOf(id).map((x) => x.clip.id)]);
     const oldEnd = end(f.clip);
     this.mutate((p) => {
-      const all = [...p.videoClips, ...p.audioTracks.flatMap((t) => t.clips)];
+      const all = [...allVideo(p), ...p.audioTracks.flatMap((t) => t.clips)];
       const targets = all.filter((c) => ids.has(c.id));
       for (const c of targets) { if (Math.abs(s - 1) < 1e-6) delete c.speed; else c.speed = s; }
       const newEnd = end(targets.find((c) => c.id === id));
@@ -878,7 +1035,8 @@ class Store {
       if (ripple && Math.abs(delta) > 1e-6) {
         for (const c of all) if (!ids.has(c.id) && c.start >= oldEnd - ADJ) c.start = Math.max(0, c.start + delta);
       } else if (delta > 1e-6) {
-        const v = targets.find((c) => p.videoClips.includes(c));
+        const vids = allVideo(p);
+        const v = targets.find((c) => vids.includes(c));
         if (v) overwriteVideo(p, v, v.start);
         else for (const t of p.audioTracks) for (const a of t.clips.filter((c) => ids.has(c.id))) overwriteAudio(t, a);
       }
@@ -890,7 +1048,7 @@ class Store {
   fxOwner(target, p = this.project) {
     if (!target) return null;
     if (target.kind === 'track') return p.audioTracks.find((t) => t.id === target.id) || null;
-    for (const c of p.videoClips) if (c.id === target.id) return c;
+    for (const c of allVideo(p)) if (c.id === target.id) return c;
     for (const t of p.audioTracks) for (const c of t.clips) if (c.id === target.id) return c;
     return null;
   }
@@ -930,7 +1088,7 @@ class Store {
     if (cr && (cr.l + cr.r > 0.95 || cr.t + cr.b > 0.95)) return false;
     if (cr && !(cr.l || cr.t || cr.r || cr.b)) cr = null;
     this.mutate((p) => {
-      for (const c of p.videoClips) {
+      for (const c of allVideo(p)) {
         if (!set.has(c.id)) continue;
         if (cr) c.crop = { ...cr }; else delete c.crop;
       }
@@ -943,11 +1101,25 @@ class Store {
   setFit(ids, fit) {
     const set = new Set(ids);
     this.mutate((p) => {
-      for (const c of p.videoClips) {
+      for (const c of allVideo(p)) {
         if (!set.has(c.id)) continue;
         if (!fit || fit === 'contain') delete c.fit; else c.fit = fit;
       }
     });
+  }
+
+  // Трансформ видеоклипов (transform.js): patch накладывается на текущий трансформ каждого клипа;
+  // null — сбросить. live — без записи в историю (перетаскивание гизмо, ползунки).
+  setTransform(ids, patch, { live = false, replace = false } = {}) {
+    const set = new Set(ids);
+    const fn = (p) => {
+      for (const c of allVideo(p)) {
+        if (!set.has(c.id)) continue;
+        const tf = patch ? cleanTransform(patch, replace ? null : c.transform) : null;
+        if (tf) c.transform = tf; else delete c.transform;
+      }
+    };
+    if (live) this.live(fn); else this.mutate(fn);
   }
 
   // Изменить длительность клипа (видео раздвигает следующие клипы, если не хватает места)
@@ -961,7 +1133,7 @@ class Store {
       const c = this.findClip(id).clip;
       const oldEnd = end(c);
       c.out = nout;
-      if (f.kind === 'video' && end(c) > oldEnd) pushFrom(p.videoClips, oldEnd, end(c), c);
+      if (f.kind === 'video' && end(c) > oldEnd) pushFrom((vlaneOf(p, c) || vlane(p, MAIN_LANE)).clips, oldEnd, end(c), c);
     });
     return (nout - f.clip.in) / sp;
   }
@@ -970,7 +1142,8 @@ class Store {
   // (видео + его звук), иначе связь половин рвётся: удаление левой половины убрало бы весь звук.
   splitAt(t, id = null, { withLinked = true } = {}) {
     const hit = (c) => t > c.start + MIN_CLIP - 1e-6 && t < end(c) - MIN_CLIP + 1e-6;
-    if (!id) id = this.project.videoClips.find(hit)?.id || null;
+    // Без id — клип основной дорожки под курсором, иначе самый верхний
+    if (!id) id = [...vlanes(this.project)].map((l) => l.clips.find(hit)).filter(Boolean)[0]?.id || null;
     if (!id) return 0;
     const targets = [id];
     if (withLinked) for (const x of this.linkedOf(id)) if (hit(x.clip)) targets.push(x.clip.id);
@@ -981,7 +1154,7 @@ class Store {
   splitAll(t) {
     const ids = [];
     const hit = (c) => t > c.start + MIN_CLIP && t < end(c) - MIN_CLIP;
-    for (const c of this.project.videoClips) if (hit(c)) ids.push(c.id);
+    for (const c of allVideo(this.project)) if (hit(c)) ids.push(c.id);
     for (const tr of this.project.audioTracks) for (const c of tr.clips) if (hit(c)) ids.push(c.id);
     return this.splitClips(t, ids);
   }
@@ -1001,7 +1174,7 @@ class Store {
         if (c.link) right.link = splitLink(c.link, t);
         c.out = local;
         c.fadeOut = 0;
-        if (f.kind === 'video') p.videoClips.push(right);
+        if (f.kind === 'video') f.lane.clips.push(right);
         else f.track.clips.push(right);
         done++;
       }
@@ -1018,19 +1191,24 @@ class Store {
     this.mutate((p) => {
       const d = len(f.clip);
       const e = end(f.clip);
-      const list = f.kind === 'video' ? p.videoClips : f.track.clips;
+      const list = f.kind === 'video' ? f.lane.clips : f.track.clips;
       const rest = list.filter((c) => c.id !== id);
       if (ripple) for (const c of rest) if (c.start >= e - ADJ) c.start = Math.max(0, c.start - d);
-      if (f.kind === 'video') p.videoClips = rest; else f.track.clips = rest;
+      if (f.kind === 'video') f.lane.clips = rest; else f.track.clips = rest;
       if (L) for (const t of p.audioTracks) t.clips = t.clips.filter((c) => c.link !== L);
     });
   }
 
-  // Пустоты дорожки: kind 'video' или id аудиодорожки
+  // Клипы дорожки: 'video', id верхней видеодорожки или id аудиодорожки
+  laneClips(p, lane) {
+    const v = vlane(p, lane);
+    if (v && (lane === MAIN_LANE || v.id === lane)) return v;
+    return p.audioTracks.find((x) => x.id === lane) || { clips: [] };
+  }
+  // Пустоты дорожки: 'video', id верхней видеодорожки или id аудиодорожки
   gaps(lane) {
-    if (lane === 'video') return gapsOf(this.project.videoClips);
-    const t = this.project.audioTracks.find((x) => x.id === lane);
-    return t ? gapsOf(t.clips) : [];
+    const l = this.laneClips(this.project, lane);
+    return l.clips.length ? gapsOf(l.clips) : [];
   }
 
   // Убрать пустоту, в которую попадает время at (сдвигает все клипы дорожки правее неё)
@@ -1039,7 +1217,7 @@ class Store {
     if (!g) return 0;
     const shift = g[1] - g[0];
     this.mutate((p) => {
-      const list = lane === 'video' ? p.videoClips : (p.audioTracks.find((x) => x.id === lane) || { clips: [] }).clips;
+      const list = this.laneClips(p, lane).clips;
       for (const c of list) if (c.start >= g[1] - ADJ) c.start = Math.max(0, c.start - shift);
     });
     return shift;
@@ -1049,7 +1227,7 @@ class Store {
     const n = this.gaps(lane).length;
     if (!n) return 0;
     this.mutate((p) => {
-      const list = lane === 'video' ? p.videoClips : (p.audioTracks.find((x) => x.id === lane) || { clips: [] }).clips;
+      const list = this.laneClips(p, lane).clips;
       let t = 0;
       for (const c of [...list].sort(byStart)) { c.start = Math.min(c.start, t); t = Math.max(t, end(c)); }
     });
@@ -1065,7 +1243,7 @@ class Store {
     if (f.kind === 'audio') delete copy.link;
     this.mutate((p) => {
       if (f.kind === 'video') {
-        placeVideo(p, copy, end(f.clip), 'insert');
+        placeVideo(p, copy, end(f.clip), 'insert', f.lane.id);
         this.pastePartners(p, copy, partners);
       } else {
         copy.start = end(f.clip);
@@ -1099,7 +1277,7 @@ class Store {
     delete c.transition;
     if (f.kind === 'audio') delete c.link;
     const partners = f.kind === 'video' ? this.linkedOf(id).filter((x) => x.kind === 'audio').map((x) => ({ clip: JSON.parse(JSON.stringify(x.clip)), trackId: x.track.id })) : [];
-    this.clipboard = { kind: f.kind, clip: c, trackId: f.track ? f.track.id : null, partners };
+    this.clipboard = { kind: f.kind, clip: c, trackId: f.track ? f.track.id : f.lane.id, partners };
     this.emit('clipboard');
     return true;
   }
@@ -1111,7 +1289,8 @@ class Store {
     const copy = { ...JSON.parse(JSON.stringify(cb.clip)), id: uid('clp'), start: Math.max(0, at) };
     this.mutate((p) => {
       if (cb.kind === 'video') {
-        placeVideo(p, copy, copy.start, 'auto');
+        const vl = lane && vlane(p, lane) && vlane(p, lane).id === lane ? lane : (cb.trackId && vlane(p, cb.trackId) && vlane(p, cb.trackId).id === cb.trackId ? cb.trackId : MAIN_LANE);
+        placeVideo(p, copy, copy.start, 'auto', vl);
         this.pastePartners(p, copy, cb.partners || []);
       } else {
         const want = lane && lane !== 'video' ? lane : cb.trackId;
@@ -1130,7 +1309,7 @@ class Store {
     const j = this.junctionBefore(id);
     if (!j) return false;
     this.mutate(() => {
-      const b = this.project.videoClips.find((c) => c.id === id);
+      const b = allVideo(this.project).find((c) => c.id === id);
       if (!type) { delete b.transition; return; }
       const d = duration ?? (b.transition ? b.transition.duration : TR_DEFAULT);
       b.transition = { type, duration: clamp(d, TR_MIN, Math.max(TR_MIN, maxTransition(j.a, b))) };

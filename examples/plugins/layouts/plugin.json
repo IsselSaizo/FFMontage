@@ -1,0 +1,28 @@
+{
+  "id": "layouts",
+  "name": { "ru": "Раскладки кадра", "en": "Frame layouts" },
+  "version": "1.0.0",
+  "apiVersion": 1,
+  "description": {
+    "ru": "Картинка в картинке, два рядом, сетка 2×2, «один большой и два» — для клипов под курсором на разных видеодорожках. Пример плагина, который работает через инструменты трансформа.",
+    "en": "Picture-in-picture, side by side, 2×2 grid, “one large and two” for the clips under the playhead on different video tracks. Example plugin built on the transform tools."
+  },
+  "author": "FF Montage",
+  "entry": "main.js",
+  "contributes": {
+    "actions": [
+      { "id": "pip-tr", "title": { "ru": "Раскладка: картинка в картинке ↗", "en": "Layout: picture-in-picture ↗" } },
+      { "id": "pip-tl", "title": { "ru": "Раскладка: картинка в картинке ↖", "en": "Layout: picture-in-picture ↖" } },
+      { "id": "pip-br", "title": { "ru": "Раскладка: картинка в картинке ↘", "en": "Layout: picture-in-picture ↘" } },
+      { "id": "pip-bl", "title": { "ru": "Раскладка: картинка в картинке ↙", "en": "Layout: picture-in-picture ↙" } },
+      { "id": "side", "title": { "ru": "Раскладка: два рядом", "en": "Layout: side by side" } },
+      { "id": "grid", "title": { "ru": "Раскладка: сетка 2×2", "en": "Layout: 2×2 grid" } },
+      { "id": "one-two", "title": { "ru": "Раскладка: один большой и два", "en": "Layout: one large and two" } },
+      { "id": "reset", "title": { "ru": "Раскладка: сбросить", "en": "Layout: reset" } }
+    ],
+    "panels": [
+      { "id": "layouts", "title": { "ru": "Раскладки", "en": "Layouts" }, "entry": "panel.html" }
+    ]
+  },
+  "permissions": ["project:read", "project:write", "ui:panel", "notify"]
+}

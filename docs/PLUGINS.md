@@ -5,7 +5,8 @@
 Встроенные эффекты и переходы устроены так же: это плагин `core`, он пользуется тем же API.
 
 Готовые примеры: [`examples/plugins/vignette`](../examples/plugins/vignette) (эффект без единой строки кода) и
-[`examples/plugins/project-stats`](../examples/plugins/project-stats) (панель, действие с клавишей, хранилище).
+[`examples/plugins/project-stats`](../examples/plugins/project-stats) (панель, действие с клавишей, хранилище),
+[`examples/plugins/layouts`](../examples/plugins/layouts) (раскладки кадра: картинка в картинке и сетки через `set_transform`).
 
 ## Установка
 
@@ -73,7 +74,8 @@
 | `net:<хост>` | `ffm.net.fetch` к `https://<хост>/…` |
 
 Инструменты для `ffm.tools.call`: `get_project`, `add_clip`, `update_clip`, `split_clip`, `delete_clip`,
-`reverse_clip`, `freeze_frame`, `set_transition`, `close_gaps`, `undo`, `redo`, `set_playhead` (аргументы — как
+`reverse_clip`, `freeze_frame`, `set_transition`, `close_gaps`, `add_video_track`, `update_video_track`, `set_transform`,
+`undo`, `redo`, `set_playhead` (аргументы — как
 у ИИ-ассистента, см. описание MCP). Файловые инструменты и экспорт плагинам недоступны. `ffm.commands.execute`
 не выполняет действия меню «Файл» и действия других плагинов.
 

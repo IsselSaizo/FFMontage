@@ -75,11 +75,11 @@ fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .register_asynchronous_uri_scheme_protocol("media", |_ctx, req, responder| {
-            std::thread::spawn(move || responder.respond(protocol::handle(&req)));
+            protocol::spawn(move || responder.respond(protocol::handle(&req)));
         })
         // Файлы плагинов для песочных iframe: http://plugin.localhost/<id>/… (Windows), plugin://localhost/<id>/…
         .register_asynchronous_uri_scheme_protocol("plugin", |_ctx, req, responder| {
-            std::thread::spawn(move || responder.respond(plugins::handle(&req)));
+            protocol::spawn(move || responder.respond(plugins::handle(&req)));
         })
         .on_page_load(windows::on_page_load)
         .invoke_handler(tauri::generate_handler![

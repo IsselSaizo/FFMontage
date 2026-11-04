@@ -29,6 +29,10 @@ New-Item -ItemType Directory -Force $plg | Out-Null
 if ($Plugins -or $Test -eq 'ui-selftest13') {
   Copy-Item (Join-Path $App 'tests\fixtures\plugins\*') $plg -Recurse -Force
 }
+# ui-selftest14 проверяет пример-плагин «Раскладки кадра» (M4.6)
+if ($Test -eq 'ui-selftest14') {
+  Copy-Item (Join-Path $App 'examples\plugins\layouts') $plg -Recurse -Force
+}
 $env:FFM_PLUGINS_DIR = $plg
 $env:FFM_CONFIG = "$T\config.json"
 $env:FFM_SELFTEST = Join-Path $App "tests\$Test.js"

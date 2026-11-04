@@ -79,7 +79,7 @@ export function initCropMode(preview) {
     const f = store.findClip(st.id);
     if (!f) { exit(); return; }
     const ids = st.allCheck.checked
-      ? store.project.videoClips.filter((c) => c.mediaId === f.clip.mediaId).map((c) => c.id)
+      ? store.allVideo().filter((c) => c.mediaId === f.clip.mediaId).map((c) => c.id)
       : [st.id];
     const crop = st.crop;
     exit();
@@ -115,7 +115,7 @@ export function initCropMode(preview) {
     }));
     st.box.addEventListener('pointerdown', drag('move'));
     st.allCheck = h('input', { type: 'checkbox', id: 'crop-all' });
-    const same = store.project.videoClips.filter((c) => c.mediaId === f.clip.mediaId).length;
+    const same = store.allVideo().filter((c) => c.mediaId === f.clip.mediaId).length;
     st.ui = h('div', { class: 'crop-layer' }, st.box,
       h('div', { class: 'crop-bar', onpointerdown: (e) => e.stopPropagation() },
         same > 1 ? h('label', { class: 'check-row', title: t('Необязательно: та же рамка у всех клипов, вырезанных из этого файла') },

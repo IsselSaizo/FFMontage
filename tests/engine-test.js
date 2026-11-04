@@ -194,11 +194,11 @@ async function speedTest(enc) {
   const po = {
     media: { h: ih, r: { ...ir, path: outr } },
     videoClips: [{ mediaId: 'h', in: 0, out: 2, start: 0, volume: 1, muted: false, crop: { l: 0.5, t: 0, r: 0, b: 0 }, fit: 'stretch' }],
-    overlayClips: [{ mediaId: 'r', in: 0, out: 2, start: 1, volume: 1, muted: true }],
+    videoTracks: [{ id: 'vtk_ov', clips: [{ mediaId: 'r', in: 0, out: 2, start: 1, volume: 1, muted: true }] }],
     audioTracks: [],
   };
   const bo = plan.buildExport(po, { width: 320, height: 180, fps: 30 });
-  assert(Math.abs(bo.duration - 3) < 1e-6 && bo.inputs.join(' ').includes('-c:v libvpx-vp9 -ss') && /overlay=0:0/.test(bo.filter), `наложение: длина ${bo.duration} = 1 + 2, декодер VP9 перед -i`);
+  assert(Math.abs(bo.duration - 3) < 1e-6 && bo.inputs.join(' ').includes('-c:v libvpx-vp9 -ss') && /overlay=x=/.test(bo.filter), `верхняя видеодорожка: длина ${bo.duration} = 1 + 2, декодер VP9 перед -i`);
   const outo = path.join(DIR, 'out_overlay.mp4');
   await startExport(po, { width: 320, height: 180, fps: 30, codec, quality: 'high', output: outo });
   const countGreen = async (tt) => { const fr = await rgb(outo, tt); let g = 0; for (let y = 0; y < 36; y++) for (let x = 0; x < 64; x++) if (isGreen(fr.px(x, y))) g++; return { g, fr }; };
@@ -208,6 +208,58 @@ async function speedTest(enc) {
 
   assert(a2 - a1 > 10 && a2 - a1 < 17, `дорожка с усилением компрессора громче на ${(a2 - a1).toFixed(1)} дБ (≈ 12–15)`);
 }
+
+// M4: несколько видеодорожек, трансформ, кадрирование, переход на верхней дорожке, скрытая дорожка, альфа (PNG)
+async function tracksTest(enc) {
+  console.log('Видеодорожки и трансформ:');
+  const codec = enc.h264_nvenc ? 'h264_nvenc' : 'libx264';
+  const col = (n, c) => make(`t_${n}.mp4`, ['-f', 'lavfi', '-i', `color=c=${c}:s=320x180:r=30`, '-t', '6', '-c:v', 'libx264', '-pix_fmt', 'yuv420p']);
+  const [ir, ig, ib, iw] = await Promise.all([col('red', 'red'), col('green', 'green'), col('blue', 'blue'), col('white', 'white')].map(async (p) => ff.probe(await p)));
+  // PNG с прозрачностью: левая половина — непрозрачная белая, правая — прозрачная
+  const png = await make('t_half.png', ['-f', 'lavfi', '-i', 'color=c=white@1:s=64x64,format=rgba,geq=r=255:g=255:b=255:a=if(lt(X\\,32)\\,255\\,0)', '-frames:v', '1']);
+  const ip = await ff.probe(png);
+  const clip = (mediaId, start, len, extra = {}) => ({ mediaId, in: 0, out: len, start, volume: 1, muted: false, fadeIn: 0, fadeOut: 0, ...extra });
+  const W = 320; const H = 180;
+  const project = {
+    media: { r: ir, g: ig, b: ib, w: iw, p: ip },
+    videoClips: [clip('b', 0, 6)],
+    videoTracks: [
+      // V2: PiP в правом верхнем углу (0,5–1,5 с); повёрнутый полупрозрачный (2–3,5); переход на V2 (3,5) к кадрированному
+      { id: 'vtk_a', clips: [
+        clip('r', 0.5, 1, { transform: { x: 0.25, y: -0.25, scale: 0.5 } }),
+        clip('g', 2, 1.5, { transform: { scale: 0.5, rotate: 90, opacity: 0.5 } }),
+        clip('w', 3.5, 1.5, { transition: { type: 'fade', duration: 0.5 }, crop: { l: 0.5, t: 0, r: 0, b: 0 }, transform: { x: -0.25, scale: 0.5 } }),
+      ] },
+      // V3: картинка с прозрачностью на весь кадр (5–5,8 с); скрытая V4 не видна
+      { id: 'vtk_b', clips: [clip('p', 5, 0.8, { fit: 'stretch' })] },
+      { id: 'vtk_c', hidden: true, clips: [clip('r', 0, 6)] },
+    ],
+    audioTracks: [],
+  };
+  const out = path.join(DIR, 'out_tracks.mp4');
+  const r = await startExport(project, { width: W, height: H, fps: 30, codec, quality: 'high', output: out });
+  assert(Math.abs(r.duration - 6) < 0.01, `длина ${r.duration} = 6 (верхние дорожки внутри основной)`);
+  // rgb() даёт кадр 64×36: x·5, y·5 в координатах 320×180
+  const at = async (t) => await rgb(out, t);
+  let f = await at(0.2);
+  assert(isBlue(f.px(32, 18)) && isBlue(f.px(56, 6)), 'до PiP — только основная дорожка (скрытая V4 не видна)');
+  f = await at(1.0);
+  assert(isRed(f.px(48, 9)) && isBlue(f.px(16, 27)) && isBlue(f.px(30, 20)), `PiP: справа сверху красный ${f.px(48, 9)}, слева снизу синий ${f.px(16, 27)}`);
+  f = await at(2.5);
+  // Поворот на 90°: прямоугольник 160×90 становится 90×160 — по центру сверху вниз есть зелёный, по краям — синий
+  const c = f.px(32, 18); const top = f.px(32, 3); const side = f.px(20, 18);
+  // (green у lavfi — 0x008000: половина прозрачности над синим даёт ≈ 0,64,128)
+  assert(c[1] > 40 && c[2] > 90 && c[2] < 200 && c[0] < 40 && top[1] > 40 && isBlue(side), `поворот 90° и прозрачность 50%: центр ${c}, верх ${top}, сбоку ${side}`);
+  f = await at(4.6);
+  // Кадрирование левой половины белого + сдвиг влево: белое 80×90 в центре (80, 90)
+  assert(isWhite(f.px(16, 18)) && isBlue(f.px(32, 18)) && isBlue(f.px(3, 18)), `кадрирование + сдвиг: ${f.px(16, 18)} / ${f.px(32, 18)}`);
+  f = await at(3.5); // середина перехода 3,25–3,75
+  const mid = f.px(16, 18);
+  assert(mid[0] > 60 && mid[0] < 220, `переход на верхней дорожке: в середине белый наполовину ${mid}`);
+  f = await at(5.4);
+  assert(isWhite(f.px(10, 18)) && isBlue(f.px(54, 18)), `PNG с альфой: левая половина белая ${f.px(10, 18)}, правая — видно основную ${f.px(54, 18)}`);
+}
+const isWhite = ([r, g, b]) => r > 200 && g > 200 && b > 200;
 
 // Пустоты, переходы, затухания, реверс и стоп-кадр
 async function effectsTest(enc) {
@@ -292,6 +344,13 @@ async function effectsTest(enc) {
 
   const enc = await ff.detectEncoders();
   console.log('Кодировщики:', enc);
+  // node tests/engine-test.js --only tracks — только одна группа проверок (для отладки)
+  const only = process.argv.includes('--only') ? process.argv[process.argv.indexOf('--only') + 1] : null;
+  if (only) {
+    await ({ tracks: tracksTest, effects: effectsTest, speed: speedTest, plugin: pluginTest })[only](enc);
+    console.log('\nВСЁ ОК');
+    return;
+  }
 
   // Без видеокарты NVIDIA тестовые файлы и экспорт делаются на процессоре
   const av1 = enc.av1_nvenc ? ['-c:v', 'av1_nvenc', '-cq', '30'] : ['-c:v', 'libsvtav1', '-preset', '10', '-crf', '35'];
@@ -400,5 +459,6 @@ async function effectsTest(enc) {
   await viewTest(enc, ib);
   await speedTest(enc);
   await pluginTest(enc);
+  await tracksTest(enc);
   console.log('\nВСЁ ОК');
 })().catch((e) => { console.error(e); process.exit(1); });

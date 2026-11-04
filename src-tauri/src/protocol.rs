@@ -69,6 +69,37 @@ fn reply(status: StatusCode, body: Vec<u8>) -> Response<Vec<u8>> {
     Response::builder().status(status).header("Access-Control-Allow-Origin", "*").body(body).unwrap()
 }
 
+/// Файлы больше этого без заголовка Range отдаются первым куском (206), а не целиком в память.
+const WHOLE_MAX: u64 = 32 * 1024 * 1024;
+
+/// Разбор `Range: bytes=…` (только первый диапазон). None — диапазон невыполним (416).
+/// Кусок ответа не больше CHUNK: плеер сам попросит продолжение.
+pub fn parse_range(spec: &str, size: u64) -> Option<(u64, u64)> {
+    if size == 0 {
+        return None;
+    }
+    let spec = spec.trim().strip_prefix("bytes=")?.split(',').next()?.trim();
+    let (a, b) = spec.split_once('-')?;
+    let (a, b) = (a.trim(), b.trim());
+    let last = size - 1;
+    let (start, end) = if a.is_empty() {
+        // bytes=-N — последние N байт
+        let n: u64 = b.parse().ok()?;
+        if n == 0 {
+            return None;
+        }
+        (size.saturating_sub(n), last)
+    } else {
+        let start: u64 = a.parse().ok()?;
+        let end = if b.is_empty() { last } else { b.parse::<u64>().ok()?.min(last) };
+        (start, end)
+    };
+    if start > end || start > last {
+        return None;
+    }
+    Some((start, end.min(start.saturating_add(CHUNK - 1))))
+}
+
 pub fn handle(req: &Request<Vec<u8>>) -> Response<Vec<u8>> {
     let raw = req.uri().path().trim_start_matches('/');
     let decoded = percent_decode_str(raw).decode_utf8_lossy().to_string();
@@ -82,9 +113,15 @@ pub fn handle(req: &Request<Vec<u8>>) -> Response<Vec<u8>> {
     };
     let size = f.metadata().map(|m| m.len()).unwrap_or(0);
     let typ = mime(&file);
+    // HEAD — только заголовки (WebKit спрашивает размер перед воспроизведением)
+    if req.method() == tauri::http::Method::HEAD {
+        return Response::builder().status(StatusCode::OK)
+            .header("Content-Type", typ).header("Accept-Ranges", "bytes").header("Content-Length", size.to_string())
+            .header("Access-Control-Allow-Origin", "*").body(vec![]).unwrap();
+    }
     let range = req.headers().get("range").and_then(|v| v.to_str().ok()).map(str::to_string);
-    // Без Range маленькие файлы отдаём целиком, большие — первым куском (плеер дальше попросит сам)
-    let range = range.or_else(|| if size > 32 * 1024 * 1024 { Some("bytes=0-".to_string()) } else { None });
+    // Без Range маленькие файлы отдаём целиком (200), большие — первым куском (206; Chromium/WebView2 для медиа всегда шлёт Range)
+    let range = range.or_else(|| if size > WHOLE_MAX { Some("bytes=0-".to_string()) } else { None });
     let Some(range) = range else {
         let mut body = Vec::with_capacity(size as usize);
         if f.read_to_end(&mut body).is_err() {
@@ -94,28 +131,15 @@ pub fn handle(req: &Request<Vec<u8>>) -> Response<Vec<u8>> {
             .header("Content-Type", typ).header("Accept-Ranges", "bytes").header("Content-Length", body.len().to_string())
             .header("Access-Control-Allow-Origin", "*").body(body).unwrap();
     };
-    let spec = range.trim().strip_prefix("bytes=").unwrap_or("").split(',').next().unwrap_or("").trim().to_string();
-    let (a, b) = spec.split_once('-').unwrap_or(("", ""));
-    let (mut start, mut end): (u64, u64);
-    if a.is_empty() && !b.is_empty() {
-        let n: u64 = b.parse().unwrap_or(0);
-        start = size.saturating_sub(n);
-        end = size.saturating_sub(1);
-    } else {
-        start = a.parse().unwrap_or(0);
-        end = if b.is_empty() { size.saturating_sub(1) } else { b.parse().unwrap_or(size.saturating_sub(1)) };
-    }
-    end = end.min(size.saturating_sub(1)).min(start + CHUNK - 1);
-    if size == 0 || start >= size || start > end {
+    let Some((start, end)) = parse_range(&range, size) else {
         return Response::builder().status(StatusCode::RANGE_NOT_SATISFIABLE)
             .header("Content-Range", format!("bytes */{size}")).header("Access-Control-Allow-Origin", "*").body(vec![]).unwrap();
-    }
+    };
     let len = end - start + 1;
     let mut body = vec![0u8; len as usize];
     if f.seek(SeekFrom::Start(start)).is_err() || f.read_exact(&mut body).is_err() {
         return reply(StatusCode::INTERNAL_SERVER_ERROR, vec![]);
     }
-    start = start.min(end);
     Response::builder().status(StatusCode::PARTIAL_CONTENT)
         .header("Content-Type", typ)
         .header("Accept-Ranges", "bytes")
@@ -124,4 +148,86 @@ pub fn handle(req: &Request<Vec<u8>>) -> Response<Vec<u8>> {
         .header("Access-Control-Allow-Origin", "*")
         .header("Access-Control-Expose-Headers", "Content-Range, Content-Length, Accept-Ranges")
         .body(body).unwrap()
+}
+
+// ---- Пул потоков для протоколов media:// и plugin:// (R-6) ----
+// Раньше на каждый запрос создавался поток; с несколькими видеодорожками плеер шлёт десятки запросов сразу.
+type Job = Box<dyn FnOnce() + Send + 'static>;
+const WORKERS: usize = 6;
+
+static POOL: std::sync::OnceLock<Mutex<std::sync::mpsc::Sender<Job>>> = std::sync::OnceLock::new();
+
+fn pool() -> &'static Mutex<std::sync::mpsc::Sender<Job>> {
+    POOL.get_or_init(|| {
+        let (tx, rx) = std::sync::mpsc::channel::<Job>();
+        let rx = std::sync::Arc::new(Mutex::new(rx));
+        for i in 0..WORKERS {
+            let rx = rx.clone();
+            let _ = std::thread::Builder::new().name(format!("ffm-proto-{i}")).spawn(move || loop {
+                let job = match rx.lock() {
+                    Ok(r) => r.recv(),
+                    Err(p) => p.into_inner().recv(),
+                };
+                match job {
+                    // Паника в обработчике не должна убивать поток пула
+                    Ok(job) => { let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(job)); }
+                    Err(_) => break,
+                }
+            });
+        }
+        Mutex::new(tx)
+    })
+}
+
+/// Выполнить обработчик запроса в пуле (если пул недоступен — в отдельном потоке, как раньше)
+pub fn spawn(job: impl FnOnce() + Send + 'static) {
+    let job: Job = Box::new(job);
+    let sent = match pool().lock() {
+        Ok(tx) => tx.send(job),
+        Err(p) => p.into_inner().send(job),
+    };
+    if let Err(std::sync::mpsc::SendError(job)) = sent {
+        std::thread::spawn(job);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ranges() {
+        assert_eq!(parse_range("bytes=0-", 100), Some((0, 99)));
+        assert_eq!(parse_range("bytes=10-19", 100), Some((10, 19)));
+        assert_eq!(parse_range("bytes=90-500", 100), Some((90, 99)));
+        assert_eq!(parse_range("bytes=-10", 100), Some((90, 99)));
+        assert_eq!(parse_range("bytes=-500", 100), Some((0, 99)));
+        assert_eq!(parse_range("bytes=-0", 100), None);
+        assert_eq!(parse_range("bytes=100-", 100), None);
+        assert_eq!(parse_range("bytes=20-10", 100), None);
+        assert_eq!(parse_range("bytes=0-", 0), None);
+        assert_eq!(parse_range("items=0-", 100), None);
+        assert_eq!(parse_range("bytes=x-", 100), None);
+        // переполнение start + CHUNK
+        let big = u64::MAX;
+        assert_eq!(parse_range(&format!("bytes={}-", big - 5), big), Some((big - 5, big - 1)));
+        // кусок не больше CHUNK
+        assert_eq!(parse_range("bytes=0-", 10 * CHUNK), Some((0, CHUNK - 1)));
+    }
+
+    #[test]
+    fn pool_runs_jobs() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        for i in 0..20 {
+            let tx = tx.clone();
+            spawn(move || { let _ = tx.send(i); });
+        }
+        spawn(|| panic!("boom")); // поток пула переживает панику
+        let tx2 = tx.clone();
+        spawn(move || { let _ = tx2.send(100); });
+        let mut got: Vec<i32> = (0..21).map(|_| rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap()).collect();
+        got.sort();
+        assert_eq!(got.last(), Some(&100));
+        assert_eq!(got.len(), 21);
+    }
 }

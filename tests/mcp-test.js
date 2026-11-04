@@ -253,6 +253,32 @@ async function main() {
     const ph = await cl.ok('set_playhead', { time: 3 });
     ok(ph.playhead === 3, 'set_playhead');
 
+    console.log('Видеодорожки и трансформ (M4):');
+    ok(['add_video_track', 'update_video_track', 'set_transform'].every((n) => names.includes(n)), 'инструменты видеодорожек в tools/list');
+    const vt = (await cl.ok('add_video_track', { name: 'PiP' })).video_track;
+    ok(vt && /^vtk_/.test(vt.id) && vt.index === 2 && vt.name === 'PiP', `add_video_track: ${vt && vt.id}`);
+    const pip = (await cl.ok('add_clip', { media_id: mb.id, track: 'video', video_track_id: vt.id, start: 1, source_out: 2 })).clip;
+    ok(pip.video_track_id === vt.id && pip.start === 1 && pip.end === 3, `add_clip на верхнюю дорожку: ${pip.start}–${pip.end}`);
+    const stf = await cl.ok('set_transform', { clip_id: pip.id, scale: 0.33, x: 0.3, y: -0.3 });
+    ok(stf.clips[0].transform && stf.clips[0].transform.scale === 0.33 && stf.clips[0].transform.x === 0.3, 'set_transform: угол ⅓');
+    const stBad = await cl.tool('set_transform', { clip_id: pip.id, scale: 50 });
+    ok(stBad.isError && /scale/.test(stBad.text), 'set_transform: масштаб вне пределов → ошибка');
+    pj = await cl.ok('get_project');
+    ok(pj.upper_video_tracks.length === 1 && pj.upper_video_tracks[0].clips[0].id === pip.id && pj.duration === 7, 'get_project: upper_video_tracks, длительность не изменилась');
+    await cl.ok('update_video_track', { video_track_id: vt.id, locked: true });
+    const lk = await cl.tool('update_clip', { clip_id: pip.id, start: 2 });
+    ok(lk.isError && /locked/.test(lk.text), 'замок: правка клипа отклонена');
+    await cl.ok('update_video_track', { video_track_id: vt.id, locked: false, hidden: true });
+    const mvL = (await cl.ok('update_clip', { clip_id: pip.id, video_track_id: 'video', start: 7 })).clip;
+    ok(mvL.video_track_id === 'video' && mvL.start === 7, 'update_clip: перенос на основную дорожку');
+    await cl.ok('undo');
+    const rm = await cl.ok('update_video_track', { video_track_id: vt.id, remove: true });
+    ok(rm.removed === vt.id && rm.clips_removed === 1 && rm.order_bottom_to_top.join() === 'video', 'update_video_track remove');
+    const rmMain = await cl.tool('update_video_track', { video_track_id: 'video', remove: true });
+    ok(rmMain.isError, 'основную дорожку удалить нельзя');
+    pj = await cl.ok('get_project');
+    ok(pj.upper_video_tracks.length === 0 && pj.video_track.clips.length === 3, 'после удаления — как было');
+
     console.log('Взгляд на видео и звук:');
     const fr = await cl.tool('get_frame', { time: 1, width: 320 });
     const img = fr.content.find((c) => c.type === 'image');

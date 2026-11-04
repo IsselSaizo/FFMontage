@@ -411,7 +411,12 @@ export function missingIds(project) {
       for (const c of Array.isArray(tk.clips) ? tk.clips : []) if (c) audio(c.afx);
     }
   };
-  const scan = (p) => { if (!p) return; video(p.videoClips); video(p.overlayClips); tracks(p.audioTracks); };
+  const scan = (p) => {
+    if (!p) return;
+    video(p.videoClips); video(p.overlayClips);
+    for (const tr of Array.isArray(p.videoTracks) ? p.videoTracks : []) if (tr) video(tr.clips);
+    tracks(p.audioTracks);
+  };
   scan(project);
   if (project && Array.isArray(project.episodes)) project.episodes.forEach(scan);
   return { effects: [...out.effects], transitions: [...out.transitions], audioEffects: [...out.audioEffects] };

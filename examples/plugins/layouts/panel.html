@@ -1,0 +1,22 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body { font: 12px/1.4 system-ui, sans-serif; color: #e6e6ea; background: transparent; margin: 10px; }
+    #tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 8px; }
+    .tile { display: flex; flex-direction: column; gap: 6px; align-items: stretch; padding: 6px; border-radius: 8px; cursor: pointer;
+      background: #1d1d23; border: 1px solid #ffffff1a; color: inherit; font: inherit; text-align: center; }
+    .tile:hover { border-color: #7c5cff; }
+    .tile:disabled { opacity: .5; cursor: progress; }
+    .scheme { position: relative; aspect-ratio: 16 / 9; background: #0e0e12; border-radius: 4px; overflow: hidden; }
+    .scheme i { position: absolute; box-sizing: border-box; background: #7c5cff55; border: 1px solid #b9a6ff; border-radius: 2px; }
+    .muted { color: #9a9aa6; margin-top: 10px; }
+  </style>
+</head>
+<body>
+  <div id="tiles"></div>
+  <div class="muted" id="hint"></div>
+  <script type="module" src="panel.js"></script>
+</body>
+</html>

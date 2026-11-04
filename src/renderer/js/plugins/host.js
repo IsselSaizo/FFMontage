@@ -39,6 +39,10 @@ const TOOL_PERMS = {
   freeze_frame: 'project:write',
   set_transition: 'project:write',
   close_gaps: 'project:write',
+  // M4: видеодорожки и трансформ (шаблоны PiP/сеток — examples/plugins/layouts)
+  add_video_track: 'project:write',
+  update_video_track: 'project:write',
+  set_transform: 'project:write',
   undo: 'project:write',
   redo: 'project:write',
   set_playhead: 'project:write',

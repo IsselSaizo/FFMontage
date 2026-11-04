@@ -15,6 +15,7 @@ import { copyClip, pasteClip, reverseClip, freezeFrame } from './actions.js';
 import { closeMenu, menuOpen } from './contextMenu.js';
 import { initViewbar } from './viewbar.js';
 import { initCropMode } from './cropMode.js';
+import { initGizmo } from './gizmo.js';
 import { initAudioRack } from './audioRack.js';
 import { initAnim } from './anim.js';
 import { modeTabs, initModes } from './modes.js';
@@ -334,6 +335,7 @@ async function main() {
   transport = initTransport(preview);
   initViewbar();
   const crop = initCropMode(preview);
+  const gizmo = initGizmo(preview);
   initAudioRack();
   const anim = initAnim(preview);
   initModes();
@@ -356,7 +358,7 @@ async function main() {
   await restoreAutosave();
   restoreUiState();
   updateTitle();
-  window.__ffm = { store, preview, timeline, importPaths, openExport, browser, crop, anim, openSettings, reloadUi, plugins: pluginHost, loadProjectText: loadFromText };
+  window.__ffm = { store, preview, timeline, importPaths, openExport, browser, crop, gizmo, anim, openSettings, reloadUi, plugins: pluginHost, loadProjectText: loadFromText };
   const bridge = await mcpReady;
   if (bridge) bridge.initMcpBridge({
     loadProjectText: (text, filePath) => loadFromText(text, filePath),

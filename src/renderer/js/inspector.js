@@ -10,6 +10,7 @@ import { isReversed, isFreeze } from './fx.js';
 import { clipEffects, unknownEffects, effectById, effectValues } from './effects.js';
 import { onRegistryChange } from './registry.js';
 import { speedOf, tlLen, fmtSpeed, SPEED_PRESETS, MIN_SPEED, MAX_SPEED } from './clipTime.js';
+import { tfOf, cleanTransform, TF_DEFAULT } from './transform.js';
 
 // Число как есть, но с десятичным разделителем языка: 0,8 / 0.8 (без лишних нулей, в отличие от i18n num)
 const dec = (x) => (getLang() === 'ru' ? String(x).replace('.', ',') : String(x));
@@ -201,6 +202,9 @@ export function initInspector() {
     // --- Скорость (видео и аудио; у картинки и стоп-кадра скорости нет) ---
     if (!(m.isImage && !m.isAnimation) && !isFreeze(clip)) root.append(speedSection(clip));
 
+    // --- Трансформ (видео): положение, масштаб, поворот, прозрачность; в плеере — рамка с ручками ---
+    if (kind === 'video') root.append(transformSection(clip, sel));
+
     // --- Фильтры (видео): список — во вкладке «Фильтры», подгонка и кадрирование — над плеером ---
     if (kind === 'video') {
       const fxOn = clipEffects(clip);
@@ -225,6 +229,47 @@ export function initInspector() {
     root.append(fileInfo(srcMedia));
     applyFocus();
   };
+
+  // Трансформ: поля ввода и ползунки; ползунок пишет в историю один раз за жест
+  function transformSection(clip) {
+    const f = store.findClip(clip.id);
+    const locked = !!(f && f.lane && f.lane.locked);
+    const tf = tfOf(clip);
+    const sec = h('div', { class: 'insp-section', dataset: { section: 'transform' } }, h('h3', {}, t('Трансформ')));
+    const rows = [
+      ['x', t('По горизонтали'), -1, 1, 0.005, (v) => `${num(v * 100, 1)}%`],
+      ['y', t('По вертикали'), -1, 1, 0.005, (v) => `${num(v * 100, 1)}%`],
+      ['scale', t('Масштаб'), 0.05, 3, 0.01, (v) => `${Math.round(v * 100)}%`],
+      ['rotate', t('Поворот'), -180, 180, 1, (v) => `${num(v, 1)}°`],
+      ['opacity', t('Непрозрачность'), 0, 1, 0.01, (v) => `${Math.round(v * 100)}%`],
+    ];
+    for (const [k, label, min, max, step, fmt] of rows) {
+      const { slider, val } = liveSlider({
+        min, max, step, value: Math.min(max, Math.max(min, tf[k])), format: fmt,
+        onLive: (v) => { const c = store.findClip(clip.id).clip; const n = cleanTransform({ [k]: v }, c.transform); if (n) c.transform = n; else delete c.transform; },
+        onCommit: (v) => store.setTransform([clip.id], { [k]: v }),
+      });
+      slider.dataset.tf = k;
+      slider.disabled = locked;
+      slider.addEventListener('dblclick', () => store.setTransform([clip.id], { [k]: TF_DEFAULT[k] }));
+      sec.append(h('div', { class: 'row between' }, h('label', {}, label), val), slider);
+    }
+    const presets = [
+      [t('Сброс'), null],
+      [t('По центру ½'), { x: 0, y: 0, scale: 0.5 }],
+      [t('Угол ↗ ⅓'), { x: 0.3, y: -0.3, scale: 0.33 }],
+      [t('Угол ↘ ⅓'), { x: 0.3, y: 0.3, scale: 0.33 }],
+      [t('Левая половина'), { x: -0.25, y: 0, scale: 0.5 }],
+      [t('Правая половина'), { x: 0.25, y: 0, scale: 0.5 }],
+    ];
+    sec.append(h('div', { class: 'presets' }, ...presets.map(([name, p]) => h('button', {
+      class: 'chip', disabled: locked, onclick: () => store.setTransform([clip.id], p, { replace: true }),
+    }, name))));
+    sec.append(h('p', { class: 'muted small' }, locked
+      ? t('Дорожка закрыта замком — снимите его в заголовке дорожки.')
+      : t('В плеере выделенный клип можно двигать мышью, тянуть за углы (масштаб) и за кружок сверху (поворот; Shift — шагом 15°). Двойной щелчок по ползунку — сброс.')));
+    return sec;
+  }
 
   // ---------------- Переход ----------------
   function renderTransition(clipId) {
@@ -272,7 +317,7 @@ export function initInspector() {
 
   function renderProject() {
     const f = store.sourceFormat();
-    const nClips = store.project.videoClips.length + store.project.audioTracks.reduce((s, tr) => s + tr.clips.length, 0);
+    const nClips = store.allVideo().length + store.project.audioTracks.reduce((s, tr) => s + tr.clips.length, 0);
     const files = Object.values(store.project.media).filter((m) => !m.hidden).length;
     root.append(h('div', { class: 'panel-head' }, h('h2', {}, t('Проект'))));
     root.append(h('div', { class: 'insp-section' },
