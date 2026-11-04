@@ -32,7 +32,7 @@
     // Наведение на переход — показ в плеере на стыке
     const wl = trRoot.querySelector('.tr-tile[data-type="circleopen"]');
     enter(wl);
-    await sleep(60);
+    for (let i = 0; i < 20 && !(preview.override && preview.slots.filter((s) => s.classList.contains('on')).length === 2); i++) await sleep(50);
     ok(preview.override && preview.override.type === 'circleopen' && preview.override.b.id === v[1].id, 'наведение: переход играет в плеере');
     ok(preview.slots.filter((s) => s.classList.contains('on')).length === 2, 'в плеере оба клипа стыка');
     leave(wl); await sleep(30);
@@ -68,19 +68,35 @@
     ok(!store.findClip(v[0].id).clip.effects, 'отмена снимает эффект');
     store.redo();
 
-    // --- Кадр: заполнить ---
-    tab('props').click(); await sleep(50);
-    document.querySelector('#fit-cover').click(); await sleep(50);
+    // --- Панель над плеером: вкладки режимов, подгонка, формат, фон ---
+    ok(document.querySelectorAll('.mode-tab').length === 3 && document.body.dataset.mode === 'video', 'вкладки Видео / Аудио / Анимации, открыто «Видео»');
+    ok(tab('effects').textContent === 'Фильтры', 'правая вкладка называется «Фильтры»');
+    store.select({ kind: 'video', id: v[0].id }); await sleep(50);
+    const fitBtn = document.querySelector('#viewbar .vb-fit');
+    ok(fitBtn && !fitBtn.disabled, 'кнопка подгонки активна при выбранном клипе');
+    fitBtn.click(); await sleep(60);
+    ok(!!document.querySelector('.popover [data-fit="stretch"]'), 'попап подгонки: вписать / заполнить / растянуть');
+    document.querySelector('.popover [data-fit="cover"]').click(); await sleep(60);
     ok(store.findClip(v[0].id).clip.fit === 'cover' && shown().classList.contains('cover'), '«Заполнить»: клип и плеер');
+    document.querySelector('.popover [data-fit="stretch"]').click(); await sleep(60);
+    ok(store.findClip(v[0].id).clip.fit === 'stretch' && shown().classList.contains('stretch'), '«Растянуть»: клип и плеер');
+    const planS = (await import('./js/exportPlan.js')).buildExport(store.project, { width: 1280, height: 720, fps: 30 });
+    ok(/scale=1280:720:flags=lanczos,setsar=1/.test(planS.filter), 'экспорт: растянуть без сохранения пропорций');
+    document.querySelector('.popover [data-fit="cover"]').click(); await sleep(60);
+    document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })); await sleep(30);
+    ok(!document.querySelector('.popover'), 'щелчок мимо закрывает попап');
 
     // --- Формат 9:16 и фон ---
     store.select(null); await sleep(50);
-    document.querySelector('[data-aspect="9:16"]').click(); await sleep(150);
+    ok(document.querySelector('#viewbar .vb-fit').disabled, 'без выбранного клипа подгонка неактивна');
+    document.querySelector('#viewbar .vb-aspect').click(); await sleep(60);
+    document.querySelector('.popover [data-aspect="9:16"]').click(); await sleep(150);
     const f = store.sourceFormat();
     ok(f.width === 1080 && f.height === 1920, `9:16: ${f.width}×${f.height}`);
     const st = preview.stage.getBoundingClientRect();
     ok(st.height > st.width * 1.6, `плеер вертикальный ${Math.round(st.width)}×${Math.round(st.height)}`);
-    document.querySelector('.swatch[title="Белый"]').click(); await sleep(80);
+    document.querySelector('#viewbar .vb-bg').click(); await sleep(60);
+    document.querySelector('.popover .swatch[title="Белый"]').click(); await sleep(80);
     ok(store.project.background === '#ffffff' && /255, 255, 255/.test(preview.stage.style.background), 'фон белый');
     const plan = await import('./js/exportPlan.js');
     let cmd = plan.buildExport(store.project, { width: 1080, height: 1920, fps: 30 });

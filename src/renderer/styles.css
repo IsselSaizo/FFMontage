@@ -50,8 +50,12 @@ kbd {
 #workspace {
   display: grid; min-height: 0;
   grid-template-columns: 300px minmax(0, 1fr) 300px;
+  grid-template-areas: "left center right";
   gap: 8px; padding: 8px 8px 0;
 }
+#media-panel, #anim-presets { grid-area: left; }
+#center { grid-area: center; }
+#right-side, #audio-rack, #anim-params { grid-area: right; }
 /* Правая колонка: вкладки Свойства / Переходы / Эффекты */
 #right-side { display: flex; flex-direction: column; gap: 6px; min-height: 0; }
 #right-side > .panel { flex: 1; }
@@ -202,7 +206,7 @@ kbd {
 @keyframes spin { to { transform: rotate(360deg); } }
 
 /* ---------- Плеер ---------- */
-#center { display: grid; grid-template-rows: minmax(0, 1fr) 62px; min-width: 0; min-height: 0; }
+#center { display: grid; grid-template-rows: 40px minmax(0, 1fr) 62px; min-width: 0; min-height: 0; }
 #preview { min-height: 0; display: flex; }
 .stage-frame { flex: 1; display: flex; align-items: center; justify-content: center; min-width: 0; min-height: 0; background: var(--bg); }
 .stage-frame:fullscreen { background: #000; }
@@ -211,6 +215,7 @@ kbd {
 .stage video, .stage img.slot { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; visibility: hidden; pointer-events: none; transform-origin: 50% 50%; }
 .stage video.on, .stage img.slot.on { visibility: visible; }
 .stage .slot.cover { object-fit: cover; }
+.stage .slot.stretch { object-fit: fill; }
 .stage-overlay { position: absolute; inset: 0; z-index: 3; opacity: 0; pointer-events: none; background: #fff; }
 .stage-msg {
   position: absolute; inset: 0; display: none; align-items: center; justify-content: center; text-align: center;
@@ -523,3 +528,65 @@ body:not(.ready) #app { opacity: 0; }
 .ep-rename { width: 120px; font: inherit; font-size: 12px; color: var(--text); background: var(--panel-2); border: 1px solid var(--accent); border-radius: 5px; padding: 2px 5px; outline: none; }
 .ep-spacer { flex: 1; }
 .ep-join { height: 24px; }
+/* ---------- Режимы (вкладки сверху): Видео · Аудио · Анимации ---------- */
+#topbar { position: relative; }
+.tb-center { position: absolute; left: 50%; top: 0; bottom: 0; transform: translateX(-50%); display: flex; align-items: center; }
+.mode-tabs { display: flex; gap: 2px; padding: 3px; background: var(--bg-2); border: 1px solid var(--line); border-radius: 9px; }
+.mode-tab { border: 0; background: transparent; color: var(--text-2); font: inherit; font-size: 13px; padding: 5px 16px; border-radius: 6px; cursor: pointer; }
+.mode-tab:hover { color: var(--text); background: var(--panel-2); }
+.mode-tab.on { background: var(--accent-soft); color: var(--text); box-shadow: inset 0 -2px 0 var(--accent); }
+.mode-only { display: none; }
+body[data-mode="audio"] #right-side, body[data-mode="anim"] #right-side { display: none; }
+body[data-mode="audio"] #audio-rack { display: block; }
+body[data-mode="anim"] #media-panel { display: none; }
+body[data-mode="anim"] #anim-presets, body[data-mode="anim"] #anim-params { display: block; }
+.mode-placeholder { color: var(--text-2); font-size: 12.5px; line-height: 1.5; }
+.mode-placeholder h2 { color: var(--text); }
+
+/* ---------- Панель над плеером ---------- */
+#viewbar { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; padding: 0 4px; min-width: 0; }
+.vb-side { display: flex; align-items: center; min-width: 0; }
+.vb-side.right { justify-content: flex-end; }
+.vb-title { font-weight: 600; font-size: 13px; color: var(--text-2); }
+.vb-info { font-size: 12px; color: var(--text-3); white-space: nowrap; }
+.vb-tools { display: flex; align-items: center; gap: 8px; }
+.vb-group { display: flex; gap: 2px; padding: 2px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
+.vb-sep { width: 1px; height: 20px; background: var(--line-2); }
+.vb-btn { position: relative; width: 32px; height: 28px; border: 0; border-radius: 6px; background: transparent; color: var(--text-2);
+  display: flex; align-items: center; justify-content: center; cursor: pointer; }
+.vb-btn:hover:not(:disabled), .vb-btn.open { background: var(--panel-3); color: var(--text); }
+.vb-btn:disabled { opacity: .35; cursor: default; }
+.vb-btn.active { color: var(--accent-2); }
+.vb-dot { position: absolute; right: 4px; bottom: 3px; width: 8px; height: 8px; border-radius: 50%; border: 1px solid var(--line-2); }
+
+/* ---------- Всплывающие панельки ---------- */
+.popover { position: fixed; z-index: 400; min-width: 220px; max-width: 340px; background: var(--panel-2); border: 1px solid var(--line-2);
+  border-radius: 10px; padding: 10px; box-shadow: 0 12px 32px rgba(0,0,0,.5); animation: pop-in .12s ease-out; }
+@keyframes pop-in { from { opacity: 0; transform: translateY(-4px); } }
+.pop-body { display: flex; flex-direction: column; gap: 6px; }
+.pop-title { font-weight: 600; font-size: 13px; margin-bottom: 2px; }
+.pop-sep { height: 1px; background: var(--line-2); margin: 4px 0; }
+.pop-option { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; background: none; border: 1px solid transparent;
+  border-radius: 8px; padding: 6px 8px; cursor: pointer; }
+.pop-option:hover { background: var(--panel-3); }
+.pop-option.on { border-color: var(--accent); background: var(--accent-soft); }
+.po-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.po-text b { font-weight: 600; font-size: 12.5px; }
+.wide-left { justify-content: flex-start; width: 100%; }
+/* значки «как будет выглядеть» для подгонки */
+.fit-demo { position: relative; flex: none; width: 34px; height: 22px; border-radius: 3px; background: #000; border: 1px solid var(--line-2); overflow: hidden; }
+.fit-demo > span { position: absolute; background: linear-gradient(135deg, #9b7bff, #3fd17a); }
+.fit-contain > span { left: 9px; right: 9px; top: 0; bottom: 0; }
+.fit-cover > span { left: -2px; right: -2px; top: -8px; bottom: -8px; }
+.fit-stretch > span { inset: 0; background: linear-gradient(90deg, #9b7bff, #3fd17a); }
+.asp-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.asp-tile { display: flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: 5px; height: 62px; padding: 6px 4px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 8px; cursor: pointer; font-size: 11.5px; color: var(--text-2); }
+.asp-tile:hover { color: var(--text); border-color: var(--line-2); }
+.asp-tile.on { border-color: var(--accent); background: var(--accent-soft); color: var(--text); }
+.asp-shape { display: flex; align-items: center; justify-content: center; border: 1.5px solid currentColor; border-radius: 3px; }
+.asp-auto { font-size: 10px; font-weight: 700; }
+
+/* ---------- Справка: горячие клавиши ---------- */
+.keys-list { columns: 2; column-gap: 28px; }
+.keys-list .kv { break-inside: avoid; }

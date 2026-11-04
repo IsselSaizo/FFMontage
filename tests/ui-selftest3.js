@@ -40,6 +40,8 @@
   const items = [...document.querySelectorAll('.ctx-menu .ctx-item')].map((x) => x.querySelector('.ctx-label').textContent);
   ok(items.includes('Создать стоп-кадр') && items.includes('Отзеркалить (задом наперёд)') && items.includes('Дублировать'), `меню видео: ${items.join(' | ')}`);
   await window.api.testShot('ctx-video');
+  // снимок окна может снять фокус (blur закрывает меню) — открываем заново
+  if (!document.querySelector('.ctx-menu')) { clipEl(v[1].id).dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: rb.x + 40, clientY: rb.y + 30, button: 2 })); await sleep(100); }
   document.querySelector('.ctx-menu [data-action="split"]').click();
   await sleep(100);
   v = vids();

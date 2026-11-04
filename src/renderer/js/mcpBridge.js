@@ -137,7 +137,7 @@ function describeClip(c, kind, track = null) {
   if (kind === 'video' && c.noAudio) o.sound_on_audio_track = true;
   if (kind === 'audio' && c.stream) o.audio_stream = c.stream;
   if (kind === 'video' && Array.isArray(c.effects) && c.effects.length) o.effects = c.effects;
-  if (kind === 'video' && c.fit === 'cover') o.fit = 'cover';
+  if (kind === 'video' && (c.fit === 'cover' || c.fit === 'stretch')) o.fit = c.fit;
   if (store.busy[c.id]) o.processing = store.busy[c.id].label;
   return o;
 }

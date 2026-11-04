@@ -814,6 +814,18 @@ class Store {
     this.mutate(() => { const f = this.findClip(id); if (f) Object.assign(f.clip, patch); }, opts);
   }
 
+  // Подгонка кадра видеоклипов: 'contain' (вписать, по умолчанию) | 'cover' (заполнить) | 'stretch' (растянуть).
+  // ids — список клипов (один шаг отмены на всех)
+  setFit(ids, fit) {
+    const set = new Set(ids);
+    this.mutate((p) => {
+      for (const c of p.videoClips) {
+        if (!set.has(c.id)) continue;
+        if (!fit || fit === 'contain') delete c.fit; else c.fit = fit;
+      }
+    });
+  }
+
   // Изменить длительность клипа (видео раздвигает следующие клипы, если не хватает места)
   setClipDuration(id, dur) {
     const f = this.findClip(id);

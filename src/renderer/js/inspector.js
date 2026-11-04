@@ -1,15 +1,15 @@
 // Правая панель: свойства выделенного клипа / перехода или сведения о проекте.
 import { store, MAX_FADE } from './store.js';
 import { h, $, fmtTime, fmtDur, fmtBytes, icon, iconEl } from './util.js';
-import { TRANSITIONS, transitionById, applyTransition, DEFAULT_DURATION, MIN_DURATION } from './transitions.js';
+import { transitionById, MIN_DURATION } from './transitions.js';
 import { maxTransition } from './store.js';
-import { reverseClip, freezeFrame, renameClip, changeDuration, copyClip } from './actions.js';
+import { changeDuration } from './actions.js';
 import { isReversed, isFreeze } from './fx.js';
 import { EFFECTS, clipEffects } from './effects.js';
 
 const num = (x, d = 1) => String(Math.round(x * 10 ** d) / 10 ** d).replace('.', ',');
 
-export function initInspector({ onSplit, onDelete }) {
+export function initInspector() {
   const root = $('#inspector');
   let liveBefore = null; // снимок для слайдеров (одна запись в истории за жест)
   let focusSection = null;
@@ -135,39 +135,14 @@ export function initInspector({ onSplit, onDelete }) {
         onclick: () => store.setClip(clip.id, { in: 0, out: m.duration }) }, 'Исходная длина')));
     root.append(trim);
 
-    // --- Кадр и эффекты (видео) ---
+    // --- Фильтры (видео): список — во вкладке «Фильтры», подгонка и кадрирование — над плеером ---
     if (kind === 'video') {
-      const fr = store.sourceFormat();
-      const sameAspect = m.width && m.height && Math.abs(m.width / m.height - fr.width / fr.height) < 0.01;
-      const fitSec = h('div', { class: 'insp-section', dataset: { section: 'frame' } }, h('h3', {}, 'Кадр'),
-        h('div', { class: 'presets' },
-          h('button', { class: `chip${clip.fit !== 'cover' ? ' on' : ''}`, id: 'fit-contain', onclick: () => store.setClip(clip.id, { fit: undefined }) }, 'Вписать целиком'),
-          h('button', { class: `chip${clip.fit === 'cover' ? ' on' : ''}`, id: 'fit-cover', onclick: () => store.setClip(clip.id, { fit: 'cover' }) }, 'Заполнить (обрезать)')),
-        h('p', { class: 'muted small' }, sameAspect
-          ? 'Пропорции клипа совпадают с форматом проекта — полей нет.'
-          : '«Вписать» — весь кадр виден, по краям поля цвета фона (настраивается в свойствах проекта). «Заполнить» — без полей, лишнее по краям обрезается.'));
-      root.append(fitSec);
       const fxOn = clipEffects(clip);
-      root.append(h('div', { class: 'insp-section', dataset: { section: 'effects' } }, h('h3', {}, 'Эффекты'),
-        h('div', { class: 'presets' }, ...EFFECTS.map((e) => h('button', {
-          class: `chip${fxOn.includes(e.id) ? ' on' : ''}`, dataset: { fx: e.id }, onclick: () => store.toggleEffect(clip.id, e.id),
-        }, e.name))),
-        h('p', { class: 'muted small' }, 'Эффект действует на весь клип. Для части — разрежьте клип (S или лезвие B). Все эффекты с предпросмотром — во вкладке «Эффекты».')));
+      root.append(h('div', { class: 'insp-section', dataset: { section: 'effects' } }, h('h3', {}, 'Фильтры'),
+        h('div', { class: 'row between' },
+          h('span', { class: 'muted small' }, fxOn.length ? fxOn.map((id) => (EFFECTS.find((e) => e.id === id) || { name: id }).name).join(', ') : 'Нет'),
+          h('button', { class: 'btn ghost small', onclick: () => store.emit('show-tab', 'effects') }, fxOn.length ? 'Изменить' : 'Добавить'))));
     }
-
-    // --- Эффекты и действия ---
-    const busy = !!store.busy[clip.id];
-    root.append(h('div', { class: 'insp-section actions', dataset: { section: 'actions' } }, h('h3', {}, 'Действия'),
-      h('button', { class: `btn${isReversed(clip) ? ' toggle-on' : ''}`, disabled: busy || isFreeze(clip), onclick: () => reverseClip(clip.id) },
-        h('span', { html: icon('reverse', 17) }), isReversed(clip) ? 'Убрать отзеркаливание (R)' : 'Отзеркалить — задом наперёд (R)'),
-      kind === 'video' ? h('button', { class: 'btn', disabled: busy || isFreeze(clip), onclick: () => freezeFrame(clip.start <= store.time && store.time < clip.start + dur ? store.time : clip.start) },
-        h('span', { html: icon('freeze', 17) }), 'Стоп-кадр в позиции курсора (F)') : null,
-      h('button', { class: 'btn', onclick: onSplit }, h('span', { html: icon('split', 17) }), 'Разрезать (S)'),
-      h('button', { class: 'btn', onclick: () => store.duplicateClip(clip.id) }, h('span', { html: icon('duplicate', 17) }), 'Дублировать (Ctrl+D)'),
-      h('button', { class: 'btn', onclick: () => copyClip(clip.id) }, h('span', { html: icon('copy', 17) }), 'Копировать (Ctrl+C)'),
-      h('button', { class: 'btn', onclick: () => renameClip(clip.id) }, h('span', { html: icon('rename', 17) }), 'Переименовать'),
-      h('button', { class: 'btn danger-ghost', onclick: onDelete }, h('span', { html: icon('trash', 17) }), 'Удалить (Del)')));
-
     // --- Исходный файл ---
     root.append(fileInfo(srcMedia));
     applyFocus();
@@ -198,23 +173,8 @@ export function initInspector({ onSplit, onDelete }) {
       root.append(h('p', { class: 'muted small' }, 'Выберите переход — он сразу появится на стыке.'));
     }
 
-    const grid = h('div', { class: 'tr-grid', dataset: { section: tr ? 'list' : 'transition' } });
-    for (const t of TRANSITIONS) {
-      const a = h('div', { class: 'tp-a' }); const b = h('div', { class: 'tp-b' }); const ov = h('div', { class: 'tp-ov' });
-      const thumb = h('div', { class: 'tp-thumb' }, a, b, ov);
-      const tile = h('button', {
-        class: `tr-tile${tr && tr.type === t.id ? ' on' : ''}`, dataset: { type: t.id }, title: t.name,
-        onclick: () => store.setTransition(clipId, t.id, tr ? tr.duration : Math.min(DEFAULT_DURATION, mx)),
-      }, thumb, h('span', {}, t.name));
-      applyTransition(t.id, 0.5, a, b, ov);
-      let raf = null; let t0 = 0;
-      const anim = (now) => { const p = ((now - t0) / 1400) % 1; applyTransition(t.id, Math.min(1, p * 1.25), a, b, ov); raf = requestAnimationFrame(anim); };
-      tile.addEventListener('mouseenter', () => { t0 = performance.now(); raf = requestAnimationFrame(anim); store.emit('preview-transition', { bId: clipId, type: t.id, el: tile }); });
-      tile.addEventListener('mouseleave', () => { cancelAnimationFrame(raf); applyTransition(t.id, 0.5, a, b, ov); store.emit('preview-transition', null); });
-      grid.append(tile);
-    }
-    root.append(h('div', { class: 'insp-section' }, h('h3', {}, tr ? 'Другой переход' : 'Переходы'), grid));
-    applyFocus();
+    root.append(h('div', { class: 'insp-section', dataset: { section: tr ? 'list' : 'transition' } },
+      h('button', { class: 'btn ghost small', onclick: () => store.emit('show-tab', 'transitions') }, tr ? 'Сменить переход…' : 'Выбрать переход…')));    applyFocus();
   }
 
   function fileInfo(m) {
@@ -243,31 +203,9 @@ export function initInspector({ onSplit, onDelete }) {
         h('dt', {}, 'Клипов'), h('dd', {}, String(nClips)),
         h('dt', {}, 'Переходов'), h('dd', {}, String(store.transitions().length)),
         h('dt', {}, 'Файлов'), h('dd', {}, String(files))),
-      h('p', { class: 'muted small' }, 'Размер кадра берётся из самого крупного видео на таймлайне (с учётом выбранных пропорций). При экспорте можно выбрать другой.')));
+      h('p', { class: 'muted small' }, 'Размер кадра берётся из самого крупного видео на таймлайне (с учётом формата кадра). При экспорте можно выбрать другой.')));
 
-    // Пропорции кадра и цвет фона
-    const asp = store.project.aspect || 'auto';
-    const bgc = store.background();
-    const color = h('input', { type: 'color', value: bgc, id: 'bg-color', class: 'color-input', title: 'Свой цвет фона' });
-    color.addEventListener('change', () => store.setProjectProps({ background: color.value === '#000000' ? null : color.value }));
-    root.append(h('div', { class: 'insp-section', dataset: { section: 'format' } }, h('h3', {}, 'Формат кадра'),
-      h('div', { class: 'presets' }, ...[['auto', 'Как у видео'], ['16:9', '16:9'], ['9:16', '9:16 (вертикальное)'], ['1:1', '1:1'], ['3:4', '3:4']].map(([id, label]) =>
-        h('button', { class: `chip${asp === id ? ' on' : ''}`, dataset: { aspect: id }, onclick: () => store.setProjectProps({ aspect: id }) }, label))),
-      h('h3', {}, 'Фон'),
-      h('div', { class: 'row gap' }, color,
-        h('div', { class: 'presets' }, ...[['#000000', 'Чёрный'], ['#ffffff', 'Белый'], ['#1f1f24', 'Тёмно-серый'], ['#00b140', 'Зелёный (хромакей)']].map(([c, n]) =>
-          h('button', { class: `swatch${bgc === c ? ' on' : ''}`, title: n, style: { background: c }, onclick: () => store.setProjectProps({ background: c === '#000000' ? null : c }) })))),
-      h('p', { class: 'muted small' }, 'Фон виден по краям вписанных клипов, в пустотах между клипами и при затухании.')));
-    root.append(h('div', { class: 'insp-section' }, h('h3', {}, 'Подсказки'),
-      h('p', { class: 'muted small' }, 'Правая кнопка мыши на клипе — меню действий. «+» на стыке клипов — переход. Корзина на пустом месте дорожки убирает пустоту.')));
-    root.append(h('div', { class: 'insp-section' }, h('h3', {}, 'Горячие клавиши'),
-      h('dl', { class: 'kv keys' }, ...[
-        ['Пробел', 'Пуск / пауза'], ['S', 'Разрезать клип'], ['Alt+S', 'Разрезать всё под курсором'], ['B / A', 'Лезвие / выделение'], ['Delete', 'Удалить клип'], ['Shift+Delete', 'Удалить и сдвинуть'],
-        ['Ctrl+C / Ctrl+V', 'Копировать / вставить'], ['Ctrl+D', 'Дублировать клип'], ['F', 'Стоп-кадр'], ['R', 'Отзеркалить (реверс)'],
-        ['Ctrl+Z / Ctrl+Y', 'Отменить / повторить'], ['← →', 'На кадр (с Shift — на 1 с)'], ['Home / End', 'В начало / конец'],
-        ['Ctrl + колесо', 'Масштаб таймлайна'], ['Alt при перетаскивании', 'Без магнита и без наложения (раздвинуть)'], ['Shift+F', 'Плеер во весь экран'],
-        ['Ctrl+S', 'Сохранить проект'], ['Ctrl+E', 'Экспорт'], ['Ctrl+I', 'Импорт медиа'],
-      ].flatMap(([k, v]) => [h('dt', {}, h('kbd', {}, k)), h('dd', {}, v)]))));
+    root.append(h('p', { class: 'muted small' }, 'Формат кадра и фон — кнопки над плеером. Горячие клавиши — меню ☰ → «Горячие клавиши».'));
   }
 
   // Прокрутить к нужному разделу и подсветить его

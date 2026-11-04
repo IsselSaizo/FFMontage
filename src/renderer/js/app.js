@@ -10,6 +10,9 @@ import { initEpisodes } from './episodes.js';
 import { openExport } from './exportDialog.js';
 import { copyClip, pasteClip, reverseClip, freezeFrame } from './actions.js';
 import { closeMenu, menuOpen } from './contextMenu.js';
+import { initViewbar } from './viewbar.js';
+import { modeTabs, initModes } from './modes.js';
+import { closePopover, popoverOpen } from './popover.js';
 
 // Мост для ИИ-ассистента грузим отдельно: если с ним что-то не так, редактор всё равно запустится
 const mcpReady = import('./mcpBridge.js').catch((e) => { console.error('mcpBridge', e); return null; });
@@ -43,6 +46,7 @@ function initTopbar() {
     item('Настройки папок…', '', () => api.openSettings()),
     item('ИИ-ассистент (MCP)…', '', () => showMcpDialog()),
     h('div', { class: 'dd-sep' }),
+    item('Горячие клавиши', '', () => showHotkeys()),
     item('Проверить обновления…', '', () => checkUpdates()),
     item('О программе', '', about));
   function item(label, key, fn) {
@@ -69,6 +73,7 @@ function initTopbar() {
       h('div', { class: 'menu-wrap' }, menuBtn, menu),
       nameInput, saved),
     h('div', { class: 'tb-drag', 'data-tauri-drag-region': '' }),
+    h('div', { class: 'tb-center' }, modeTabs()),
     h('div', { class: 'tb-right' },
       h('button', { class: 'btn primary export-btn', onclick: () => openExport() }, h('span', { html: icon('export', 18) }), 'Экспорт'),
       h('div', { class: 'win-ctl' },
@@ -196,6 +201,36 @@ async function restoreAutosave() {
   }
 }
 
+// Заглушки режимов «Аудио» и «Анимации», пока их модули не подключены
+function initModePlaceholders() {
+  const ph = (sel, title, text) => { const el = $(sel); if (el && !el.childElementCount) el.append(h('div', { class: 'mode-placeholder' }, h('h2', {}, title), h('p', {}, text))); };
+  ph('#audio-rack', 'Аудио', 'Здесь будет стойка эффектов выбранного клипа или дорожки: эквалайзер, компрессор, шумодав. Остальное — плагинами.');
+  ph('#anim-presets', 'Анимации', 'Пресеты лёгких анимаций (например, «Дождь» из своей картинки).');
+  ph('#anim-params', 'Параметры', 'Настройки выбранного пресета.');
+}
+
+// Справка: горячие клавиши (раньше — таблица в правой панели)
+const HOTKEYS = [
+  ['Пробел', 'Пуск / пауза'], ['S', 'Разрезать клип'], ['Alt+S', 'Разрезать всё под курсором'], ['B / A', 'Лезвие / выделение'],
+  ['Delete', 'Удалить клип'], ['Shift+Delete', 'Удалить и сдвинуть'], ['Ctrl+C / Ctrl+V', 'Копировать / вставить'], ['Ctrl+D', 'Дублировать клип'],
+  ['F', 'Стоп-кадр'], ['R', 'Отзеркалить (реверс)'], ['Ctrl+Z / Ctrl+Y', 'Отменить / повторить'], ['← →', 'На кадр (с Shift — на 1 с)'],
+  ['Home / End', 'В начало / конец'], ['Ctrl + колесо', 'Масштаб таймлайна'], ['Alt при перетаскивании', 'Без магнита и без наложения'],
+  ['Shift+F', 'Плеер во весь экран'], ['Ctrl+S', 'Сохранить проект'], ['Ctrl+E', 'Экспорт'], ['Ctrl+I', 'Импорт медиа'],
+];
+const HINTS = ['Правая кнопка мыши на клипе — меню действий.', '«+» на стыке клипов — переход.', 'Корзина на пустом месте дорожки убирает пустоту.'];
+function showHotkeys() {
+  const overlay = h('div', { class: 'modal-overlay' });
+  const close = () => overlay.remove();
+  overlay.append(h('div', { class: 'modal small', style: { width: '640px' } },
+    h('div', { class: 'modal-head' }, h('h2', {}, 'Горячие клавиши'), h('button', { class: 'icon-btn', html: icon('close', 18), onclick: close })),
+    h('div', { class: 'modal-body' },
+      h('div', { class: 'keys-list' }, ...HOTKEYS.map(([k, v]) => h('dl', { class: 'kv keys' }, h('dt', {}, h('kbd', {}, k)), h('dd', {}, v)))),
+      h('h3', {}, 'Подсказки'),
+      h('ul', { class: 'muted small' }, ...HINTS.map((x) => h('li', {}, x))))));
+  overlay.addEventListener('mousedown', (e) => { if (e.target === overlay) close(); });
+  document.body.append(overlay);
+}
+
 function about() {
   api.info().then((i) => {
     const overlay = h('div', { class: 'modal-overlay' },
@@ -223,6 +258,7 @@ function initKeys() {
     const typing = (tag === 'input' && !['range', 'checkbox', 'button'].includes(e.target.type)) || tag === 'textarea' || tag === 'select';
     if (document.querySelector('.modal-overlay')) return;
     if (menuOpen()) { if (e.key !== 'Escape' && !e.key.startsWith('Arrow')) closeMenu(); else return; }
+    if (popoverOpen() && e.key !== 'Escape') closePopover();
     const ctrl = e.ctrlKey || e.metaKey;
     const k = e.key.toLowerCase();
     const code = e.code;
@@ -298,6 +334,9 @@ async function main() {
   initEpisodes($('#timeline'));
   preview = new Preview($('#preview'));
   transport = initTransport(preview);
+  initViewbar();
+  initModePlaceholders();
+  initModes();
   initMediaPanel({ addToTimeline: (id) => timeline.addMedia(id) });
   initInspector({ onSplit: () => timeline.splitAction(), onDelete: () => timeline.deleteAction() });
   const browser = initBrowser();

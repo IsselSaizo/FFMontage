@@ -1,4 +1,4 @@
-// Правая колонка: вкладки «Свойства» (инспектор), «Переходы» и «Эффекты».
+// Правая колонка: вкладки «Свойства» (инспектор), «Переходы» и «Фильтры» (id вкладки — 'effects').
 // Наведение на переход/эффект показывает его в плеере (проект не меняется), щелчок — применяет.
 import { store } from './store.js';
 import { h, $, icon, toast } from './util.js';
@@ -9,7 +9,7 @@ import { EFFECTS, clipEffects } from './effects.js';
 const TABS = [
   { id: 'props', name: 'Свойства', el: '#inspector' },
   { id: 'transitions', name: 'Переходы', el: '#browse-transitions' },
-  { id: 'effects', name: 'Эффекты', el: '#browse-effects' },
+  { id: 'effects', name: 'Фильтры', el: '#browse-effects' },
 ];
 
 // Стык для перехода: выделенный переход → стык у выделенного видеоклипа → ближайший к курсору
@@ -102,10 +102,10 @@ export function initBrowser() {
     const id = targetClip();
     const c = id ? store.findClip(id).clip : null;
     const on = c ? clipEffects(c) : [];
-    fxRoot.append(h('div', { class: 'panel-head' }, h('h2', {}, 'Эффекты')),
+    fxRoot.append(h('div', { class: 'panel-head' }, h('h2', {}, 'Фильтры')),
       h('p', { class: 'muted small' }, c
-        ? `Клип «${store.clipName(c)}». Наведите — эффект покажется в плеере, щелчок — включить или выключить. Чтобы эффект был только на части клипа, сначала разрежьте его (S или лезвие B).`
-        : 'Выделите видеоклип (или поставьте курсор на него). Эффект действует на весь клип — для фрагмента разрежьте клип (S или лезвие B).'));
+        ? `Клип «${store.clipName(c)}». Наведите — фильтр покажется в плеере, щелчок — включить или выключить. Чтобы фильтр был только на части клипа, сначала разрежьте его (S или лезвие B).`
+        : 'Выделите видеоклип (или поставьте курсор на него). Фильтр действует на весь клип — для фрагмента разрежьте клип (S или лезвие B).'));
     const grid = h('div', { class: 'fx-grid' });
     for (const e of EFFECTS) {
       const sw = h('div', { class: 'fx-sample', style: { filter: e.css(120) } });
@@ -141,7 +141,16 @@ export function initBrowser() {
     const k = `${targetClip()}|${targetJunction()}`;
     if (k !== lastKey) { lastKey = k; refresh(); }
   });
-  store.on('focus-inspector', () => show('props'));
+  // «+» на стыке без перехода — сразу список переходов; иначе — свойства
+  store.on('focus-inspector', (sec) => {
+    if (sec === 'transition') {
+      const s = store.selection;
+      const j = s && s.kind === 'transition' ? store.junctionBefore(s.id) : null;
+      if (j && !j.b.transition) { show('transitions'); return; }
+    }
+    show('props');
+  });
+  store.on('show-tab', (id) => show(id));
   show(current);
   return { show };
 }

@@ -86,11 +86,14 @@ export function buildExport(project, settings) {
 
   // Цвет фона: поля вокруг вписанного видео, пустоты, затухания
   const bg = /^#[0-9a-f]{6}$/i.test(project.background || '') ? project.background.slice(1).toLowerCase() : '000000';
-  // fit 'cover' — заполнить кадр (лишнее обрезается), иначе вписать целиком с полями цвета фона
+  // fit 'cover' — заполнить кадр (лишнее обрезается), 'stretch' — растянуть без сохранения пропорций,
+  // иначе вписать целиком с полями цвета фона
   const scaleChain = (c) => (c.fit === 'cover'
     ? `fps=${F},scale=${W}:${H}:force_original_aspect_ratio=increase:flags=lanczos,crop=${W}:${H},setsar=1,format=yuv420p`
-    : `fps=${F},scale=${W}:${H}:force_original_aspect_ratio=decrease:flags=lanczos,` +
-      `pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2:color=0x${bg},setsar=1,format=yuv420p`);
+    : c.fit === 'stretch'
+      ? `fps=${F},scale=${W}:${H}:flags=lanczos,setsar=1,format=yuv420p`
+      : `fps=${F},scale=${W}:${H}:force_original_aspect_ratio=decrease:flags=lanczos,` +
+        `pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2:color=0x${bg},setsar=1,format=yuv420p`);
   const audioFmt = 'aresample=48000,aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo';
   const black = (dur) => `color=c=0x${bg}:s=${W}x${H}:r=${F},format=yuv420p,setsar=1,trim=duration=${n6(dur)},setpts=PTS-STARTPTS`;
   const vFades = (c, head, len) => {

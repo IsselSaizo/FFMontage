@@ -432,6 +432,7 @@ export class Timeline {
     const fxl = clipEffects(c);
     if (fxl.length) label.append(h('span', { class: 'ci fxb', title: `Эффекты: ${fxl.map((x) => effectById(x).name).join(', ')}` }, 'fx'));
     if (c.fit === 'cover') label.append(h('span', { class: 'ci fxb', title: 'Заполняет кадр (края обрезаны)' }, '▣'));
+    if (c.fit === 'stretch') label.append(h('span', { class: 'ci fxb', title: 'Растянут на весь кадр' }, '⇔'));
     if (c.link && store.linkedOf(c.id).length) label.append(h('span', { class: 'ci link', title: 'Связан со звуком/видео: двигаются и режутся вместе (Alt — только этот клип)', html: icon('link', 13) }));
     if (c.muted && m.hasAudio && !c.noAudio) label.append(h('span', { class: 'ci', html: icon('mute', 13) }));
     else if (m.hasAudio && !c.noAudio && Math.abs(c.volume - 1) > 0.01) label.append(h('span', { class: 'ci vol' }, `${Math.round(c.volume * 100)}%`));

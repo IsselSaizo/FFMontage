@@ -274,6 +274,7 @@ export class Preview {
     for (const x of layers) {
       if (!x.el) continue;
       x.el.classList.toggle('cover', x.clip.fit === 'cover');
+      x.el.classList.toggle('stretch', x.clip.fit === 'stretch');
       const ov = this.effectOverride && this.effectOverride.clipId === x.clip.id ? { ...x.clip, effects: this.effectOverride.effects } : x.clip;
       const tf = x.el.style.filter;
       x.el.style.filter = cssEffects(ov, shownW, tf ? [tf] : []);

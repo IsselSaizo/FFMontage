@@ -201,6 +201,12 @@ const P = {
   wclose: '<path d="M3 3l18 18M21 3L3 21" stroke="currentColor" stroke-width="2"/>',
   refresh: '<path d="M20 11a8 8 0 1 0-2.3 5.7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M20 4v7h-7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>',
   gapclose: '<path d="M4 6v12M20 6v12M8 12h8M10.5 9.5L8 12l2.5 2.5M13.5 9.5L16 12l-2.5 2.5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>',
+  crop: '<path d="M7 3v14h14M3 7h14v14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>',
+  fitframe: '<rect x="3" y="5" width="18" height="14" rx="2" fill="none" stroke="currentColor" stroke-width="1.6" stroke-dasharray="2.5 2"/><rect x="7" y="8" width="10" height="8" rx="1" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M4.5 12h2M17.5 12h2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>',
+  aspect: '<rect x="3" y="6" width="12" height="12" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.7"/><rect x="11" y="3" width="10" height="16" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.7" opacity=".65"/>',
+  palette: '<path d="M12 3a9 9 0 0 0 0 18c1.2 0 1.7-.8 1.7-1.6 0-1.2-1-1.4-1-2.4 0-.9.7-1.5 1.6-1.5H17a4 4 0 0 0 4-4c0-4.7-4-8.5-9-8.5z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><circle cx="7.5" cy="11" r="1.3" fill="currentColor"/><circle cx="10" cy="7" r="1.3" fill="currentColor"/><circle cx="14.5" cy="7" r="1.3" fill="currentColor"/>',
+  speed: '<path d="M4.5 17a8 8 0 1 1 15 0" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><path d="M12 15l4-5" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/><circle cx="12" cy="15" r="1.4" fill="currentColor"/>',
+  keyboard: '<rect x="2.5" y="6" width="19" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M6 10h.5M9 10h.5M12 10h.5M15 10h.5M18 10h.5M6 13h.5M18 13h.5M8.5 14.5h7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>',
 };
 export function icon(name, size = 20) {
   return `<svg class="ic" width="${size}" height="${size}" viewBox="0 0 24 24" aria-hidden="true">${P[name] || ''}</svg>`;
