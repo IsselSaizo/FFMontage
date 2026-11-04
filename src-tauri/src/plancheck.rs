@@ -447,7 +447,8 @@ fn spec(opt: &str) -> Option<V> {
         "-/filter_complex" | "-filter_complex_script" => V::Filter,
         "-map" => V::Map,
         "-c:v" => V::Enum(VCODECS),
-        "-c:a" => V::Enum(&["aac", "libopus"]),
+        // 0.4.1: в MKV/MOV ещё FLAC и PCM (без потерь)
+        "-c:a" => V::Enum(&["aac", "libopus", "flac", "pcm_s16le", "pcm_s24le", "libmp3lame", "libvorbis"]),
         "-preset" | "-tune" | "-rc" | "-profile:v" | "-pix_fmt" => V::Word,
         "-cq" | "-crf" | "-g" | "-spatial-aq" | "-temporal-aq" | "-rc-lookahead" | "-cpu-used" | "-row-mt" | "-auto-alt-ref" | "-loop"
         | "-framerate" | "-t" | "-ss" | "-ar" | "-r" => V::Num,
@@ -455,7 +456,8 @@ fn spec(opt: &str) -> Option<V> {
         "-tag:v" => V::Enum(&["hvc1", "hev1", "avc1"]),
         "-fps_mode" | "-vsync" => V::Enum(&["cfr", "vfr", "passthrough", "auto"]),
         "-movflags" => V::Enum(&["+faststart"]),
-        "-f" => V::Enum(&["mp4", "mov", "webm", "matroska"]),
+        // 0.4.1: GIF и «только звук» (mp3, m4a = mp4, wav, ogg)
+        "-f" => V::Enum(&["mp4", "mov", "webm", "matroska", "gif", "mp3", "wav", "ogg"]),
         "-progress" => V::Enum(&["pipe:1"]),
         "-deadline" => V::Enum(&["realtime", "good", "best"]),
         // M0.4: качество qsv (-global_quality), amf (-usage/-quality/-qp_*), vaapi (-rc_mode/-qp) — exportPlan.js encoderArgs
@@ -468,6 +470,9 @@ fn spec(opt: &str) -> Option<V> {
         "-c:s" => V::Enum(&["mov_text", "srt", "ass", "webvtt"]),
         _ if stream_opt(opt, "-metadata:s:s:") => V::SubMeta,
         _ if stream_opt(opt, "-disposition:s:") => V::Enum(&["default", "0"]),
+        // 0.4.1: аудиодорожки отдельными потоками (MKV/MOV) — название и язык потока
+        _ if stream_opt(opt, "-metadata:s:a:") => V::SubMeta,
+        _ if stream_opt(opt, "-disposition:a:") => V::Enum(&["default", "0"]),
         _ => return None,
     })
 }
@@ -562,7 +567,7 @@ fn input_ok(v: &str, inputs: Inputs) -> Result<PathBuf, String> {
     }
 }
 
-const OUT_EXT: &[&str] = &["mp4", "mov", "mkv", "webm"];
+const OUT_EXT: &[&str] = &["mp4", "mov", "mkv", "webm", "gif", "mp3", "m4a", "wav", "ogg"];
 
 // ---------------------------------------------------------------------------
 // Выходные файлы, выданные программой (M0.2)
@@ -632,8 +637,8 @@ fn check_inner(args: &[String], filter: &str, duration: f64, output: &str, input
     let ext = crate::ff::ext_of(&out);
     if !out.is_absolute() || !OUT_EXT.contains(&ext.as_str()) || output.contains(['\n', '\r']) {
         return Err(tr!(
-            "выходной файл должен быть абсолютным путём .mp4/.mov/.mkv/.webm: {}",
-            "the output must be an absolute .mp4/.mov/.mkv/.webm path: {}",
+            "выходной файл должен быть абсолютным путём .mp4/.mov/.mkv/.webm/.gif/.mp3/.m4a/.wav/.ogg: {}",
+            "the output must be an absolute .mp4/.mov/.mkv/.webm/.gif/.mp3/.m4a/.wav/.ogg path: {}",
             output
         ));
     }

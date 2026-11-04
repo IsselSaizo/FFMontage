@@ -78,6 +78,8 @@ export async function prepareExportAssets(project, settings, api) {
   const W = Math.max(2, Math.round(settings.width / 2) * 2);
   const H = Math.max(2, Math.round(settings.height / 2) * 2);
   const assets = { texts: {}, subtitles: null, vst: await prepareVstAssets(project, api) };
+  // «Только звук» (0.4.1): картинки текстов и субтитры не нужны
+  if (/^(mp3|m4a|wav|ogg)$/.test(String(settings.container || ''))) return assets;
   const texts = visibleLanes(project).filter((l) => !l.hidden).flatMap((l) => l.clips.filter(isText));
   if (texts.length) {
     await ensureFonts(texts);

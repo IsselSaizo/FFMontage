@@ -81,7 +81,18 @@ const reprobing = new Set();
 export async function playbackFailed(mediaId) {
   const m = store.media(mediaId);
   const rt = store.runtime[mediaId] || {};
-  if (!m || !m.url || m.needsProxy || rt.forceProxy || rt.proxyUrl || m.isImage || reprobing.has(mediaId)) return;
+  if (!m || reprobing.has(mediaId)) return;
+  // Переложенный без перекодирования файл не заиграл — перекодировать
+  if (rt.remuxed && rt.proxyUrl) {
+    reprobing.add(mediaId);
+    try {
+      if ((await probePlayable(rt.proxyUrl)) !== false) return;
+      console.warn('media: ремукс не играет', m.name, '— перекодирование');
+      startProxy(mediaId, { noRemux: true });
+    } finally { reprobing.delete(mediaId); }
+    return;
+  }
+  if (!m.url || m.needsProxy || rt.forceProxy || rt.proxyUrl || m.isImage) return;
   reprobing.add(mediaId);
   try {
     if ((await probePlayable(m.url)) !== false) return;
@@ -89,10 +100,15 @@ export async function playbackFailed(mediaId) {
     startProxy(mediaId);
   } finally { reprobing.delete(mediaId); }
 }
-function startProxy(mediaId) {
+// remux (0.4.1, H3): кодек окно декодирует, мешает только контейнер (MKV, TS, AVI…) — Rust перекладывает поток в MP4
+// без перекодирования (секунды, качество исходника). Если и такой файл не заиграет — обычный прокси (noRemux).
+async function startProxy(mediaId, { noRemux = false } = {}) {
   const m = store.media(mediaId);
-  store.setRuntime(mediaId, { forceProxy: !m.needsProxy, status: 'proxy', progress: 0 });
-  return api.proxy(m).then((url) => store.setRuntime(mediaId, { proxyUrl: url, status: 'ready' }))
+  // Уже MP4/MOV/WebM — значит не играет кодек (декодер), ремукс не поможет (то же проверяет ff.rs remux_ok)
+  const mp4like = /\.(mp4|m4v|mov|webm)$/i.test(m.path || '');
+  const remux = !noRemux && !mp4like && !!m.hasVideo && !m.isAnimation && !!contentType(m) && await codecSupported(m);
+  store.setRuntime(mediaId, { forceProxy: !m.needsProxy, status: 'proxy', progress: 0, remuxed: false, proxyUrl: null });
+  return api.proxy({ ...m, remux }).then((url) => store.setRuntime(mediaId, { proxyUrl: url, status: 'ready', remuxed: /proxy\.remux\.mp4$/i.test(decodeURIComponent(url || '')) }))
     .catch((e) => { store.setRuntime(mediaId, { status: 'error', error: errText(e) }); toast(t('Не удалось подготовить {name}', { name: m.name }), 'error'); });
 }
 

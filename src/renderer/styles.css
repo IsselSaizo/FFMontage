@@ -393,6 +393,11 @@ body.is-trimming, body.is-trimming * { cursor: ew-resize !important; }
 select.input option { background: var(--panel-2); }
 .out-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); direction: rtl; text-align: left; }
 .codec-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+/* Формат файла (0.4.1): «Видео» и «Только звук» — два ряда кнопок */
+.export-formats { display: flex; flex-direction: column; gap: 6px; }
+.export-formats .fmt-group { width: 84px; flex: none; }
+.export-formats .segmented { flex: 1; grid-template-columns: repeat(4, 1fr); }
+.export-formats .segmented button { padding: 6px 10px; align-items: center; }
 .codec-card { text-align: left; background: var(--panel-2); border: 1.5px solid var(--line-2); border-radius: 10px; padding: 10px; cursor: pointer; }
 .codec-card:hover { border-color: var(--text-3); }
 .codec-card.on { border-color: var(--accent); background: var(--accent-soft); }

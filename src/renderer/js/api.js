@@ -64,8 +64,8 @@ window.api = {
   mcpResult: (id, payload) => invoke('mcp_result', { id, payload }).catch(() => {}),
   mcpInfo: () => invoke('mcp_info'),
   testShot: (name) => invoke('test_shot', { name }),
-  pickExportPath: (suggested) => invoke('export_pick', { suggested }),
-  defaultExportPath: (base) => invoke('export_default_path', { base }),
+  pickExportPath: (suggested, ext = 'mp4') => invoke('export_pick', { suggested, ext }),
+  defaultExportPath: (base, ext = 'mp4') => invoke('export_default_path', { base, ext }),
   startExport: async (project, settings) => {
     const i = infoCache || await info();
     let plan;

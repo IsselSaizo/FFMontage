@@ -419,15 +419,26 @@ pub async fn fx_silence(file: String, threshold_db: Option<f64>, min_dur: Option
 // Экспорт
 // ---------------------------------------------------------------------------
 #[tauri::command]
-pub async fn export_pick(window: WebviewWindow, suggested: Option<String>) -> Option<String> {
+pub async fn export_pick(window: WebviewWindow, suggested: Option<String>, ext: Option<String>) -> Option<String> {
+    let ext = export_ext(ext.as_deref());
+    let (label, exts): (String, &[&str]) = match ext {
+        "mkv" => (tr!("Видео MKV", "MKV video").into(), &["mkv"]),
+        "mov" => (tr!("Видео MOV", "MOV video").into(), &["mov"]),
+        "gif" => (tr!("Анимация GIF", "GIF animation").into(), &["gif"]),
+        "mp3" => (tr!("Звук MP3", "MP3 audio").into(), &["mp3"]),
+        "m4a" => (tr!("Звук M4A (AAC)", "M4A audio (AAC)").into(), &["m4a"]),
+        "wav" => (tr!("Звук WAV", "WAV audio").into(), &["wav"]),
+        "ogg" => (tr!("Звук OGG (Vorbis)", "OGG audio (Vorbis)").into(), &["ogg"]),
+        _ => (tr!("Видео MP4", "MP4 video").into(), &["mp4"]),
+    };
     let d = window
         .dialog()
         .file()
         .set_title(tr!("Куда сохранить видео", "Save video as"))
         .set_parent(&window)
         .set_directory(&paths::get().output_dir)
-        .set_file_name(suggested.unwrap_or_else(|| tr!("Видео.mp4", "Video.mp4").into()))
-        .add_filter(tr!("Видео MP4", "MP4 video"), &["mp4"]);
+        .set_file_name(suggested.unwrap_or_else(|| format!("{}.{ext}", tr!("Видео", "Video"))))
+        .add_filter(label, exts);
     tauri::async_runtime::spawn_blocking(move || d.blocking_save_file())
         .await
         .ok()
@@ -438,6 +449,20 @@ pub async fn export_pick(window: WebviewWindow, suggested: Option<String>) -> Op
             crate::plancheck::grant_output(&p);
             s(&p)
         })
+}
+
+/// Формат экспорта (0.4.1): mp4 (по умолчанию), mkv, mov, gif; только звук — mp3, m4a, wav, ogg
+pub fn export_ext(ext: Option<&str>) -> &'static str {
+    match ext.map(|e| e.trim_start_matches('.').to_ascii_lowercase()).as_deref() {
+        Some("mkv") => "mkv",
+        Some("mov") => "mov",
+        Some("gif") => "gif",
+        Some("mp3") => "mp3",
+        Some("m4a") => "m4a",
+        Some("wav") => "wav",
+        Some("ogg") => "ogg",
+        _ => "mp4",
+    }
 }
 
 pub fn safe_name(base: &str, fallback: &str) -> String {
@@ -451,14 +476,15 @@ pub fn safe_name(base: &str, fallback: &str) -> String {
 }
 
 #[tauri::command]
-pub async fn export_default_path(base: Option<String>) -> String {
+pub async fn export_default_path(base: Option<String>, ext: Option<String>) -> String {
+    let ext = export_ext(ext.as_deref());
     blocking(move || {
         let dir = &paths::get().output_dir;
         let safe = safe_name(&base.unwrap_or_default(), tr!("Видео", "Video"));
-        let mut p = dir.join(format!("{safe}.mp4"));
+        let mut p = dir.join(format!("{safe}.{ext}"));
         let mut i = 2;
         while p.exists() {
-            p = dir.join(format!("{safe} ({i}).mp4"));
+            p = dir.join(format!("{safe} ({i}).{ext}"));
             i += 1;
         }
         crate::plancheck::grant_output(&p);

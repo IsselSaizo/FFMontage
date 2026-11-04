@@ -16,6 +16,13 @@ foreach ($f in 'a_av1_1440p60.mp4', 'b_h264_1080p30.mp4', 'c_music.mp3', 'd_old.
   $p = Join-Path $src $f
   if (Test-Path $p) { Copy-Item $p "$T\cache\tmp\engine-test\" -Force }
 }
+# ui-selftest18 (контейнеры): файлы MKV из node tests\container-test.js
+if ($Test -eq 'ui-selftest18') {
+  foreach ($f in 'in_h264_aac.mkv', 'in_h264_flac.mkv', 'in_h264_aac.ts') {
+    $p = Join-Path $App ".test-cache\tmp\container-test\$f"
+    if (Test-Path $p) { Copy-Item $p "$T\cache\tmp\engine-test\" -Force }
+  }
+}
 $cfg = @{ version = 1; cacheDir = "$T\cache"; outputDir = "$T\out"; projectsDir = "$T\proj"; ffmpegDir = '' }
 if ($Lang) { $cfg.settings = @{ lang = $Lang } }
 $json = $cfg | ConvertTo-Json

@@ -43,14 +43,15 @@ fn pending() -> std::sync::MutexGuard<'static, Option<HashMap<String, oneshot::S
 }
 
 /// MCP export_video с path: путь задал ИИ-клиент (у него ключ доступа) — разрешить экспорт в него (M0.2).
-/// Тот же путь, что построит окно (mcpBridge.js exportVideo): абсолютный, «.mp4» дописывается.
+/// Тот же путь, что построит окно (mcpBridge.js exportVideo): абсолютный; без известного расширения дописывается «.mp4».
 pub fn grant_mcp_output(tool: &str, args: &Value) -> Option<PathBuf> {
     if tool != "export_video" {
         return None;
     }
     let p = args["path"].as_str().map(str::trim).filter(|p| !p.is_empty())?;
     let mut s = p.to_string();
-    if !s.to_lowercase().ends_with(".mp4") {
+    let low = s.to_lowercase();
+    if ![".mp4", ".mkv", ".mov", ".gif", ".mp3", ".m4a", ".wav", ".ogg"].iter().any(|e| low.ends_with(e)) {
         s.push_str(".mp4");
     }
     let path = PathBuf::from(s);

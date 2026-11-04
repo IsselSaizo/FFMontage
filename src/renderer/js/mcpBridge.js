@@ -301,13 +301,13 @@ async function exportVideo(args) {
 
   const codec = enumArg(args, 'codec', Object.keys(CODECS), 'av1');
   const quality = enumArg(args, 'quality', ['high', 'medium', 'compact'], 'high');
-  const resolution = enumArg(args, 'resolution', ['source', '2160', '1440', '1080', '720'], 'source');
+  const resolution = enumArg(args, 'resolution', ['source', '2160', '1440', '1080', '720', '480'], 'source');
   const src = store.sourceFormat();
   const fps = numArg(args, 'fps', { min: 1, max: 240, def: src.fps });
   let output = strArg(args, 'path');
   if (output) {
     if (!isAbs(output)) fail('"path" must be an absolute path.');
-    if (!/\.mp4$/i.test(output)) output += '.mp4';
+    if (!/\.(mp4|mkv|mov|gif|mp3|m4a|wav|ogg)$/i.test(output)) output += '.mp4';
   } else {
     output = await api.defaultExportPath(store.project.name || t('Видео'));
   }

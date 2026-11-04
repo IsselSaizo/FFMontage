@@ -207,6 +207,9 @@ export function buildExport(project, settings) {
   const inputs = [];
   const filters = [];
   const audio = [];
+  // Группа каждой метки звука: 'video' (звук видеоклипов) или id аудиодорожки — для отдельных потоков (settings.stems)
+  const audioGroup = [];
+  const pushA = (label, group) => { audio.push(label); audioGroup.push(group); };
   const warnings = new Set();
   // (внутри цикла по клипам имя t занято — поэтому сообщения собираются здесь)
   const warnAfx = (list) => { for (const id of unknownFx(list)) warnings.add(t('Аудиоэффект «{id}» не найден (нет плагина) — пропущен', { id })); };
@@ -290,10 +293,12 @@ export function buildExport(project, settings) {
 
   // --- Видеодорожки: основная (снизу, на цвете фона) и верхние (прозрачные, накладываются по порядку) ---
   // Старые проекты 0.3.x: overlayClips — одна верхняя дорожка
+  // «Только звук» (0.4.1): картинка не собирается — клипы дают только звук
+  const audioOnly = !!settings.audioOnly;
   const lanes = [
-    { clips: project.videoClips || [], main: true, hidden: !!project.videoHidden },
-    ...(Array.isArray(project.videoTracks) ? project.videoTracks : []).map((tr) => ({ clips: tr.clips || [], main: false, hidden: !!tr.hidden })),
-    ...(Array.isArray(project.overlayClips) && project.overlayClips.length ? [{ clips: project.overlayClips, main: false, hidden: false }] : []),
+    { clips: project.videoClips || [], main: true, hidden: audioOnly || !!project.videoHidden },
+    ...(Array.isArray(project.videoTracks) ? project.videoTracks : []).map((tr) => ({ clips: tr.clips || [], main: false, hidden: audioOnly || !!tr.hidden })),
+    ...(Array.isArray(project.overlayClips) && project.overlayClips.length ? [{ clips: project.overlayClips, main: false, hidden: audioOnly }] : []),
   ];
   const pieces = [];   // основная дорожка: куски по порядку (пустоты — цвет фона) → concat
   const runs = [];     // верхние дорожки: { label, start, len, pos? } — накладываются overlay (pos — свой x/y у одиночного клипа)
@@ -411,7 +416,7 @@ export function buildExport(project, settings) {
         if (t > 0) af += `,afade=t=out:st=${n6(len - t)}:d=${n6(t)}`;
         af += `,adelay=delays=${Math.max(0, Math.round(c.start * 1000))}:all=1[${P}va${i}]`;
         filters.push(af);
-        audio.push(`[${P}va${i}]`);
+        pushA(`[${P}va${i}]`, 'video');
       } else if (hasSound) {
         warnAfx(c.afx); warnVst(c.afx);
         const L2 = head + len + t;
@@ -422,7 +427,7 @@ export function buildExport(project, settings) {
         const delay = Math.max(0, Math.round((c.start - head) * 1000));
         af += `,adelay=delays=${delay}:all=1[${P}va${i}]`;
         filters.push(af);
-        audio.push(`[${P}va${i}]`);
+        pushA(`[${P}va${i}]`, 'video');
       }
     });
     endRun();
@@ -444,7 +449,7 @@ export function buildExport(project, settings) {
       if (r.list.length) {
         const tk = `[tk${audio.length}_${j}]`;
         filters.push(`[${addWav(trWav)}:a]${audioFmt},volume=${n6(tv)},asetpts=PTS-STARTPTS,adelay=delays=0:all=1${tk}`);
-        audio.push(tk);
+        pushA(tk, tr.id);
       }
       return;
     }
@@ -458,13 +463,13 @@ export function buildExport(project, settings) {
       label: () => `[m${j++}]`,
     });
     audioEnd = Math.max(audioEnd, r.end);
-    for (const x of r.list) { filters.push(x.filter); (trFx ? trLabels : audio).push(x.label); }
+    for (const x of r.list) { filters.push(x.filter); if (trFx) trLabels.push(x.label); else pushA(x.label, tr.id); }
     if (trLabels.length) {
       const tk = `[tk${audio.length}_${j}]`;
       filters.push(trLabels.length === 1
         ? `[${trLabels[0].slice(1, -1)}]${trFx.slice(1)}${tk}`
         : `[${trLabels.map((x) => x.slice(1, -1)).join('][')}]amix=inputs=${trLabels.length}:duration=longest:dropout_transition=0:normalize=0${trFx}${tk}`);
-      audio.push(tk);
+      pushA(tk, tr.id);
     }
   });
 
@@ -503,33 +508,130 @@ export function buildExport(project, settings) {
     filters.push(`[vsub]ass=filename=${ffPath(burn.ass)}${burn.fontsdir ? `:fontsdir=${ffPath(burn.fontsdir)}` : ''}:original_size=${W}x${H},format=yuv420p[vout]`);
   }
 
-  const tail = `apad,atrim=duration=${n6(total)},alimiter=limit=0.98:attack=5:release=50:level=0[aout]`;
+  const tailTo = (out) => `apad,atrim=duration=${n6(total)},alimiter=limit=0.98:attack=5:release=50:level=0${out}`;
+  const mixTo = (labels, out) => filters.push(labels.length === 1 ? `${labels[0]}${tailTo(out)}`
+    : `${labels.join('')}amix=inputs=${labels.length}:duration=longest:dropout_transition=0:normalize=0,${tailTo(out)}`);
+  // 0.4.1: аудиодорожки отдельными потоками (MKV/MOV): поток 0 — общий микс, дальше — звук видео и каждая дорожка
+  const groups = [...new Set(audioGroup)];
+  const stems = [];
   if (!audio.length) filters.push(`anullsrc=r=48000:cl=stereo,atrim=duration=${n6(total)}[aout]`);
-  else if (audio.length === 1) filters.push(`${audio[0]}${tail}`);
-  else filters.push(`${audio.join('')}amix=inputs=${audio.length}:duration=longest:dropout_transition=0:normalize=0,${tail}`);
+  else if (settings.stems && groups.length > 1) {
+    const mix = []; const parts = new Map(groups.map((g) => [g, []]));
+    audio.forEach((l, i) => { filters.push(`${l}asplit=2[amx${i}][ast${i}]`); mix.push(`[amx${i}]`); parts.get(audioGroup[i]).push(`[ast${i}]`); });
+    mixTo(mix, '[aout]');
+    groups.forEach((g, i) => {
+      const tr = g === 'video' ? null : (project.audioTracks || []).find((x) => x.id === g);
+      const n = (project.audioTracks || []).indexOf(tr) + 1;
+      mixTo(parts.get(g), `[astem${i}]`);
+      stems.push({ label: `[astem${i}]`, title: tr ? String(tr.name || t('Аудио {n}', { n })) : t('Звук видео') });
+    });
+  } else mixTo(audio, '[aout]');
 
   const filter = filters.join(';\n');
-  return { inputs, filter, duration: total, W, H, F, warnings: [...warnings], subtitles: subInputs };
+  return { inputs, filter, duration: total, W, H, F, warnings: [...warnings], subtitles: subInputs, stems };
 }
 
-// Мягкие субтитры: -map k:s, кодек mov_text (MP4), язык и название потока
-function subtitleArgs(list) {
+// Название потока для -metadata: без управляющих символов, до 64 знаков (plancheck.rs is_sub_meta)
+const streamTitle = (x) => String(x || '').replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 64);
+
+// Мягкие субтитры: -map k:s, кодек mov_text (MP4/MOV) или srt (MKV), язык и название потока
+function subtitleArgs(list, container = 'mp4') {
   if (!list || !list.length) return [];
   const out = [];
   list.forEach((s) => out.push('-map', `${s.k}:s`));
-  out.push('-c:s', 'mov_text');
+  out.push('-c:s', container === 'mkv' ? 'srt' : 'mov_text');
   list.forEach((s, i) => {
     if (/^[a-z]{2,3}$/.test(s.lang || '')) out.push(`-metadata:s:s:${i}`, `language=${s.lang}`);
-    const title = String(s.title || '').replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 64);
+    const title = streamTitle(s.title);
     if (title) out.push(`-metadata:s:s:${i}`, `title=${title}`);
   });
   out.push('-disposition:s:0', 'default');
   return out;
 }
 
+// ---------------------------------------------------------------------------
+// Контейнеры (0.4.1): MP4 — везде; MKV — любые кодеки звука, субтитры srt, несколько дорожек; MOV — монтажные программы
+// ---------------------------------------------------------------------------
+// Видео: MP4, MKV, MOV и анимация GIF (без звука); только звук: MP3, M4A (AAC), WAV, OGG (Vorbis)
+export const VIDEO_CONTAINERS = ['mp4', 'mkv', 'mov', 'gif'];
+export const AUDIO_CONTAINERS = ['mp3', 'm4a', 'wav', 'ogg'];
+export const CONTAINERS = [...VIDEO_CONTAINERS, ...AUDIO_CONTAINERS];
+export const isAudioOnly = (c) => AUDIO_CONTAINERS.includes(c);
+// Мультиплексор FFmpeg для формата (m4a — тот же MP4)
+const MUXER = { mp4: 'mp4', mov: 'mov', mkv: 'matroska', gif: 'gif', mp3: 'mp3', m4a: 'mp4', wav: 'wav', ogg: 'ogg' };
+// Звук: где какой кодек можно (FLAC и Opus в MP4/MOV поддерживаются плохо — только MKV). Первый подходящий — по умолчанию
+export const AUDIO_CODECS = [
+  { id: 'aac', args: ['-c:a', 'aac', '-b:a', '192k'], in: ['mp4', 'mkv', 'mov'] },
+  { id: 'aac256', args: ['-c:a', 'aac', '-b:a', '256k'], in: ['m4a', 'mp4', 'mkv', 'mov'] },
+  { id: 'aac128', args: ['-c:a', 'aac', '-b:a', '128k'], in: ['m4a'] },
+  { id: 'opus', args: ['-c:a', 'libopus', '-b:a', '160k'], in: ['mkv'] },
+  { id: 'flac', args: ['-c:a', 'flac'], in: ['mkv'] },
+  { id: 'pcm16', args: ['-c:a', 'pcm_s16le'], in: ['wav'] },
+  { id: 'pcm', args: ['-c:a', 'pcm_s24le'], in: ['wav', 'mkv', 'mov'] },
+  { id: 'mp3', args: ['-c:a', 'libmp3lame', '-b:a', '320k'], in: ['mp3'] },
+  { id: 'mp3_192', args: ['-c:a', 'libmp3lame', '-b:a', '192k'], in: ['mp3'] },
+  { id: 'mp3_128', args: ['-c:a', 'libmp3lame', '-b:a', '128k'], in: ['mp3'] },
+  { id: 'vorbis', args: ['-c:a', 'libvorbis', '-b:a', '256k'], in: ['ogg'] },
+  { id: 'vorbis_160', args: ['-c:a', 'libvorbis', '-b:a', '160k'], in: ['ogg'] },
+];
+/** Формат из настроек или расширения выходного файла */
+export function containerOf(settings) {
+  if (CONTAINERS.includes(settings.container)) return settings.container;
+  const m = /\.(mp4|mkv|mov|gif|mp3|m4a|wav|ogg)$/i.exec(String(settings.output || ''));
+  return m ? m[1].toLowerCase() : 'mp4';
+}
+/** Кодек звука, допустимый в формате (иначе — первый подходящий) */
+export function audioCodecFor(container, id) {
+  const c = AUDIO_CODECS.find((x) => x.id === id);
+  return c && c.in.includes(container) ? c : (AUDIO_CODECS.find((x) => x.in.includes(container)) || AUDIO_CODECS[0]);
+}
+/** GIF: палитра на весь ролик (palettegen буферизует кадры — для коротких роликов) */
+export const GIF_FPS = [10, 12, 15, 20, 25];
+export const GIF_MAX_SEC = 120;
+/** Можно ли в контейнере писать дорожки отдельными потоками */
+export const stemsAllowed = (container) => container === 'mkv' || container === 'mov';
+
+function audioStreamArgs(plan) {
+  const out = ['-map', '[aout]'];
+  if (!plan.stems || !plan.stems.length) return out;
+  plan.stems.forEach((x) => out.push('-map', x.label));
+  out.push('-metadata:s:a:0', `title=${t('Общий микс')}`, '-disposition:a:0', 'default');
+  plan.stems.forEach((x, i) => {
+    const title = streamTitle(x.title);
+    if (title) out.push(`-metadata:s:a:${i + 1}`, `title=${title}`);
+    out.push(`-disposition:a:${i + 1}`, '0');
+  });
+  return out;
+}
+
 // Полная команда для программы: @@FILTER@@ и @@OUT@@ подставит export.rs
 export function exportCommand(project, settings, ffMajor = 99) {
-  const plan = buildExport(project, settings);
+  const container = containerOf(settings);
+  const filterArgs0 = ffMajor >= 7 ? ['-/filter_complex', '@@FILTER@@'] : ['-filter_complex_script', '@@FILTER@@'];
+  // Только звук: картинка не нужна — видеодорожки скрыты, кадр 16×16 (граф дешёвый), его выход уходит в nullsink
+  if (isAudioOnly(container)) {
+    const plan = buildExport(project, { ...settings, width: 16, height: 16, fps: 10, audioOnly: true, assets: { ...(settings.assets || {}), subtitles: null } });
+    const ac = audioCodecFor(container, settings.audioCodec);
+    const args = ['-hide_banner', '-y', '-nostdin', ...plan.inputs, ...filterArgs0, '-map', '[aout]', ...ac.args, '-ar', '48000',
+      '-t', n6(plan.duration), ...(container === 'm4a' ? ['-movflags', '+faststart'] : []), '-f', MUXER[container],
+      '-progress', 'pipe:1', '-nostats', '@@OUT@@'];
+    return { args, filter: `${plan.filter};\n[vout]nullsink`, duration: plan.duration, output: settings.output, container };
+  }
+  // GIF: палитра по всему ролику (palettegen → paletteuse), без звука, бесконечный повтор
+  if (container === 'gif') {
+    const fps = GIF_FPS.includes(Number(settings.fps)) ? Number(settings.fps) : 15;
+    const plan = buildExport(project, { ...settings, fps, assets: { ...(settings.assets || {}), subtitles: settings.assets && settings.assets.subtitles && settings.assets.subtitles.mode === 'burn' ? settings.assets.subtitles : null } });
+    const filter = `${plan.filter};\n[aout]anullsink;\n[vout]split[gifa][gifb];\n[gifa]palettegen=stats_mode=diff[gifp];\n[gifb][gifp]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle[vgif]`;
+    const args = ['-hide_banner', '-y', '-nostdin', ...plan.inputs, ...filterArgs0, '-map', '[vgif]', '-loop', '0',
+      '-t', n6(plan.duration), '-f', 'gif', '-progress', 'pipe:1', '-nostats', '@@OUT@@'];
+    return { args, filter, duration: plan.duration, output: settings.output, container };
+  }
+  const plan = buildExport(project, { ...settings, stems: !!settings.stems && stemsAllowed(container) });
+  const acodec = audioCodecFor(container, settings.audioCodec);
+  // В MKV у кодека нет «тега» (hvc1 нужен только плееру Apple в MP4/MOV) — FFmpeg отказался бы писать файл
+  const venc = encoderArgs(settings.codec, settings.quality, plan.F);
+  const vargs = container === 'mkv' ? venc.filter((x, i) => x !== '-tag:v' && venc[i - 1] !== '-tag:v') : venc;
+  const muxArgs = container === 'mkv' ? ['-f', 'matroska'] : ['-movflags', '+faststart', '-f', container];
   // FFmpeg 7+: «-/filter_complex файл»; старые версии (Linux-дистрибутивы): -filter_complex_script
   const filterArgs = ffMajor >= 7 ? ['-/filter_complex', '@@FILTER@@'] : ['-filter_complex_script', '@@FILTER@@'];
   const cfrArgs = ffMajor >= 6 ? ['-fps_mode', 'cfr'] : ['-vsync', 'cfr'];
@@ -538,13 +640,13 @@ export function exportCommand(project, settings, ffMajor = 99) {
   const filter = vaapi ? `${plan.filter};\n[vout]format=nv12,hwupload[vhw]` : plan.filter;
   const args = ['-hide_banner', '-y', '-nostdin', ...(vaapi ? ['-vaapi_device', VAAPI_DEVICE] : []), ...plan.inputs,
     ...filterArgs,
-    '-map', vaapi ? '[vhw]' : '[vout]', '-map', '[aout]',
-    ...subtitleArgs(plan.subtitles),
-    ...encoderArgs(settings.codec, settings.quality, plan.F),
+    '-map', vaapi ? '[vhw]' : '[vout]', ...audioStreamArgs(plan),
+    ...subtitleArgs(plan.subtitles, container),
+    ...vargs,
     ...cfrArgs,
-    '-c:a', 'aac', '-b:a', '192k', '-ar', '48000',
+    ...acodec.args, '-ar', '48000',
     '-t', n6(plan.duration),
-    '-movflags', '+faststart', '-f', 'mp4',
+    ...muxArgs,
     '-progress', 'pipe:1', '-nostats', '@@OUT@@'];
-  return { args, filter, duration: plan.duration, output: settings.output };
+  return { args, filter, duration: plan.duration, output: settings.output, container };
 }

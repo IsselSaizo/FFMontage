@@ -9,6 +9,8 @@ export const SAFE_FILTERS = [
   'setpts', 'asetpts', 'fps', 'scale', 'crop', 'pad', 'setsar', 'format', 'tpad', 'trim', 'atrim', 'fade', 'afade',
   'xfade', 'color', 'concat', 'overlay', 'aresample', 'aformat', 'atempo', 'volume', 'apad', 'adelay', 'amix',
   'alimiter', 'anullsrc', 'split', 'asplit', 'null', 'anull', 'loop', 'rotate', 'hflip', 'vflip', 'transpose',
+  // 0.4.1: GIF (палитра) и «только звук» (картинка не нужна — в nullsink)
+  'palettegen', 'paletteuse', 'nullsink', 'anullsink',
   // видеоэффекты
   'hue', 'colorchannelmixer', 'negate', 'eq', 'gblur', 'boxblur', 'avgblur', 'smartblur', 'dblur', 'unsharp',
   'vignette', 'colorbalance', 'colorlevels', 'colorcontrast', 'colorcorrect', 'colortemperature', 'colorize',

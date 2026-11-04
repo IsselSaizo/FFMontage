@@ -651,15 +651,88 @@ fn progress_parser<'a>(duration: f64, on_progress: &'a (dyn Fn(f64) + Send + Syn
     }
 }
 
+/// Видео можно переложить в MP4 без перекодирования (0.4.1, H3): кодек окно декодирует, мешает только контейнер
+/// (MKV, TS/M2TS, AVI, FLV…). Окно само сообщает, что декодирует кодек (info.remux из media.js).
+fn remux_ok(info: &Value) -> bool {
+    let i = Info(info);
+    if !info["remux"].as_bool().unwrap_or(false) || !i.b("hasVideo") || i.b("isAnimation") {
+        return false;
+    }
+    // Уже MP4/MOV/WebM: не играет декодер, а не контейнер — нужен настоящий прокси
+    if matches!(ext_of(Path::new(info["path"].as_str().unwrap_or(""))).as_str(), "mp4" | "m4v" | "mov" | "webm") {
+        return false;
+    }
+    let pix = info["pixFmt"].as_str().unwrap_or("");
+    match info["vcodec"].as_str().unwrap_or("") {
+        "h264" => matches!(pix, "yuv420p" | "yuvj420p" | "nv12"),
+        "hevc" | "av1" | "vp9" => true,
+        _ => false,
+    }
+}
+
+/// Аргументы ремукса: видео копируется, звук — копия (AAC/MP3 стерео) или AAC
+fn remux_args(info: &Value) -> Vec<String> {
+    let i = Info(info);
+    let mut a = sv(&["-map", "0:v:0", "-c:v", "copy"]);
+    if info["vcodec"].as_str() == Some("hevc") {
+        a.extend(sv(&["-tag:v", "hvc1"]));
+    }
+    if i.b("hasAudio") {
+        a.extend(sv(&["-map", "0:a:0"]));
+        let copy = matches!(info["acodec"].as_str(), Some("aac" | "mp3")) && i.f("channels") <= 2.0;
+        if copy {
+            a.extend(sv(&["-c:a", "copy"]));
+        } else {
+            a.extend(sv(&["-c:a", "aac", "-b:a", "192k", "-ar", "48000"]));
+            if i.f("channels") > 2.0 {
+                a.extend(sv(&["-ac", "2"]));
+            }
+        }
+    }
+    a
+}
+
 pub async fn proxy(info: &Value, on_progress: &(dyn Fn(f64) + Send + Sync), enc: &Value) -> Res<PathBuf> {
     let i = Info(info);
     let key = i.key()?;
     let lock = key_lock(&format!("proxy:{key}"));
     let _g = lock.lock().await;
     let has_video = i.b("hasVideo");
-    let file = media_cache_dir(&key).join(if has_video { "proxy.mp4" } else { "proxy.m4a" });
+    let remux = remux_ok(info);
+    let file = media_cache_dir(&key).join(if remux {
+        "proxy.remux.mp4"
+    } else if has_video {
+        "proxy.mp4"
+    } else {
+        "proxy.m4a"
+    });
     if file.exists() {
         return Ok(file);
+    }
+    if remux {
+        // Без перекодирования — секунды, качество исходника; процессорный слот не нужен
+        let tmp = PathBuf::from(format!("{}.part.mp4", file.display()));
+        let _part = crate::procs::part(&tmp);
+        let bin = find();
+        let mut args = sv(&["-hide_banner", "-loglevel", "error", "-y", "-i"]);
+        args.push(s(&i.path()));
+        args.extend(sv(&["-sn", "-dn"]));
+        args.extend(remux_args(info));
+        args.extend(sv(&["-movflags", "+faststart", "-f", "mp4", "-progress", "pipe:1", "-nostats"]));
+        args.push(s(&tmp));
+        let lim = Limits { stall: Some(STALL_TIMEOUT), ..Limits::for_media(i.f("duration")) };
+        match run_limited(&bin.ffmpeg, &args, Some(progress_parser(i.f("duration"), on_progress)), lim).await {
+            Ok(_) => {
+                std::fs::rename(&tmp, &file).map_err(|e| e.to_string())?;
+                return Ok(file);
+            }
+            // Поток не ложится в MP4 (редкие профили) — обычный прокси
+            Err(e) => eprintln!("remux failed, transcoding: {e}"), // i18n-ignore
+        }
+        let mut plain = info.clone();
+        plain["remux"] = json!(false);
+        drop(_g);
+        return Box::pin(proxy(&plain, on_progress, enc)).await;
     }
     let _slot = crate::queue::slot(has_video && gpu_job(enc)).await;
     let tmp = PathBuf::from(format!("{}.part.mp4", file.display()));

@@ -909,13 +909,13 @@
   {
    "name": "export_video",
    "title": "Export video",
-   "description": "Render the timeline to an MP4 file in the background and return immediately; poll export_status. codec: av1 (smallest, default), hevc, h264 (most compatible); a GPU encoder is used when available (NVIDIA NVENC, then Intel Quick Sync, AMD AMF, VAAPI on Linux), otherwise the CPU. quality: high (default), medium, compact. resolution: source (default) or 2160/1440/1080/720 (height, keeps aspect). fps: frames per second (default: as source). Without path the file goes to the output folder named after the project.",
+   "description": "Render the timeline to an MP4 file in the background and return immediately; poll export_status. codec: av1 (smallest, default), hevc, h264 (most compatible); a GPU encoder is used when available (NVIDIA NVENC, then Intel Quick Sync, AMD AMF, VAAPI on Linux), otherwise the CPU. quality: high (default), medium, compact. resolution: source (default) or 2160/1440/1080/720/480 (height, keeps aspect). The file format follows the path extension: .mp4 (default), .mkv, .mov, .gif (silent looping animation, 15 fps unless fps is 10/12/20/25), or audio only — .mp3, .m4a, .wav, .ogg. fps: frames per second (default: as source). Without path the file goes to the output folder named after the project.",
    "inputSchema": {
     "type": "object",
     "properties": {
      "path": {
       "type": "string",
-      "description": "Absolute output path (.mp4 is appended if missing); existing file is replaced"
+      "description": "Absolute output path: .mp4/.mkv/.mov/.gif/.mp3/.m4a/.wav/.ogg (.mp4 is appended otherwise); existing file is replaced"
      },
      "codec": {
       "type": "string",
@@ -942,7 +942,8 @@
        "2160",
        "1440",
        "1080",
-       "720"
+       "720",
+       "480"
       ],
       "description": "Output height or \"source\""
      },
