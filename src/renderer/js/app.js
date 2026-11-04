@@ -23,6 +23,7 @@ import { modeTabs, initModes } from './modes.js';
 import { closePopover, popoverOpen } from './popover.js';
 import { initFonts } from './fonts.js';
 import { initSubtitleOverlay, importSubtitles } from './subtitlesUi.js';
+import { installDropped } from './vst.js';
 
 // Мост для ИИ-ассистента грузим отдельно: если с ним что-то не так, редактор всё равно запустится
 const mcpReady = import('./mcpBridge.js').catch((e) => { console.error('mcpBridge', e); return null; });
@@ -337,6 +338,8 @@ function initWindowDrop() {
     const subs = paths.filter((p) => /\.(srt|vtt|ass|ssa)$/i.test(p));
     for (const p of subs) await importSubtitles(null, p);
     paths = paths.filter((p) => !subs.includes(p));
+    // Аудиоплагины (.vst3, .clap) — установить, как «Добавить плагин…» в настройках
+    paths = (await installDropped(paths)).rest;
     if (!paths.length) { timeline.dragLeave(); return; }
     if (await timeline.dropAt(x, y, { paths })) return;
     const ids = await importPaths(paths);

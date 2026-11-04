@@ -16,6 +16,18 @@
   const dir = [info.cacheDir, 'tmp', 'engine-test', ''].join(info.sep);
   const rack = () => document.querySelector('#audio-rack');
   try {
+    // VST3, брошенный на окно (run-ui.ps1 кладёт его в <test>\vst-drop): ставится в папку программы, остальные пути — в импорт
+    await vst.initVst();
+    const root = String(vst.vstStatus().userDir || '').replace(/[\\/]audio-plugins[\\/]?$/i, '');
+    ok(!!root, `папка плагинов программы: ${vst.vstStatus().userDir}`);
+    const dropped = [root, 'vst-drop', 'FFM Test Gain.vst3'].join(info.sep);
+    const dr = await vst.installDropped([dropped, root + info.sep + 'clip.mp4']);
+    ok(dr.installed === 1 && !dr.errors.length && dr.rest.length === 1 && /clip\.mp4$/.test(dr.rest[0]), `брошенный .vst3: ${JSON.stringify(dr)}`);
+    ok(vst.vstPlugins().some((p) => p.format === 'vst3' && p.name === 'FFM Test Gain'), 'брошенный .vst3 найден после установки');
+    const bad = await vst.installDropped([root + info.sep + 'nope.vst3']);
+    ok(bad.installed === 0 && bad.errors.length === 1, `несуществующий .vst3 — ошибка: ${JSON.stringify(bad.errors)}`);
+    ok(vst.isPluginPath('C:\\P\\x.VST3\\') && vst.isPluginPath('a.clap') && !vst.isPluginPath('a.vst3.mp4'), 'isPluginPath');
+
     const list = await vst.scanVst(false);
     const all = vst.vstPlugins();
     const pv = all.find((p) => p.format === 'vst3' && p.name === 'FFM Test Gain');

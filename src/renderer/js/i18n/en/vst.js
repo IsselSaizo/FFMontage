@@ -63,6 +63,7 @@ export default {
   'Пересканировать всё': 'Rescan all',
   'Добавить плагин…': 'Add plugin…',
   'Добавить папку…': 'Add folder…',
+  'Аудиоплагинов добавлено: {n}. Они в стойке эффектов (вкладка «Аудио»).': 'Audio plugins added: {n}. They are in the effects rack (the “Audio” tab).',
   'Папки с плагинами': 'Plugin folders',
   'Найденные плагины': 'Found plugins',
 };

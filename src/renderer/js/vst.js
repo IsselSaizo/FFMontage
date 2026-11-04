@@ -54,6 +54,30 @@ export async function scanVst(force = false) {
 export const setVstFolders = async (folders) => applyList(await api().vstFoldersSet(folders));
 export const pickVstFolder = () => api().vstPickFolder();
 export const installVst = async (path = null) => applyList(await api().vstInstall(path));
+/** Путь — аудиоплагин (.vst3 — файл или пакет-папка, .clap) */
+export const isPluginPath = (p) => /\.(vst3|clap)[\\/]?$/i.test(String(p || ''));
+/**
+ * Файлы, брошенные на окно: аудиоплагины установить (как «Добавить плагин…»), остальные пути вернуть.
+ * → { rest, installed, errors }
+ */
+export async function installDropped(paths) {
+  const plugs = paths.filter(isPluginPath);
+  const res = { rest: paths.filter((p) => !isPluginPath(p)), installed: 0, errors: [] };
+  if (!plugs.length) return res;
+  if (st.supported === false) {
+    toast(t('Аудиоплагины VST3 / CLAP работают только в Windows (x64).'), 'error', 5000);
+    res.errors.push('unsupported');
+    return res;
+  }
+  for (const p of plugs) {
+    try { await installVst(p.replace(/[\\/]$/, '')); res.installed++; } catch (e) {
+      res.errors.push(errText(e));
+      toast(t('Аудиоплагин: {e}', { e: errText(e) }), 'error', 7000);
+    }
+  }
+  if (res.installed) toast(t('Аудиоплагинов добавлено: {n}. Они в стойке эффектов (вкладка «Аудио»).', { n: res.installed }), 'success', 4000);
+  return res;
+}
 
 // Описание плагина (vst_info): есть ли окно, параметры для общих ползунков. Кэш по uid.
 const infos = new Map(); // normUid -> { info, promise, error }

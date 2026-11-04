@@ -50,9 +50,12 @@ if ((Test-Path $aplg) -and $aplg.StartsWith((Join-Path $App '.test-cache'))) { R
 New-Item -ItemType Directory -Force $aplg | Out-Null
 Remove-Item "$T\audio-plugins.json" -ErrorAction SilentlyContinue
 if ($Test -eq 'ui-selftest17') {
-  foreach ($n in @(@('vst3_test_gain', 'FFM Test Gain.vst3'), @('clap_test_gain', 'FFM Test Gain.clap'))) {
+  # VST3 — в отдельную папку $T\vst-drop: тест ставит его как файл, брошенный на окно (vst.installDropped)
+  $drop = Join-Path $T 'vst-drop'
+  New-Item -ItemType Directory -Force $drop | Out-Null
+  foreach ($n in @(@('vst3_test_gain', 'FFM Test Gain.vst3', $drop), @('clap_test_gain', 'FFM Test Gain.clap', $aplg))) {
     $dll = @('fast', 'release', 'debug') | ForEach-Object { Join-Path $App "src-tauri\target\$_\examples\$($n[0]).dll" } | Where-Object { Test-Path $_ } | Select-Object -First 1
-    if ($dll) { Copy-Item $dll (Join-Path $aplg $n[1]) -Force }
+    if ($dll) { Copy-Item $dll (Join-Path $n[2] $n[1]) -Force }
   }
 }
 $env:FFM_AUDIO_PLUGIN_PATH = $aplg
