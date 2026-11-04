@@ -67,6 +67,38 @@ async function viewTest(enc, ib) {
 }
 const isBlue = ([r, g, b]) => b > 150 && r < 80 && g < 80;
 
+// Скорость клипа: ×2 (видео + звук), ×0.5, звук ×0.25 (цепочка atempo), длина на таймлайне = (out − in) / speed
+async function speedTest(enc) {
+  console.log('Скорость:');
+  const codec = enc.h264_nvenc ? 'h264_nvenc' : 'libx264';
+  // Первые 3 с красный, потом 3 с синий, со звуком
+  const rb = await make('s_redblue.mp4', ['-f', 'lavfi', '-i', 'color=c=red:s=640x360:r=30:d=3', '-f', 'lavfi', '-i', 'color=c=blue:s=640x360:r=30:d=3',
+    '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000:duration=6',
+    '-filter_complex', '[0:v][1:v]concat=n=2:v=1:a=0[v]', '-map', '[v]', '-map', '2:a', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac']);
+  const im = await ff.probe(rb);
+  const { pathToFileURL } = require('url');
+  const plan = await import(pathToFileURL(path.join(__dirname, '..', 'src', 'renderer', 'js', 'exportPlan.js')).href);
+  const pr = {
+    media: { m: im },
+    videoClips: [
+      { mediaId: 'm', in: 0, out: 6, start: 0, volume: 1, muted: false, speed: 2 },      // 0–3 с: красный до 1,5 с, потом синий
+      { mediaId: 'm', in: 0, out: 1, start: 3, volume: 1, muted: true, speed: 0.5 },     // 3–5 с: красный, замедленный
+    ],
+    audioTracks: [{ muted: false, clips: [{ mediaId: 'm', in: 0, out: 1, start: 0, volume: 1, muted: false, speed: 0.25 }] }], // 0–4 с
+  };
+  const b = plan.buildExport(pr, { width: 640, height: 360, fps: 30 });
+  assert(Math.abs(b.duration - 5) < 1e-6, `длина ${b.duration} = 3 + 2`);
+  assert(/setpts=\(PTS-STARTPTS\)\/2\.0+/.test(b.filter) && /atempo=2\.0+/.test(b.filter), 'видео ×2: setpts и atempo');
+  assert(/atempo=0\.50+,atempo=0\.50+/.test(b.filter), 'звук ×0,25: две ступени atempo по 0,5');
+  const out = path.join(DIR, 'out_speed.mp4');
+  await startExport(pr, { width: 640, height: 360, fps: 30, codec, quality: 'high', output: out });
+  const io = await ff.probe(out);
+  assert(Math.abs(io.duration - 5) < 0.15, `файл ${io.duration.toFixed(2)} с ≈ 5`);
+  const f1 = await rgb(out, 1.0); const f2 = await rgb(out, 2.2); const f3 = await rgb(out, 4.5);
+  assert(isRed(f1.px(32, 18)) && isBlue(f2.px(32, 18)), '×2: на 1 с ещё красный (2 с файла), на 2,2 с уже синий (4,4 с файла)');
+  assert(isRed(f3.px(32, 18)), '×0,5: второй клип красный до конца');
+}
+
 // Пустоты, переходы, затухания, реверс и стоп-кадр
 async function effectsTest(enc) {
   console.log('Эффекты:');
@@ -256,5 +288,6 @@ async function effectsTest(enc) {
 
   await effectsTest(enc);
   await viewTest(enc, ib);
+  await speedTest(enc);
   console.log('\nВСЁ ОК');
 })().catch((e) => { console.error(e); process.exit(1); });

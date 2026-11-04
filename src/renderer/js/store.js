@@ -1,5 +1,6 @@
 // Состояние проекта: данные, отмена/повтор, производные значения и операции монтажа.
 import { uid, clamp, snapFps } from './util.js';
+import { speedOf, tlLen, clipEnd, srcAt, tlAt, MIN_SPEED, MAX_SPEED } from './clipTime.js';
 import { MIN_DURATION as TR_MIN, MAX_DURATION as TR_MAX, DEFAULT_DURATION as TR_DEFAULT, TRANSITIONS } from './transitions.js';
 
 export const MIN_CLIP = 0.1;   // минимальная длина клипа, с
@@ -10,13 +11,15 @@ export const MAX_FADE = 10;    // максимум затухания, с
 export const ASPECTS = { '16:9': 16 / 9, '9:16': 9 / 16, '1:1': 1, '3:4': 3 / 4, '4:3': 4 / 3 };
 const even2 = (x) => Math.max(2, Math.round(x / 2) * 2);
 
-const len = (c) => c.out - c.in;
-const end = (c) => c.start + c.out - c.in;
+// Длина и конец клипа НА ТАЙМЛАЙНЕ (с учётом скорости). in/out — время файла.
+const len = tlLen;
+const end = clipEnd;
 const byStart = (a, b) => a.start - b.start;
 
 // Модель проекта (версия 2):
 //   media        { [id]: сведения о файле из ffprobe; derived — файл, сделанный программой (реверс, стоп-кадр) }
-//   videoClips   [{ id, mediaId, in, out, start, volume, muted, fadeIn, fadeOut, name?, transition? }]
+//   videoClips   [{ id, mediaId, in, out, start, volume, muted, fadeIn, fadeOut, name?, transition?, speed? }]
+//                in/out — фрагмент файла; на таймлайне клип длится (out − in) / speed (см. clipTime.js)
 //                основная дорожка: клипы по времени, без наложений, между ними могут быть пустоты.
 //                transition = { type, duration } — переход из предыдущего клипа (если стоят впритык)
 //   audioTracks  [{ id, name?, muted, solo?, volume?, clips: [{ id, mediaId, in, out, start, volume, muted, fadeIn, fadeOut, name?, stream?, link? }] }]
@@ -115,8 +118,11 @@ export function syncLinks(p) {
       if (!c.link) continue;
       const v = vmap.get(c.link);
       if (!v || v.mediaId !== c.mediaId) { delete c.link; continue; }
-      let s = v.start - v.in + c.in;
-      if (s < 0) { c.in = Math.min(c.out - MIN_CLIP, c.in - s); s = v.start - v.in + c.in; }
+      // Скорость у связанного звука та же, что у видео
+      if (speedOf(v) !== 1) c.speed = speedOf(v); else delete c.speed;
+      const sv = speedOf(v);
+      let s = tlAt(v, c.in);
+      if (s < 0) { c.in = Math.min(c.out - MIN_CLIP * sv, c.in - s * sv); s = tlAt(v, c.in); }
       c.start = Math.max(0, s);
     }
   }
@@ -134,14 +140,14 @@ export function carve(list, s, e, keep = () => false) {
     if (keep(c) || ce <= s + ADJ || cs >= e - ADJ) { out.push(c); continue; }
     if (cs < s - ADJ) {
       if (ce > e + ADJ && ce - e >= MIN_CLIP / 2) {
-        const right = { ...JSON.parse(JSON.stringify(c)), id: uid('clp'), in: c.in + (e - cs), start: e, fadeIn: 0 };
+        const right = { ...JSON.parse(JSON.stringify(c)), id: uid('clp'), in: srcAt(c, e), start: e, fadeIn: 0 };
         delete right.transition;
         if (c.link) right.link = splitLink(c.link, e);
         out.push(right);
       }
-      if (s - cs >= MIN_CLIP / 2) { c.out = c.in + (s - cs); c.fadeOut = 0; out.push(c); }
+      if (s - cs >= MIN_CLIP / 2) { c.out = srcAt(c, s); c.fadeOut = 0; out.push(c); }
     } else if (ce > e + ADJ && ce - e >= MIN_CLIP / 2) {
-      c.in += e - cs; c.start = e; c.fadeIn = 0; delete c.transition; out.push(c);
+      c.in = srcAt(c, e); c.start = e; c.fadeIn = 0; delete c.transition; out.push(c);
     }
   }
   return out;
@@ -589,10 +595,10 @@ class Store {
           for (const c of list) {
             out.push(c);
             if (c.start < start - MIN_CLIP && end(c) > start + MIN_CLIP) {
-              const right = { ...JSON.parse(JSON.stringify(c)), id: uid('clp'), in: c.in + (start - c.start), start, fadeIn: 0 };
+              const right = { ...JSON.parse(JSON.stringify(c)), id: uid('clp'), in: srcAt(c, start), start, fadeIn: 0 };
               delete right.transition;
               if (c.link) right.link = splitLink(c.link, start);
-              c.out = c.in + (start - c.start); c.fadeOut = 0;
+              c.out = srcAt(c, start); c.fadeOut = 0;
               out.push(right);
             }
           }
@@ -651,6 +657,7 @@ class Store {
     const used = new Set();
     for (let s = 0; s < n; s++) {
       const a = { ...this.newClip(v.mediaId), in: v.in, out: v.out, start: v.start, link: v.link, stream: s, volume: 1 };
+      if (speedOf(v) !== 1) a.speed = speedOf(v);
       const t = this.trackForStream(p, s, a.start, len(a), used, overwrite);
       used.add(t.id);
       t.clips.push(a);
@@ -814,6 +821,36 @@ class Store {
     this.mutate(() => { const f = this.findClip(id); if (f) Object.assign(f.clip, patch); }, opts);
   }
 
+  // Скорость клипа (×0.1…×16) вместе со связанными клипами (видео + его звук).
+  // Фрагмент файла (in/out) не меняется — меняется длина на таймлайне.
+  //   ripple = false: клип становится короче/длиннее на месте; если удлинился и наехал на соседа —
+  //                   сосед подрезается (как при наложении), остальное стоит на месте.
+  //   ripple = true:  всё, что начинается не раньше старого конца клипа (на всех дорожках), сдвигается на разницу.
+  setSpeed(id, speed, { ripple = false } = {}, opts) {
+    const f = this.findClip(id);
+    if (!f) return false;
+    const m = this.media(f.clip.mediaId);
+    if (m && m.isImage && !m.isAnimation) return false;   // у картинки скорости нет — только длительность
+    const s = clamp(Number(speed) || 1, MIN_SPEED, MAX_SPEED);
+    const ids = new Set([id, ...this.linkedOf(id).map((x) => x.clip.id)]);
+    const oldEnd = end(f.clip);
+    this.mutate((p) => {
+      const all = [...p.videoClips, ...p.audioTracks.flatMap((t) => t.clips)];
+      const targets = all.filter((c) => ids.has(c.id));
+      for (const c of targets) { if (Math.abs(s - 1) < 1e-6) delete c.speed; else c.speed = s; }
+      const newEnd = end(targets.find((c) => c.id === id));
+      const delta = newEnd - oldEnd;
+      if (ripple && Math.abs(delta) > 1e-6) {
+        for (const c of all) if (!ids.has(c.id) && c.start >= oldEnd - ADJ) c.start = Math.max(0, c.start + delta);
+      } else if (delta > 1e-6) {
+        const v = targets.find((c) => p.videoClips.includes(c));
+        if (v) overwriteVideo(p, v, v.start);
+        else for (const t of p.audioTracks) for (const a of t.clips.filter((c) => ids.has(c.id))) overwriteAudio(t, a);
+      }
+    }, opts);
+    return true;
+  }
+
   // Подгонка кадра видеоклипов: 'contain' (вписать, по умолчанию) | 'cover' (заполнить) | 'stretch' (растянуть).
   // ids — список клипов (один шаг отмены на всех)
   setFit(ids, fit) {
@@ -831,14 +868,15 @@ class Store {
     const f = this.findClip(id);
     if (!f) return false;
     const m = this.media(f.clip.mediaId);
-    const nout = clamp(f.clip.in + dur, f.clip.in + MIN_CLIP, m ? m.duration : f.clip.out);
+    const sp = speedOf(f.clip);
+    const nout = clamp(f.clip.in + dur * sp, f.clip.in + MIN_CLIP * sp, m ? m.duration : f.clip.out);
     this.mutate((p) => {
       const c = this.findClip(id).clip;
       const oldEnd = end(c);
       c.out = nout;
       if (f.kind === 'video' && end(c) > oldEnd) pushFrom(p.videoClips, oldEnd, end(c), c);
     });
-    return nout - f.clip.in;
+    return (nout - f.clip.in) / sp;
   }
 
   // Разрезать клип по времени таймлайна t. withLinked (по умолчанию) — вместе со связанными
@@ -869,9 +907,9 @@ class Store {
         const f = this.findClip(cid);
         if (!f) continue;
         const c = f.clip;
-        const local = c.in + (t - c.start);
-        if (local - c.in < MIN_CLIP - 1e-6 || c.out - local < MIN_CLIP - 1e-6) continue;
-        const right = { ...c, id: uid('clp'), in: local, start: t, fadeIn: 0 };
+        const local = srcAt(c, t);
+        if (t - c.start < MIN_CLIP - 1e-6 || end(c) - t < MIN_CLIP - 1e-6) continue;
+        const right = { ...JSON.parse(JSON.stringify(c)), id: uid('clp'), in: local, start: t, fadeIn: 0 };
         delete right.transition;
         if (c.link) right.link = splitLink(c.link, t);
         c.out = local;
@@ -960,7 +998,7 @@ class Store {
     if (!partners.length) { delete v.link; return; }
     v.link = uid('lnk');
     for (const { clip, trackId } of partners) {
-      const a = { ...clip, id: uid('clp'), link: v.link, start: v.start - v.in + clip.in };
+      const a = { ...clip, id: uid('clp'), link: v.link, start: tlAt(v, clip.in) };
       let t = p.audioTracks.find((x) => x.id === trackId && x.clips.every((c) => end(c) <= a.start + ADJ || c.start >= end(a) - ADJ));
       if (!t) t = this.trackForStream(p, a.stream || 0, a.start, len(a));
       t.clips.push(a);

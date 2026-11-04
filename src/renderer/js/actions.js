@@ -3,8 +3,7 @@ import { store, MIN_CLIP } from './store.js';
 import { toast, promptDialog, parseDuration, fmtTime, errText } from './util.js';
 import { openMenu } from './contextMenu.js';
 import { toggleReverse, freezeFrameAt, isReversed, isFreeze } from './fx.js';
-
-const clipEnd = (c) => c.start + c.out - c.in;
+import { speedOf, tlLen, clipEnd } from './clipTime.js';
 const inside = (c, t) => t > c.start + MIN_CLIP && t < clipEnd(c) - MIN_CLIP;
 
 export function splitClip(id, t = store.time) {
@@ -53,8 +52,8 @@ export async function changeDuration(id) {
   const f = store.findClip(id);
   if (!f) return;
   const m = store.media(f.clip.mediaId);
-  const max = m ? m.duration - f.clip.in : f.clip.out - f.clip.in;
-  const cur = f.clip.out - f.clip.in;
+  const max = (m ? m.duration - f.clip.in : f.clip.out - f.clip.in) / speedOf(f.clip);
+  const cur = tlLen(f.clip);
   const v = await promptDialog('Изменить длительность', 'Длительность в секундах (или мин:сек)', String(Math.round(cur * 100) / 100).replace('.', ','), {
     okText: 'Применить',
     hint: `Можно от ${String(MIN_CLIP).replace('.', ',')} до ${fmtTime(max)} — дальше в файле нет кадров. Видео справа сдвинется, если не хватит места.`,

@@ -7,14 +7,14 @@ import { playUrl, audioUrl, playbackFailed } from './media.js';
 import { h, $, icon, fmtTime } from './util.js';
 import { applyTransition, resetLayer } from './transitions.js';
 import { cssEffects } from './effects.js';
+import { speedOf, tlLen, clipEnd, srcAt, tlAt } from './clipTime.js';
 
 const EPS = 0.004;
 const isStill = (clip) => { const m = store.media(clip.mediaId); return !!(m && m.isImage && !m.isAnimation); };
-const clipEnd = (c) => c.start + c.out - c.in;
 
 // Множитель плавного появления/исчезания клипа в момент t таймлайна (0…1)
 export function fadeFactor(c, t) {
-  const len = c.out - c.in;
+  const len = tlLen(c);
   const local = Math.max(0, Math.min(len, t - c.start));
   let f = 1;
   if (c.fadeIn > 0.001) f = Math.min(f, local / c.fadeIn);
@@ -140,8 +140,8 @@ export class Preview {
     for (const tr of store.transitions()) {
       if (t >= tr.from - EPS && t < tr.to - EPS) {
         return {
-          A: { clip: tr.a, mt: tr.a.in + (t - tr.a.start) },
-          B: { clip: tr.b, mt: tr.b.in + (t - tr.b.start) },
+          A: { clip: tr.a, mt: srcAt(tr.a, t) },
+          B: { clip: tr.b, mt: srcAt(tr.b, t) },
           trans: { type: tr.type, p: (t - tr.from) / tr.d },
           master: t < tr.seam ? 'A' : 'B',
         };
@@ -153,7 +153,7 @@ export class Preview {
       // ровно в конце клипа (например, в конце ролика) — показываем последний кадр
       s = layout.find((x) => Math.abs(t - x.end) < 0.02 && !layout.some((y) => Math.abs(y.start - x.end) < 0.02));
     }
-    return s ? { A: { clip: s.clip, mt: s.clip.in + (t - s.start) }, master: 'A' } : null;
+    return s ? { A: { clip: s.clip, mt: srcAt(s.clip, t) }, master: 'A' } : null;
   }
 
   // Следующее, что понадобится показать после t (для предзагрузки)
@@ -163,7 +163,7 @@ export class Preview {
       if (s.start > t + EPS && (!best || s.start < best.at)) best = { at: s.start, clip: s.clip, mt: s.clip.in };
     }
     for (const tr of store.transitions()) {
-      if (tr.from > t + EPS && (!best || tr.from < best.at)) best = { at: tr.from, clip: tr.b, mt: tr.b.in - tr.d / 2 };
+      if (tr.from > t + EPS && (!best || tr.from < best.at)) best = { at: tr.from, clip: tr.b, mt: tr.b.in - (tr.d / 2) * speedOf(tr.b) };
     }
     return best;
   }
@@ -227,6 +227,10 @@ export class Preview {
     vLayers.forEach((x, i) => {
       const el = els[i];
       const mt = this.clampMt(x.clip, x.mt);
+      // Скорость клипа: playbackRate (тон звука сохраняется). После смены файла WebView сбрасывает её к default.
+      const sp = isStill(x.clip) ? 1 : speedOf(x.clip);
+      if (el.defaultPlaybackRate !== sp) el.defaultPlaybackRate = sp;
+      if (el.playbackRate !== sp) el.playbackRate = sp;
       const before = x.mt < -0.001;                       // клип ещё не начался в файле (переход без «запаса» кадров)
       const after = x.mt > this.mediaDur(x.clip) - 0.01;  // кадры в файле кончились — стоп на последнем
       if (!this.playing || force) {
@@ -330,7 +334,7 @@ export class Preview {
     const f = store.findClip(info.clipId);
     if (!f || f.kind !== 'video' || this.playing) return;
     this.effectOverride = info;
-    const c = f.clip; const e = c.start + c.out - c.in;
+    const c = f.clip; const e = clipEnd(c);
     const t = store.time >= c.start && store.time < e ? store.time : (c.start + e) / 2;
     this.present(t, true);
   }
@@ -343,7 +347,7 @@ export class Preview {
     if (!url) return;
     const mt = this.clampMt(n.clip, n.mt);
     // Продолжение того же файла в играющем элементе (после разреза) — грузить нечего
-    if (this.slots.some((s) => this.visible.has(s) && s.dataset.url === url && Math.abs(s.currentTime + (n.at - t) - mt) < 0.35)) return;
+    if (this.slots.some((s) => this.visible.has(s) && s.dataset.url === url && Math.abs(s.currentTime + (n.at - t) * speedOf(n.clip) - mt) < 0.35)) return;
     // Уже загружено в свободный элемент
     if (this.slots.some((s) => !this.visible.has(s) && s.dataset.url === url && s.clipId === n.clip.id && Math.abs(s.currentTime - mt) < 0.3)) return;
     const free = this.slots.find((s) => !this.visible.has(s));
@@ -428,7 +432,7 @@ export class Preview {
     if (L && !L.trans && ms && store.findClip(ms.clip.id) && !ms.el.failed && !ms.el.ended && playUrl(ms.clip.mediaId)) {
       const mt = ms.el.currentTime;
       if (ms.el.readyState >= 2 && !ms.el.seeking && !ms.el.paused) {
-        t = ms.clip.start + (mt - ms.clip.in);
+        t = tlAt(ms.clip, mt);
       } else if (ms.el.seeking || ms.el.readyState < 2) {
         t = this.clock.t; // ждём, пока загрузится кадр
         this.clock.wall = now;
@@ -467,7 +471,10 @@ export class Preview {
         }
         if (this.ctx && !this.gains.has(rec.el)) this.attach(rec.el);
         if (rec.url !== url) { rec.url = url; rec.el.src = url; }
-        const expected = c.in + (t - c.start);
+        const expected = srcAt(c, t);
+        const sp = speedOf(c);
+        if (rec.el.defaultPlaybackRate !== sp) rec.el.defaultPlaybackRate = sp;
+        if (rec.el.playbackRate !== sp) rec.el.playbackRate = sp;
         this.setGain(rec.el, c.muted ? 0 : c.volume * tg * fadeFactor(c, t));
         if (this.playing) {
           if (rec.el.paused) { rec.el.currentTime = expected; rec.el.play().catch(() => {}); }

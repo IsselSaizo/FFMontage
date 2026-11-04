@@ -516,6 +516,7 @@ body.is-moving .junction, body.is-trimming .junction { display: none; }
 body:not(.ready) #app { opacity: 0; }
 #app { transition: opacity .2s; }
 .clip .ci.fxb { font-size: 10px; font-weight: 700; color: #9fe3ff; padding: 0 2px; }
+.clip .ci.speed { font-size: 10px; font-weight: 700; color: #ffd36b; padding: 0 3px; border-radius: 4px; background: rgba(0,0,0,.35); }
 /* Эпизоды (вкладки таймлайнов) */
 .tl-episodes { display: flex; align-items: center; gap: 3px; padding: 4px 8px 0; min-height: 30px; flex: none; overflow-x: auto; }
 .ep-tab { display: flex; align-items: center; gap: 4px; height: 26px; padding: 0 8px 0 12px; border-radius: 7px 7px 0 0; background: var(--panel); color: var(--text-2); font-size: 12px; cursor: pointer; border: 1px solid var(--line); border-bottom: 0; white-space: nowrap; }
@@ -590,3 +591,8 @@ body[data-mode="anim"] #anim-presets, body[data-mode="anim"] #anim-params { disp
 /* ---------- Справка: горячие клавиши ---------- */
 .keys-list { columns: 2; column-gap: 28px; }
 .keys-list .kv { break-inside: avoid; }
+/* ---------- Скорость клипа ---------- */
+.check-row { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 12.5px; cursor: pointer; }
+.check-row input { accent-color: var(--accent); width: 15px; height: 15px; margin: 0; }
+#speed-slider { flex: 1; min-width: 60px; }
+.sec-wrap span:first-child { padding-left: 8px; }

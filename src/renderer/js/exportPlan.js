@@ -3,7 +3,8 @@
 //
 // Модель проекта (то, что присылает интерфейс, версия 2):
 //   project.media       { [id]: { path, hasVideo, hasAudio, duration, ... } }
-//   project.videoClips  [ { mediaId, in, out, start, volume, muted, fadeIn, fadeOut, transition? } ]
+//   project.videoClips  [ { mediaId, in, out, start, volume, muted, fadeIn, fadeOut, transition?, speed? } ]
+//                       — in/out — время файла; на таймлайне клип длится (out − in) / speed
 //                       — основная дорожка: клипы по времени, без наложений, могут быть пустоты
 //   project.audioTracks [ { muted, clips: [ { mediaId, in, out, start, volume, muted, fadeIn, fadeOut } ] } ]
 //
@@ -11,6 +12,7 @@
 //   { width, height, fps, codec, quality, output }
 
 import { ffEffects } from './effects.js';
+import { speedOf, atempoChain } from './clipTime.js';
 
 export const QUALITY = {
   // Значение CQ: меньше — лучше качество и больше файл
@@ -24,7 +26,11 @@ export const QUALITY = {
 
 const n6 = (x) => Number(x).toFixed(6);
 const even = (x) => Math.max(2, Math.round(x / 2) * 2);
-const clipDuration = (c) => Math.max(0, c.out - c.in);
+// Длина клипа на таймлайне (с учётом скорости)
+const clipDuration = (c) => Math.max(0, (c.out - c.in) / speedOf(c));
+// Скорость в графе: кадры — setpts (потом fps= выравнивает частоту), звук — atempo (тон сохраняется)
+const vSpeed = (sp) => (sp === 1 ? 'setpts=PTS-STARTPTS' : `setpts=(PTS-STARTPTS)/${n6(sp)}`);
+const aSpeed = (sp) => (sp === 1 ? '' : `,${atempoChain(sp)}`);
 
 export function encoderArgs(codec, quality, fps) {
   const q = (QUALITY[codec] || QUALITY.h264_nvenc)[quality] ?? QUALITY.h264_nvenc.medium;
@@ -132,21 +138,22 @@ export function buildExport(project, settings) {
   vclips.forEach((c, i) => {
     const m = media[c.mediaId];
     const len = clipDuration(c);
+    const sp = still(m) ? 1 : speedOf(c);   // время таймлайна × sp = время файла
     const h = tin[i] / 2; const t = tout[i] / 2;
     if (!tin[i]) {
       if (chain) { pieces.push(chain); chain = null; }
       const gap = c.start - cursor;
       if (gap > 0.0005) { filters.push(`${black(gap)}[g${i}]`); pieces.push(`[g${i}]`); }
     }
-    const ss = still(m) ? c.in - h : Math.max(0, c.in - h);
-    const head = c.in - ss;              // сколько кадров «до» реально есть в файле
+    const ss = still(m) ? c.in - h : Math.max(0, c.in - h * sp);
+    const head = (c.in - ss) / sp;       // сколько кадров «до» реально есть в файле (в секундах таймлайна)
     const freezeHead = h - head;         // недостающее — повтор первого кадра
     const S = h + len + t;
     // noAudio — звук клипа вынесен на аудиодорожки (связанные клипы)
     const hasSound = m.hasAudio && !c.noAudio && !c.muted && c.volume > 0;
-    const k = (m.hasVideo || hasSound) ? addInput(m, ss, head + len + t) : -1;
+    const k = (m.hasVideo || hasSound) ? addInput(m, ss, (head + len + t) * sp) : -1;
     if (m.hasVideo) {
-      filters.push(`[${k}:v]setpts=PTS-STARTPTS,${ffEffects(c, m.width)}${scaleChain(c)}` +
+      filters.push(`[${k}:v]${vSpeed(sp)},${ffEffects(c, m.width)}${scaleChain(c)}` +
         (freezeHead > 0.0005 ? `,tpad=start_mode=clone:start_duration=${n6(freezeHead)}` : '') +
         `,tpad=stop_mode=clone:stop_duration=${n6(t + 2)},trim=duration=${n6(S)},setpts=PTS-STARTPTS` +
         `${vFades(c, h, len)}[s${i}]`);
@@ -167,7 +174,7 @@ export function buildExport(project, settings) {
     // Звук клипа: со «ступеньками» для перехода, на своём месте
     if (hasSound) {
       const L = head + len + t;
-      let af = `[${k}:a]${audioFmt},volume=${n6(c.volume)},asetpts=PTS-STARTPTS,apad,atrim=duration=${n6(L)}`;
+      let af = `[${k}:a]${audioFmt}${aSpeed(sp)},volume=${n6(c.volume)},asetpts=PTS-STARTPTS,apad,atrim=duration=${n6(L)}`;
       if (tin[i]) af += `,afade=t=in:st=0:d=${n6(head + h)}`;
       af += aFades(c, head, len);
       if (t > 0) af += `,afade=t=out:st=${n6(head + len - t)}:d=${n6(2 * t)}`;
@@ -191,11 +198,12 @@ export function buildExport(project, settings) {
       if (!m || !m.hasAudio || dur <= 0.001) return;
       audioEnd = Math.max(audioEnd, c.start + dur);
       if (tr.muted || c.muted || !(c.volume > 0) || !(tv > 0)) return;
-      const k = addInput(m, c.in, dur);
+      const sp = speedOf(c);
+      const k = addInput(m, c.in, dur * sp);
       const delayMs = Math.max(0, Math.round(c.start * 1000));
       const nStreams = (m.audioStreams && m.audioStreams.length) || 1;
       const st = Math.min(Math.max(0, c.stream | 0), nStreams - 1);
-      filters.push(`[${k}:a:${st}]${audioFmt},volume=${n6(c.volume * tv)},asetpts=PTS-STARTPTS,apad,atrim=duration=${n6(dur)}` +
+      filters.push(`[${k}:a:${st}]${audioFmt}${aSpeed(sp)},volume=${n6(c.volume * tv)},asetpts=PTS-STARTPTS,apad,atrim=duration=${n6(dur)}` +
         `${aFades(c, 0, dur)},adelay=delays=${delayMs}:all=1[m${j}]`);
       audio.push(`[m${j}]`);
       j++;

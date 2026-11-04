@@ -8,6 +8,7 @@ import { openClipMenu, openLaneMenu, splitClip } from './actions.js';
 import { isReversed, isFreeze } from './fx.js';
 import { transitionById } from './transitions.js';
 import { clipEffects, effectById } from './effects.js';
+import { speedOf, tlLen, clipEnd, fmtSpeed } from './clipTime.js';
 
 const HEAD_W = 168;
 const VIDEO_H = 76;
@@ -17,7 +18,6 @@ const DRAG_THRESHOLD = 4;
 const MIN_PPS = 0.2;
 const MAX_PPS = 800;
 
-const clipEnd = (c) => c.start + c.out - c.in;
 const clone = (x) => JSON.parse(JSON.stringify(x));
 
 export class Timeline {
@@ -402,7 +402,7 @@ export class Timeline {
       class: `clip ${kind}${sel ? ' selected' : ''}${c.muted ? ' clip-muted' : ''}${rt.missing ? ' missing' : ''} ${extraClass}`,
       dataset: { id: c.id, kind },
       style: { left: `${left}px`, width: `${Math.max(2, width)}px` },
-      title: `${store.clipName(c)}\n${fmtTime(c.out - c.in)} (из файла ${fmtTime(c.in)} – ${fmtTime(c.out)})\nПравая кнопка мыши — действия`,
+      title: `${store.clipName(c)}\n${fmtTime(tlLen(c))} (из файла ${fmtTime(c.in)} – ${fmtTime(c.out)}${speedOf(c) !== 1 ? `, скорость ${fmtSpeed(speedOf(c))}` : ""})\nПравая кнопка мыши — действия`,
     });
     return el;
   }
@@ -433,6 +433,7 @@ export class Timeline {
     if (fxl.length) label.append(h('span', { class: 'ci fxb', title: `Эффекты: ${fxl.map((x) => effectById(x).name).join(', ')}` }, 'fx'));
     if (c.fit === 'cover') label.append(h('span', { class: 'ci fxb', title: 'Заполняет кадр (края обрезаны)' }, '▣'));
     if (c.fit === 'stretch') label.append(h('span', { class: 'ci fxb', title: 'Растянут на весь кадр' }, '⇔'));
+    if (speedOf(c) !== 1) label.append(h('span', { class: 'ci speed', title: 'Скорость клипа' }, fmtSpeed(speedOf(c))));
     if (c.link && store.linkedOf(c.id).length) label.append(h('span', { class: 'ci link', title: 'Связан со звуком/видео: двигаются и режутся вместе (Alt — только этот клип)', html: icon('link', 13) }));
     if (c.muted && m.hasAudio && !c.noAudio) label.append(h('span', { class: 'ci', html: icon('mute', 13) }));
     else if (m.hasAudio && !c.noAudio && Math.abs(c.volume - 1) > 0.01) label.append(h('span', { class: 'ci vol' }, `${Math.round(c.volume * 100)}%`));
@@ -461,7 +462,7 @@ export class Timeline {
       const i1 = Math.min(Math.ceil(width / tileW), Math.ceil((vx1 - left) / tileW));
       for (let i = i0; i < i1; i++) {
         const x = i * tileW;
-        const t = c.in + (x + tileW / 2) / this.pps;
+        const t = c.in + ((x + tileW / 2) / this.pps) * speedOf(c);
         const idx = clamp(Math.round(t / rt.thumbs.interval), 0, n - 1);
         strip.append(h('img', { src: rt.thumbs.urls[idx], draggable: 'false', style: { left: `${x}px`, width: `${tileW}px`, height: `${tileH}px` } }));
       }
@@ -473,7 +474,7 @@ export class Timeline {
       const wave = this.waveCanvas(c, rt.peaks, left, width, 18, c.muted ? 0 : c.volume, 'rgba(255,255,255,0.85)');
       if (wave) el.append(h('div', { class: 'clip-wavestrip' }, wave));
     }
-    el.append(this.clipLabel(c, m, h('span', { class: 'cd' }, fmtTime(c.out - c.in, { ms: false }))));
+    el.append(this.clipLabel(c, m, h('span', { class: 'cd' }, fmtTime(tlLen(c), { ms: false }))));
     this.decorate(el, c, width, sel);
     return el;
   }
@@ -481,7 +482,7 @@ export class Timeline {
   audioClipEl(c, track) {
     const m = store.media(c.mediaId) || {};
     const left = c.start * this.pps;
-    const width = (c.out - c.in) * this.pps;
+    const width = tlLen(c) * this.pps;
     const el = this.clipBase('audio', c, left, width, track.muted ? 'track-muted' : '');
     const peaks = peaksOf(c.mediaId, c.stream || 0);
     const gain = c.muted ? 0 : c.volume * (track.volume ?? 1);
@@ -524,11 +525,12 @@ export class Timeline {
     const rate = peaks.rate; const data = peaks.data;
     const g = gain > 0 ? Math.min(1.6, Math.sqrt(gain)) : 0.6;
     const mid = height / 2;
-    const dur = c.out - c.in;
+    const dur = tlLen(c);
+    const sp = speedOf(c);
     for (let x = 0; x < w; x += 2) {
-      const lt = (cx0 + x) / this.pps;            // время от начала клипа
-      const t0 = c.in + lt;
-      const t1 = c.in + (cx0 + x + 2) / this.pps;
+      const lt = (cx0 + x) / this.pps;            // время от начала клипа (таймлайн)
+      const t0 = c.in + lt * sp;                  // время файла
+      const t1 = c.in + ((cx0 + x + 2) / this.pps) * sp;
       const i0 = Math.floor(t0 * rate); const i1 = Math.max(i0 + 1, Math.ceil(t1 * rate));
       let v = 0;
       for (let i = i0; i < i1 && i < data.length; i++) if (data[i] > v) v = data[i];
@@ -674,10 +676,10 @@ export class Timeline {
         if (!f2) continue;
         const c = f2.clip; const o = pt.o;
         if (side === 'l') {
-          c.in = clamp(o.in + d, 0, o.out - MIN_CLIP);
-          if (pt.kind === 'video') c.start = o.start + (c.in - o.in);
+          c.in = clamp(o.in + d, 0, o.out - MIN_CLIP * speedOf(o));
+          if (pt.kind === 'video') c.start = o.start + (c.in - o.in) / speedOf(o);
         } else {
-          c.out = clamp(o.out + d, o.in + MIN_CLIP, mediaDur(c));
+          c.out = clamp(o.out + d, o.in + MIN_CLIP * speedOf(o), mediaDur(c));
         }
       }
     };
@@ -688,32 +690,33 @@ export class Timeline {
       moved = true;
       const dt = dx / this.pps;
       let snapAt = null;
-      const len = orig.out - orig.in;
+      const len = tlLen(orig);
+      const sp = speedOf(orig);  // экранные секунды × sp = секунды файла
 
       if (mode === 'fade-in' || mode === 'fade-out') {
         const v = clamp((mode === 'fade-in' ? orig.fadeIn : orig.fadeOut) + (mode === 'fade-in' ? dt : -dt), 0, len);
         store.live(() => { const c = store.findClip(id).clip; if (mode === 'fade-in') c.fadeIn = v; else c.fadeOut = v; });
       } else if (mode === 'trim-l') {
-        let nin = clamp(orig.in + dt, 0, orig.out - MIN_CLIP);
-        let nstart = orig.start + (nin - orig.in);
+        let nin = clamp(orig.in + dt * sp, 0, orig.out - MIN_CLIP * sp);
+        let nstart = orig.start + (nin - orig.in) / sp;
         const sn = this.snap(nstart, pts, ev);
-        if (sn.snapped) { nin += sn.t - nstart; nstart = sn.t; snapAt = sn.t; }
+        if (sn.snapped) { nin += (sn.t - nstart) * sp; nstart = sn.t; snapAt = sn.t; }
         // Не залезаем на предыдущий клип / за ноль / за начало файла (и то же для связанного видео)
         const useV = vOrig && (kind === 'video' || !ev.altKey);
-        const lo = Math.max(0, orig.start - orig.in, useV ? orig.start + (prevEnd - vOrig.start) : 0, useV ? orig.start - vOrig.in : 0);
-        if (nstart < lo) { nin += lo - nstart; nstart = lo; }
-        nin = clamp(nin, 0, orig.out - MIN_CLIP); nstart = orig.start + (nin - orig.in);
+        const lo = Math.max(0, orig.start - orig.in / sp, useV ? orig.start + (prevEnd - vOrig.start) : 0, useV ? orig.start - vOrig.in / sp : 0);
+        if (nstart < lo) { nin += (lo - nstart) * sp; nstart = lo; }
+        nin = clamp(nin, 0, orig.out - MIN_CLIP * sp); nstart = orig.start + (nin - orig.in) / sp;
         store.live(() => { const c = store.findClip(id).clip; c.in = nin; c.start = nstart; trimPartners(ev, 'l', nin - orig.in); });
         if (kind === 'video') store.setTime(nstart);
       } else if (mode === 'trim-r') {
-        let nout = clamp(orig.out + dt, orig.in + MIN_CLIP, media.duration);
-        const sn = this.snap(orig.start + (nout - orig.in), pts, ev);
-        if (sn.snapped) { nout = clamp(orig.in + (sn.t - orig.start), orig.in + MIN_CLIP, media.duration); snapAt = sn.t; }
+        let nout = clamp(orig.out + dt * sp, orig.in + MIN_CLIP * sp, media.duration);
+        const sn = this.snap(orig.start + (nout - orig.in) / sp, pts, ev);
+        if (sn.snapped) { nout = clamp(orig.in + (sn.t - orig.start) * sp, orig.in + MIN_CLIP * sp, media.duration); snapAt = sn.t; }
         const useV = vOrig && (kind === 'video' || !ev.altKey);
-        if (useV) nout = Math.min(nout, orig.out + (nextStart - clipEnd(vOrig)), orig.out + (mediaDur(vOrig) - vOrig.out));
-        nout = Math.max(nout, orig.in + MIN_CLIP);
+        if (useV) nout = Math.min(nout, orig.out + (nextStart - clipEnd(vOrig)) * sp, orig.out + (mediaDur(vOrig) - vOrig.out));
+        nout = Math.max(nout, orig.in + MIN_CLIP * sp);
         store.live(() => { store.findClip(id).clip.out = nout; trimPartners(ev, 'r', nout - orig.out); });
-        if (kind === 'video') store.setTime(Math.max(orig.start, orig.start + (nout - orig.in) - 0.001));
+        if (kind === 'video') store.setTime(Math.max(orig.start, orig.start + (nout - orig.in) / sp - 0.001));
       } else if (kind === 'video' || vOrig) {
         // Перемещение видео (или звука, связанного с видео, — тогда едет видео, а звук за ним).
         // Каждый раз от исходного состояния: раздвинутые/затёртые соседи возвращаются на место.

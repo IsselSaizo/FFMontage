@@ -4,6 +4,7 @@
 import { store, placeVideo, MIN_CLIP } from './store.js';
 import { uid, clamp, toast } from './util.js';
 import { prepareMedia } from './media.js';
+import { srcAt, tlAt, clipEnd } from './clipTime.js';
 
 const api = window.api;
 
@@ -101,7 +102,7 @@ export async function freezeFrameAt(t = store.time, dur = 3) {
   const c = seg.clip;
   const m = store.media(c.mediaId);
   if (!m || !m.hasVideo) throw new Error('В клипе нет видео');
-  const local = clamp(c.in + (t - c.start), c.in, c.out - 0.001);
+  const local = clamp(srcAt(c, t), c.in, c.out - 0.001);
   store.setBusy(c.id, { label: 'Стоп-кадр', progress: 0.5 });
   try {
     const info = await api.fxFreeze(m, local);
@@ -111,16 +112,16 @@ export async function freezeFrameAt(t = store.time, dur = 3) {
       const id = ensureDerived(info, { kind: 'freeze', from: m.id, at: local });
       const cc = p.videoClips.find((x) => x.id === c.id);
       if (!cc) return;
-      const at = cc.start + (local - cc.in);
+      const at = tlAt(cc, local);
       // Разрезаем, если курсор внутри клипа
-      if (local - cc.in >= MIN_CLIP && cc.out - local >= MIN_CLIP) {
-        const right = { ...cc, id: uid('clp'), in: local, start: at, fadeIn: 0 };
+      if (at - cc.start >= MIN_CLIP && clipEnd(cc) - at >= MIN_CLIP) {
+        const right = { ...JSON.parse(JSON.stringify(cc)), id: uid('clp'), in: local, start: at, fadeIn: 0 };
         delete right.transition;
         cc.out = local; cc.fadeOut = 0;
         p.videoClips.push(right);
       }
       const fz = { id: uid('clp'), mediaId: id, in: 0, out: fdur, start: at, volume: 1, muted: false, fadeIn: 0, fadeOut: 0, name: 'Стоп-кадр' };
-      const insertAt = local - cc.in < MIN_CLIP ? cc.start : (cc.out - local < MIN_CLIP ? cc.start + cc.out - cc.in : at);
+      const insertAt = at - cc.start < MIN_CLIP ? cc.start : (clipEnd(cc) - at < MIN_CLIP ? clipEnd(cc) : at);
       placeVideo(p, fz, insertAt, 'insert');
       newId = fz.id;
     });

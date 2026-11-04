@@ -6,6 +6,7 @@ import { maxTransition } from './store.js';
 import { changeDuration } from './actions.js';
 import { isReversed, isFreeze } from './fx.js';
 import { EFFECTS, clipEffects } from './effects.js';
+import { speedOf, tlLen, fmtSpeed, SPEED_PRESETS, MIN_SPEED, MAX_SPEED } from './clipTime.js';
 
 const num = (x, d = 1) => String(Math.round(x * 10 ** d) / 10 ** d).replace('.', ',');
 
@@ -43,6 +44,47 @@ export function initInspector() {
     return h('label', { class: 'sec-wrap' }, inp, h('span', {}, 'с'));
   }
 
+  // Скорость ×0.1…×16: кнопки-пресеты, ползунок (логарифмический), поле ввода и «Сдвигать следующие клипы».
+  // Ползунок применяет значение, когда его отпустили (иначе каждое движение затирало бы соседей).
+  const RIPPLE_KEY = 'ffm.speedRipple';
+  function speedSection(clip) {
+    const cur = speedOf(clip);
+    const ripple = localStorage.getItem(RIPPLE_KEY) === '1';
+    const apply = (v) => {
+      const s = Math.min(MAX_SPEED, Math.max(MIN_SPEED, Math.round(v * 100) / 100));
+      const f = store.findClip(clip.id);
+      if (!f || Math.abs(s - speedOf(f.clip)) < 1e-6) { render(); return; }
+      store.setSpeed(clip.id, s, { ripple: localStorage.getItem(RIPPLE_KEY) === '1' });
+    };
+    const toPos = (s) => Math.log2(s);
+    const fromPos = (x) => 2 ** x;
+    const val = h('span', { class: 'vol-val' }, fmtSpeed(cur));
+    const slider = h('input', { type: 'range', class: 'slider', id: 'speed-slider', min: String(toPos(MIN_SPEED)), max: String(toPos(MAX_SPEED)), step: '0.01', value: String(toPos(cur)) });
+    // Около ×1 — «прилипает», чтобы легко вернуть обычную скорость
+    const snapped = () => { const s = fromPos(Number(slider.value)); return Math.abs(Math.log2(s)) < 0.06 ? 1 : s; };
+    slider.addEventListener('input', () => { val.textContent = fmtSpeed(Math.round(snapped() * 100) / 100); });
+    slider.addEventListener('change', () => apply(snapped()));
+    const inp = h('input', { class: 'input sec', type: 'text', id: 'speed-input', value: String(cur).replace('.', ','), title: `От ${MIN_SPEED} до ${MAX_SPEED}` });
+    inp.addEventListener('change', () => {
+      const v = Number(String(inp.value).replace(',', '.').replace(/^[x×]/i, ''));
+      if (isFinite(v) && v > 0) apply(v); else inp.value = String(cur).replace('.', ',');
+    });
+    inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); inp.blur(); } e.stopPropagation(); });
+    const chk = h('input', { type: 'checkbox', id: 'speed-ripple' });
+    chk.checked = ripple;
+    chk.addEventListener('change', () => localStorage.setItem(RIPPLE_KEY, chk.checked ? '1' : '0'));
+    const linked = store.linkedOf(clip.id).length;
+    return h('div', { class: 'insp-section', dataset: { section: 'speed' } }, h('h3', {}, 'Скорость'),
+      h('div', { class: 'presets' }, ...SPEED_PRESETS.map((s) => h('button', {
+        class: `chip${Math.abs(cur - s) < 1e-6 ? ' on' : ''}`, dataset: { speed: String(s) }, onclick: () => apply(s),
+      }, fmtSpeed(s)))),
+      h('div', { class: 'row gap', style: { marginTop: '8px' } }, slider, val, h('label', { class: 'sec-wrap' }, h('span', {}, '×'), inp)),
+      h('label', { class: 'check-row', title: 'Выключено: клип меняет длину на месте (ускоренный оставит пустоту, замедленный наедет на следующий). Включено: всё правее сдвигается.' },
+        chk, h('span', {}, 'Сдвигать следующие клипы')),
+      h('p', { class: 'muted small' }, `${cur !== 1 ? `Длина на таймлайне ${fmtTime(tlLen(clip))} (из файла ${fmtTime(clip.out - clip.in)}). ` : ''}Тон звука сохраняется.`
+        + (linked ? ' Звук этого видео меняет скорость вместе с ним.' : '')));
+  }
+
   const render = () => {
     // Не перерисовываем, пока пользователь тянет слайдер — иначе он «отпустится»
     if (liveBefore) return;
@@ -54,7 +96,7 @@ export function initInspector() {
     const { kind, clip } = sel;
     const m = store.media(clip.mediaId) || {};
     const srcMedia = m.derived ? store.media(m.derived.from) || m : m;
-    const dur = clip.out - clip.in;
+    const dur = tlLen(clip);
 
     root.append(h('div', { class: 'panel-head' }, h('h2', {}, kind === 'video' ? 'Видеоклип' : 'Аудиоклип')));
     root.append(h('div', { class: 'insp-file', title: srcMedia.path },
@@ -134,6 +176,9 @@ export function initInspector() {
       h('button', { class: 'btn ghost small', disabled: m.derived || (clip.in === 0 && Math.abs(clip.out - m.duration) < 0.001),
         onclick: () => store.setClip(clip.id, { in: 0, out: m.duration }) }, 'Исходная длина')));
     root.append(trim);
+
+    // --- Скорость (видео и аудио; у картинки и стоп-кадра скорости нет) ---
+    if (!(m.isImage && !m.isAnimation) && !isFreeze(clip)) root.append(speedSection(clip));
 
     // --- Фильтры (видео): список — во вкладке «Фильтры», подгонка и кадрирование — над плеером ---
     if (kind === 'video') {

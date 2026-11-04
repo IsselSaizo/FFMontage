@@ -7,6 +7,7 @@ import { importPaths } from './media.js';
 import { toggleReverse, freezeFrameAt, isReversed, isFreeze } from './fx.js';
 import { TRANSITIONS, MIN_DURATION as TR_MIN, MAX_DURATION as TR_MAX } from './transitions.js';
 import { h, icon, toast, uid, errText } from './util.js';
+import { speedOf, tlLen, clipEnd, srcAt, tlAt, MIN_SPEED, MAX_SPEED } from './clipTime.js';
 
 const api = window.api;
 
@@ -18,8 +19,8 @@ let encoders = null;
 // Помощники
 // ---------------------------------------------------------------------------
 const r3 = (x) => (typeof x === 'number' && isFinite(x) ? Math.round(x * 1000) / 1000 : x);
-const len = (c) => c.out - c.in;
-const end = (c) => c.start + c.out - c.in;
+const len = tlLen;      // длина на таймлайне (с учётом скорости)
+const end = clipEnd;
 const EPS = 1e-3;
 const even = (x) => Math.max(2, Math.round(x / 2) * 2);
 const fileName = (p) => String(p || '').split(/[\\/]/).pop();
@@ -121,6 +122,7 @@ function describeClip(c, kind, track = null) {
     fade_in: r3(c.fadeIn || 0), fade_out: r3(c.fadeOut || 0),
   };
   if (c.name) o.name = c.name;
+  if (speedOf(c) !== 1) o.speed = r3(speedOf(c));
   if (isReversed(c)) {
     const b = m.derived.out;
     o.reversed = true;
@@ -377,8 +379,9 @@ const TOOLS = {
     }
     const dur = numArg(args, 'duration', { min: MIN_CLIP });
     if (dur !== undefined) {
-      if (nin + dur > m.duration + 0.01) fail(`Maximum duration for this clip is ${r3(m.duration - nin)} s (file length minus source_in).`);
-      nout = Math.min(m.duration, nin + dur);
+      const sp0 = speedOf(c);
+      if (nin + dur * sp0 > m.duration + 0.01) fail(`Maximum duration for this clip is ${r3((m.duration - nin) / sp0)} s (file length minus source_in, at speed ${r3(sp0)}).`);
+      nout = Math.min(m.duration, nin + dur * sp0);
     }
     const volume = numArg(args, 'volume', { min: 0, max: 2 });
     const fadeIn = numArg(args, 'fade_in', { min: 0, max: 10 });
@@ -387,6 +390,9 @@ const TOOLS = {
     const name = strArg(args, 'name', { max: 200 });
     const start = numArg(args, 'start', { min: 0 });
     const insert = boolArg(args, 'insert');
+    const speed = numArg(args, 'speed', { min: MIN_SPEED, max: MAX_SPEED });
+    const shiftFollowing = boolArg(args, 'shift_following');
+    if (speed !== undefined && m.isImage && !m.isAnimation) fail('A still image has no speed; change its \"duration\" instead.');
     let tid = strArg(args, 'audio_track_id');
     if (tid !== undefined && f.kind !== 'audio') fail('"audio_track_id" applies only to audio clips.');
     tid = audioTrackArg(tid);
@@ -394,7 +400,7 @@ const TOOLS = {
 
     // Аудио: на дорожке клипы не должны накладываться
     if (f.kind === 'audio' && (start !== undefined || lengthChanged || tid)) {
-      const s = start ?? c.start; const e = s + (nout - nin);
+      const s = start ?? c.start; const e = s + (nout - nin) / speedOf(c);
       const target = tid === 'new' ? null : store.project.audioTracks.find((t) => t.id === (tid || f.track.id));
       const hit = target && target.clips.find((o) => o.id !== c.id && o.start < e - 1e-6 && end(o) > s + 1e-6);
       if (hit) fail(`The clip would overlap clip ${hit.id} (${r3(hit.start)}–${r3(end(hit))} s) on that audio track. Choose another start, trim it, or use audio_track_id "new".`);
@@ -423,6 +429,7 @@ const TOOLS = {
         }
       }
     });
+    if (speed !== undefined && Math.abs(speed - speedOf(c)) > 1e-6) store.setSpeed(c.id, speed, { ripple: !!shiftFollowing });
     ai('изменён клип');
     const d = describeById(c.id);
     const out = { clip: d };
@@ -635,7 +642,7 @@ const TOOLS = {
       const m = store.media(c.mediaId);
       if (!m || (store.runtime[m.id] || {}).missing) fail('The file of this clip is missing on disk.');
       file = m.path;
-      at = Math.min(Math.max(c.in + (t - c.start), c.in), c.out - 0.02);
+      at = Math.min(Math.max(srcAt(c, t), c.in), c.out - 0.02);
       const src = m.derived ? store.media(m.derived.from) : m;
       const tr = store.transitions().find((x) => t >= x.from && t <= x.to);
       text = `Timeline ${r3(t)} s → video clip ${c.id}${c.name ? ` "${c.name}"` : ''} from "${src ? src.name : m.name}"`
@@ -663,7 +670,7 @@ const TOOLS = {
         const a = Math.max(s.start, c.in);
         const b = Math.min(s.end === null || s.end === undefined ? m.duration : s.end, c.out);
         if (b - a < Math.min(md, 0.05)) continue;
-        const o = { timeline_start: r3(c.start + (a - c.in)), timeline_end: r3(c.start + (b - c.in)), duration: r3(b - a) };
+        const o = { timeline_start: r3(tlAt(c, a)), timeline_end: r3(tlAt(c, b)), duration: r3((b - a) / speedOf(c)) };
         if (!m.derived) { o.source_start = r3(a); o.source_end = r3(b); }
         out.push(o);
       }
