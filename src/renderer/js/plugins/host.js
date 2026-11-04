@@ -52,7 +52,7 @@ const TOOL_PERMS = {
   redo: 'project:write',
   set_playhead: 'project:write',
 };
-export const BLOCKED_TOOLS = ['import_media', 'open_project', 'save_project', 'new_project', 'export_video', 'export_status', 'cancel_export', 'get_frame', 'detect_silence'];
+export const BLOCKED_TOOLS = ['import_media', 'open_project', 'save_project', 'new_project', 'export_video', 'export_status', 'cancel_export', 'get_frame', 'detect_silence', 'remove_silence'];
 
 const ID_RE = /^[a-z0-9][a-z0-9-]{1,40}$/;
 const SUB_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,40}$/;

@@ -16,6 +16,8 @@ import './core/textStyles.js';
 import { fontList } from './fonts.js';
 import { parseSubtitles } from './subtitles.js';
 import { subtitleText } from './subtitlesUi.js';
+import { findPauses } from './edit.js';
+import { removeRanges } from './editOps.js';
 
 const api = window.api;
 
@@ -969,6 +971,28 @@ const TOOLS = {
     return {
       media_id: m.id, threshold_db: th, min_duration: md, count: out.length,
       total_silence: r3(out.reduce((s, x) => s + x.duration, 0)), media_duration: r3(m.duration), silences: out,
+    };
+  },
+
+  // 0.4.3: «Удалить паузы» — то же, что окно (js/edit.js): разрез по паузам, связанный звук вместе, сдвиг всех дорожек
+  async remove_silence(args) {
+    const th = numArg(args, 'threshold_db', { min: -90, max: 0, def: -35 });
+    const md = numArg(args, 'min_duration', { min: 0.05, max: 60, def: 0.5 });
+    const margin = numArg(args, 'margin', { min: 0, max: 2, def: 0.15 });
+    const f = clipArg(args.clip_id);
+    const m = store.media(f.clip.mediaId);
+    if (!m || !m.hasAudio || isText(f.clip)) fail('This clip has no sound.');
+    if ((f.lane && f.lane.locked) || (f.track && f.track.locked)) fail('The track of this clip is locked.');
+    const before = r3(store.duration());
+    let ranges;
+    try { ranges = await findPauses(f.clip.id, { threshold: th, minPause: md, margin }); } catch (e) { fail(`Silence detection failed: ${cleanErr(e)}`); }
+    let res = { removed: 0, skipped: [] };
+    if (ranges.length) store.mutate((p) => { res = removeRanges(p, f.clip.id, ranges); });
+    return {
+      clip_id: f.clip.id, removed_pauses: ranges.length, removed_seconds: r3(res.removed),
+      duration_before: before, duration_after: r3(store.duration()),
+      skipped_tracks: res.skipped,
+      note: ranges.length ? 'The clip was split; re-read get_project for the new clip ids.' : 'No pauses with these settings.',
     };
   },
 };

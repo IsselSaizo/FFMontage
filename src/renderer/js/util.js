@@ -223,6 +223,11 @@ const P = {
   text: '<path d="M5 6.5V5h14v1.5M12 5v14M9 19h6" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>',
   subtitles: '<rect x="3" y="5" width="18" height="14" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M6.5 15h5M13.5 15h4M6.5 11.5h3M11.5 11.5h6" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>',
   transform: '<rect x="6" y="6" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-dasharray="2.5 2"/><path d="M3 3h4v4H3zM17 3h4v4h-4zM3 17h4v4H3zM17 17h4v4h-4z" fill="currentColor"/>',
+  // 0.4.3: инструмент обрезки (ripple/roll/slip/slide), метки In/Out, паузы
+  trim: '<path d="M9 4v16M15 4v16" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M6 9l-3 3 3 3M18 9l3 3-3 3" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>',
+  markin: '<path d="M10 4H7v16h3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M13 12h7M17 9l3 3-3 3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>',
+  markout: '<path d="M14 4h3v16h-3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 12h7M7 9l-3 3 3 3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>',
+  silence: '<path d="M3 12h3l2-5 3 10 2-5h1M17 12h4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><path d="M15 9.5v5" stroke="currentColor" stroke-width="1.5" stroke-dasharray="1.5 1.5"/>',
 };
 export function icon(name, size = 20) {
   return `<svg class="ic" width="${size}" height="${size}" viewBox="0 0 24 24" aria-hidden="true">${P[name] || ''}</svg>`;

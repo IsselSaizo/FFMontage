@@ -297,7 +297,40 @@ kbd {
 /* Лезвие (B) */
 .blade-mode .tl-lane:not(.ruler-lane), .blade-mode .clip, .blade-mode .clip .handle { cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cpath d='M4 20L15.5 8.5M14 4l6 6-3 3-6-6z' fill='white' stroke='black' stroke-width='1.3' stroke-linejoin='round'/%3E%3C/svg%3E") 3 21, crosshair; }
 .tl-bladeline { position: absolute; left: 0; top: 28px; bottom: 0; width: 2px; margin-left: -1px; background: rgba(255, 60, 60, .55); box-shadow: 0 0 0 1px rgba(255, 60, 60, .18); z-index: 8; pointer-events: none; display: none; }
-#tb-blade.on, #tb-pointer.on { color: var(--accent); background: rgba(124, 92, 255, .14); }
+#tb-blade.on, #tb-pointer.on, #tb-trim.on { color: var(--accent); background: rgba(124, 92, 255, .14); }
+/* Режим нарезания 2.0 (0.4.3): лезвие с таймкодом, инструмент обрезки, метки In/Out */
+.bl-label { position: absolute; top: -2px; left: 6px; display: flex; align-items: center; gap: 4px; padding: 2px 5px; border-radius: 5px;
+  background: rgba(20, 20, 26, .92); border: 1px solid rgba(255, 60, 60, .5); color: #ffd0d0; font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.bl-img { height: 34px; border-radius: 3px; display: none; }
+.tb-hint { margin-left: 12px; font-size: 12px; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.trim-mode .clip, .trim-mode .clip .handle { cursor: ew-resize; }
+.trim-mode .tl-content[data-trim-op="roll"] .clip, .trim-mode .tl-content[data-trim-op="roll"] .clip .handle { cursor: col-resize; }
+.trim-mode .tl-content[data-trim-op="slip"] .clip { cursor: grab; }
+.trim-mode .tl-content[data-trim-op="slide"] .clip { cursor: move; }
+.trim-mode .clip .fade-knob { display: none; }
+.mark-range { position: absolute; top: 0; bottom: 0; background: rgba(124, 92, 255, .22); pointer-events: none; }
+.mark-flag { position: absolute; top: 0; bottom: 0; width: 7px; border: 2px solid #a48bff; pointer-events: none; }
+.mark-flag.in { border-right: 0; }
+.mark-flag.out { border-left: 0; margin-left: -7px; }
+.tl-markband { position: absolute; top: 28px; bottom: 0; background: rgba(124, 92, 255, .07); border-left: 1px solid rgba(164, 139, 255, .45); border-right: 1px solid rgba(164, 139, 255, .45); pointer-events: none; z-index: 4; }
+.th-actions .th-lock.on { color: #e6b422; }
+.trim-preview { position: absolute; inset: 0; z-index: 30; display: none; flex-direction: column; background: #000; }
+.trim-preview.on { display: flex; }
+.tp-title { padding: 6px 10px; font-size: 12px; color: var(--text-2); text-align: center; }
+.tp-panes { flex: 1; display: grid; grid-template-columns: 1fr 1fr; gap: 4px; min-height: 0; }
+.tp-pane { position: relative; min-width: 0; min-height: 0; background: #0b0b0e; }
+/* .stage video по умолчанию скрыт (слои плеера включаются классом .on) — у двойного кадра свои правила */
+.stage .tp-pane video, .stage .tp-pane img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; visibility: visible; }
+.tp-pane.l { border-right: 2px solid #ff5c5c; }
+.tp-pane.r { border-left: 2px solid #4fd1a5; }
+.tp-note { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--text-3); font-size: 13px; text-align: center; padding: 8px; }
+.tp-tc { position: absolute; left: 6px; bottom: 6px; right: 6px; font-size: 11px; color: #fff; text-shadow: 0 1px 2px #000; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
+.shuttle-badge { position: absolute; right: 10px; top: 10px; z-index: 41; padding: 3px 9px; border-radius: 7px; font-size: 12px; font-weight: 600;
+  background: rgba(0,0,0,.65); color: #fff; display: none; pointer-events: none; font-variant-numeric: tabular-nums; }
+.shuttle-badge.on { display: block; }
+.modal-body.pauses { display: flex; flex-direction: column; gap: 10px; }
+.pauses-field { display: grid; grid-template-columns: 130px 1fr 64px; align-items: center; gap: 10px; font-size: 13px; }
+.pauses-field .vol-val { text-align: right; }
 .tb-sep.small { height: 16px; margin: 0 3px; }
 .monitor { display: flex; align-items: center; gap: 4px; margin-right: 8px; }
 .monitor-slider { width: 90px; accent-color: var(--accent); }

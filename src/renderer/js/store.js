@@ -7,6 +7,8 @@ import { MIN_DURATION as TR_MIN, MAX_DURATION as TR_MAX, DEFAULT_DURATION as TR_
 import { cleanTransform } from './transform.js';
 import { isText, cleanText, textTitle, TEXT_MAX, TEXT_DEFAULT_DUR } from './textModel.js';
 import { cleanSubStyle } from './subtitles.js';
+// Циклический импорт безопасен: editOps использует экспорты store.js только при вызове функций
+import { rippleShift, snapFrame } from './editOps.js';
 
 export const MIN_CLIP = 0.1;   // минимальная длина клипа, с
 export const ADJ = 0.002;      // допуск «стоят впритык», с
@@ -135,6 +137,7 @@ export function normalizeProject(p) {
     for (const t of tracks) {
       if (!t.id) t.id = uid('trk');
       t.muted = !!t.muted; t.solo = !!t.solo;
+      if (t.locked) t.locked = true; else delete t.locked;
       t.volume = isFinite(t.volume) ? Number(t.volume) : 1;
       t.clips = t.clips || []; t.clips.forEach(fix);
     }
@@ -154,10 +157,21 @@ export function normalizeProject(p) {
     }
     if (!s.videoTracks.length) delete s.videoTracks;
   };
+  // Метки In/Out (0.4.3): { in?, out? } — секунды таймлайна открытого эпизода
+  const fixMarks = (s) => {
+    const m = s.marks && typeof s.marks === 'object' ? s.marks : {};
+    const ok = (x) => typeof x === 'number' && isFinite(x) && x >= 0;
+    const out = {};
+    if (ok(m.in)) out.in = m.in;
+    if (ok(m.out)) out.out = m.out;
+    if (out.in !== undefined && out.out !== undefined && out.out < out.in) [out.in, out.out] = [out.out, out.in];
+    if (Object.keys(out).length) s.marks = out; else delete s.marks;
+  };
   p.videoClips.forEach(fix);
   fixVTracks(p);
   fixTracks(p.audioTracks);
   fixSubTracks(p);
+  fixMarks(p);
   // Эпизоды (кроме открытого) хранят своё содержимое сами
   if (Array.isArray(p.episodes) && p.episodes.length) {
     if (!p.episodes.some((e) => e.id === p.activeEpisode)) p.activeEpisode = p.episodes[0].id;
@@ -166,6 +180,7 @@ export function normalizeProject(p) {
       e.videoClips = e.videoClips || []; e.videoClips.forEach(fix);
       fixVTracks(e);
       fixSubTracks(e);
+      fixMarks(e);
       e.audioTracks = e.audioTracks && e.audioTracks.length ? e.audioTracks : [newTrack()];
       fixTracks(e.audioTracks);
     }
@@ -714,7 +729,7 @@ class Store {
   swapIn(p, id) {
     const cur = p.episodes.find((e) => e.id === p.activeEpisode);
     // Поля открытого эпизода, кроме клипов: имя и флаги основной видеодорожки, верхние видеодорожки
-    const OWN = ['videoTracks', 'videoName', 'videoHidden', 'videoLocked', 'subtitleTracks'];
+    const OWN = ['videoTracks', 'videoName', 'videoHidden', 'videoLocked', 'subtitleTracks', 'marks'];
     if (cur) {
       cur.videoClips = p.videoClips; cur.audioTracks = p.audioTracks; cur.time = this.time;
       for (const k of OWN) { if (p[k] !== undefined) cur[k] = p[k]; else delete cur[k]; }
@@ -1188,7 +1203,12 @@ class Store {
 
   // Разрезать клип по времени таймлайна t. withLinked (по умолчанию) — вместе со связанными
   // (видео + его звук), иначе связь половин рвётся: удаление левой половины убрало бы весь звук.
+  // Частота проекта — для привязки точек правки ко кадрам (B-6)
+  fps() { return this.sourceFormat().fps || 30; }
+  frameT(t) { return snapFrame(t, this.fps()); }
+
   splitAt(t, id = null, { withLinked = true } = {}) {
+    t = this.frameT(t);
     const hit = (c) => t > c.start + MIN_CLIP - 1e-6 && t < end(c) - MIN_CLIP + 1e-6;
     // Без id — клип основной дорожки под курсором, иначе самый верхний
     if (!id) id = [...vlanes(this.project)].map((l) => l.clips.find(hit)).filter(Boolean)[0]?.id || null;
@@ -1200,10 +1220,12 @@ class Store {
 
   // Alt+S: разрезать всё, что под курсором, на всех дорожках
   splitAll(t) {
+    t = this.frameT(t);
     const ids = [];
-    const hit = (c) => t > c.start + MIN_CLIP && t < end(c) - MIN_CLIP;
-    for (const c of allVideo(this.project)) if (hit(c)) ids.push(c.id);
-    for (const tr of this.project.audioTracks) for (const c of tr.clips) if (hit(c)) ids.push(c.id);
+    // Тот же допуск, что у splitAt (B-6); дорожки с замком не режем
+    const hit = (c) => t > c.start + MIN_CLIP - 1e-6 && t < end(c) - MIN_CLIP + 1e-6;
+    for (const l of vlanes(this.project)) if (!l.locked) for (const c of l.clips) if (hit(c)) ids.push(c.id);
+    for (const tr of this.project.audioTracks) if (!tr.locked) for (const c of tr.clips) if (hit(c)) ids.push(c.id);
     return this.splitClips(t, ids);
   }
 
@@ -1230,21 +1252,27 @@ class Store {
     return done;
   }
 
-  // Удалить клип; ripple — сдвинуть следующие клипы дорожки на место удалённого
+  // Удалить клип; ripple — сдвинуть следующее на место удалённого — на всех дорожках без замка (B-5):
+  // дорожка, где сдвиг упёрся бы в другой клип (например, музыка лежит поперёк), остаётся на месте.
+  // → { skipped: [id дорожек] }
   deleteClip(id, { ripple = false } = {}) {
     const f = this.findClip(id);
-    if (!f) return;
+    if (!f) return { skipped: [] };
     // Видео удаляется вместе со своим звуком
     const L = f.kind === 'video' ? f.clip.link : null;
+    let res = { skipped: [] };
     this.mutate((p) => {
       const d = len(f.clip);
+      const s = f.clip.start;
       const e = end(f.clip);
       const list = f.kind === 'video' ? f.lane.clips : f.track.clips;
       const rest = list.filter((c) => c.id !== id);
-      if (ripple) for (const c of rest) if (c.start >= e - ADJ) c.start = Math.max(0, c.start - d);
       if (f.kind === 'video') f.lane.clips = rest; else f.track.clips = rest;
       if (L) for (const t of p.audioTracks) t.clips = t.clips.filter((c) => c.link !== L);
+      // Сдвиг — только если на месте клипа стало пусто на его дорожке (рядом нет другого клипа поперёк)
+      if (ripple) res = rippleShift(p, e, -Math.min(d, e - s));
     });
+    return res;
   }
 
   // Клипы дорожки: 'video', id верхней видеодорожки или id аудиодорожки
@@ -1264,22 +1292,19 @@ class Store {
     const g = this.gaps(lane).find(([a, b]) => at >= a - ADJ && at <= b + ADJ);
     if (!g) return 0;
     const shift = g[1] - g[0];
-    this.mutate((p) => {
-      const list = this.laneClips(p, lane).clips;
-      for (const c of list) if (c.start >= g[1] - ADJ) c.start = Math.max(0, c.start - shift);
-    });
+    // Вместе с дорожкой едут и остальные (B-5): звук и титры не съезжают относительно видео
+    this.mutate((p) => { rippleShift(p, g[1], -shift); });
     return shift;
   }
 
   closeAllGaps(lane) {
-    const n = this.gaps(lane).length;
-    if (!n) return 0;
+    const gaps = this.gaps(lane);
+    if (!gaps.length) return 0;
+    // Справа налево: каждая пустота закрывается сдвигом всех дорожек, где это возможно
     this.mutate((p) => {
-      const list = this.laneClips(p, lane).clips;
-      let t = 0;
-      for (const c of [...list].sort(byStart)) { c.start = Math.min(c.start, t); t = Math.max(t, end(c)); }
+      for (const [g0, g1] of [...gaps].reverse()) rippleShift(p, g1, -(g1 - g0));
     });
-    return n;
+    return gaps.length;
   }
 
   duplicateClip(id) {

@@ -9,7 +9,9 @@ import { openClipMenu, openLaneMenu, splitClip } from './actions.js';
 import { isReversed, isFreeze } from './fx.js';
 import { transitionById } from './transitions.js';
 import { clipEffects, effectById } from './effects.js';
-import { speedOf, tlLen, clipEnd, fmtSpeed } from './clipTime.js';
+import { speedOf, tlLen, clipEnd, fmtSpeed, srcAt } from './clipTime.js';
+import { neighbours, rippleTrim, rollEdit, slipClip, slideClip, trimFrames, snapFrame } from './editOps.js';
+import { reportSkipped } from './edit.js';
 import { activeFx, fxSummary } from './audioFx.js';
 import { t, getLang } from './i18n.js';
 import { withKey } from './keymap.js';
@@ -55,9 +57,12 @@ export class Timeline {
     this.playhead = h('div', { class: 'tl-playhead' }, h('div', { class: 'ph-knob' }));
     this.marker = h('div', { class: 'tl-insert' });
     this.snapLine = h('div', { class: 'tl-snapline' });
-    this.bladeLine = h('div', { class: 'tl-bladeline' });
+    this.bladeTc = h('span', { class: 'bl-tc' });
+    this.bladeImg = h('img', { class: 'bl-img', draggable: 'false' });
+    this.bladeLine = h('div', { class: 'tl-bladeline' }, h('div', { class: 'bl-label' }, this.bladeImg, this.bladeTc));
+    this.markBand = h('div', { class: 'tl-markband' });
     this.content.addEventListener('pointermove', (e) => this.onBladeHover(e));
-    this.content.addEventListener('pointerleave', () => { this.bladeLine.style.display = 'none'; });
+    this.content.addEventListener('pointerleave', () => { this.bladeLine.style.display = 'none'; if (this.tool === 'trim' && !this.drag) this.setHint(''); });
 
     const rerender = rafThrottle(() => this.render());
     store.on('project', () => { if (this.autoFit && !this.drag) this.fit(false); rerender(); });
@@ -65,6 +70,7 @@ export class Timeline {
     store.on('selection', rerender);
     store.on('busy', rerender);
     store.on('mode', rerender);
+    store.on('marks', rerender);
     store.on('time', () => this.updatePlayhead());
     this.scroll.addEventListener('scroll', rafThrottle(() => this.render()));
     // Во время перетаскивания масштаб не трогаем: иначе клип «уезжает» из-под мыши
@@ -103,11 +109,13 @@ export class Timeline {
       h('div', { class: 'tb-group' },
         this.pointerBtn = b('pointer', [t('Выделение'), 'tool.select'], () => this.setTool('select'), 'tb-pointer'),
         this.bladeBtn = b('blade', '', () => this.setTool(this.tool === 'blade' ? 'select' : 'blade'), 'tb-blade'),
+        this.trimBtn = b('trim', '', () => this.setTool(this.tool === 'trim' ? 'select' : 'trim'), 'tb-trim'),
         h('div', { class: 'tb-sep small' }),
         this.splitBtn = b('split', '', (e) => (e.altKey ? this.splitAllAction() : this.splitAction()), 'tb-split'),
         b('trash', [t('Удалить выделенное'), 'clip.delete'], () => this.deleteAction(), 'tb-delete'),
         this.magnetBtn),
       h('div', { class: 'tb-time', id: 'tb-time' }),
+      this.hintEl = h('div', { class: 'tb-hint', id: 'tb-hint' }),
       h('div', { class: 'tb-spacer' }),
       h('div', { class: 'tb-group zoom' },
         b('minus', t('Уменьшить'), () => this.setZoom(this.pps / 1.4, null, true)),
@@ -124,30 +132,144 @@ export class Timeline {
   updateKeyTips() {
     this.bladeBtn.title = `${withKey(t('Лезвие'), 'tool.blade')}: ${t('щелчок по клипу разрезает его в этом месте вместе со связанным звуком; Alt+щелчок — только этот клип')}`;
     this.splitBtn.title = `${withKey(t('Разрезать по курсору'), 'clip.split')}; ${withKey(t('всё под курсором — видео и звук'), 'clip.splitAll')}`;
+    this.bladeBtn.title += `; ${t('Shift+щелчок — все дорожки')}`;
+    this.trimBtn.title = `${withKey(t('Обрезка'), 'tool.trim')}: ${t('край клипа — ripple (следующие едут следом), стык двух клипов — roll, нижняя часть клипа — slip, верхняя (с названием) — slide')}`;
   }
 
-  // Инструмент: 'select' — выделение и перетаскивание, 'blade' — лезвие (как в DaVinci Resolve)
+  // Инструмент: 'select' — выделение и перетаскивание, 'blade' — лезвие (как в DaVinci Resolve),
+  // 'trim' — обрезка (0.4.3): ripple / roll / slip / slide в зависимости от места на клипе
   setTool(tool) {
     this.tool = tool;
     const blade = tool === 'blade';
     this.root.classList.toggle('blade-mode', blade);
+    this.root.classList.toggle('trim-mode', tool === 'trim');
     this.bladeBtn.classList.toggle('on', blade);
-    this.pointerBtn.classList.toggle('on', !blade);
+    this.trimBtn.classList.toggle('on', tool === 'trim');
+    this.pointerBtn.classList.toggle('on', tool === 'select');
     if (!blade && this.bladeLine) this.bladeLine.style.display = 'none';
+    if (tool !== 'trim') { delete this.content.dataset.trimOp; this.setHint(''); }
   }
 
-  // Время лезвия под мышью: с магнитом к курсору воспроизведения
+  setHint(text) { if (this.hintEl && this.hintEl.textContent !== text) this.hintEl.textContent = text; }
+
+  // Время лезвия под мышью: магнит к курсору воспроизведения и краям клипов, затем — ко кадру
   bladeTime(ev) {
     const t = this.xToTime(ev.clientX);
-    return this.snap(t, [store.time], ev).t;
+    return store.frameT(this.snap(t, this.snapPoints(null), ev).t);
   }
 
   onBladeHover(ev) {
+    if (this.tool === 'trim' && !this.drag) { this.onTrimHover(ev); return; }
     if (this.tool !== 'blade' || this.drag) return;
     const overLanes = ev.target.closest && ev.target.closest('.tl-lane') && !ev.target.closest('.ruler-lane');
     if (!overLanes) { this.bladeLine.style.display = 'none'; return; }
+    const bt = this.bladeTime(ev);
     this.bladeLine.style.display = 'block';
-    this.bladeLine.style.transform = `translateX(${HEAD_W + this.bladeTime(ev) * this.pps}px)`;
+    this.bladeLine.style.transform = `translateX(${HEAD_W + bt * this.pps}px)`;
+    // Таймкод и кадр под лезвием (миниатюра — из плёнки клипа)
+    this.bladeTc.textContent = fmtTime(bt);
+    const clipEl = ev.target.closest('.clip');
+    const f = clipEl && store.findClip(clipEl.dataset.id);
+    const rt = f && f.kind === 'video' && !isText(f.clip) ? store.runtime[f.clip.mediaId] : null;
+    if (rt && rt.thumbs && rt.thumbs.urls.length) {
+      const idx = clamp(Math.round(srcAt(f.clip, bt) / rt.thumbs.interval), 0, rt.thumbs.urls.length - 1);
+      if (this.bladeImg.dataset.src !== rt.thumbs.urls[idx]) { this.bladeImg.dataset.src = rt.thumbs.urls[idx]; this.bladeImg.src = rt.thumbs.urls[idx]; }
+      this.bladeImg.style.display = 'block';
+    } else this.bladeImg.style.display = 'none';
+  }
+
+  // ------------------------------------------------------------------------
+  // Инструмент обрезки (0.4.3)
+  // ------------------------------------------------------------------------
+  // Что сделает перетаскивание в этой точке: { op: 'ripple-l'|'ripple-r'|'roll'|'slip'|'slide', id } или null
+  trimOpAt(ev) {
+    const clipEl = ev.target.closest && ev.target.closest('.clip');
+    if (!clipEl) return null;
+    const id = clipEl.dataset.id;
+    const n = neighbours(store.project, id);
+    if (!n) return null;
+    const r = clipEl.getBoundingClientRect();
+    const x = ev.clientX;
+    const EDGE = Math.min(12, r.width / 4);
+    const ROLL = 5;
+    if (x - r.left <= EDGE) {
+      // У стыка с соседом впритык (или с Alt) — roll левого стыка, иначе ripple начала
+      if (n.prev && n.prevAdj && (x - r.left <= ROLL || ev.altKey)) return { op: 'roll', id: n.prev.id };
+      return { op: 'ripple-l', id };
+    }
+    if (r.right - x <= EDGE) {
+      if (n.next && n.nextAdj && (r.right - x <= ROLL || ev.altKey)) return { op: 'roll', id };
+      return { op: 'ripple-r', id };
+    }
+    if (isText(n.clip)) return { op: 'slide', id };
+    return { op: ev.clientY - r.top < r.height * 0.45 ? 'slide' : 'slip', id };
+  }
+
+  onTrimHover(ev) {
+    const o = this.trimOpAt(ev);
+    if (o) this.content.dataset.trimOp = o.op; else delete this.content.dataset.trimOp;
+    const HINT = {
+      'ripple-l': t('Ripple: начало клипа, всё правее сдвинется'),
+      'ripple-r': t('Ripple: конец клипа, всё правее сдвинется'),
+      roll: t('Roll: двигать стык, длина ролика не меняется'),
+      slip: t('Slip: двигать содержимое внутри клипа'),
+      slide: t('Slide: двигать клип между соседями'),
+    };
+    this.setHint(o ? HINT[o.op] : t('Обрезка: наведите на край, стык или середину клипа'));
+  }
+
+  // Перетаскивание инструментом обрезки: каждый шаг — от исходного проекта; в плеере — два кадра правки
+  startTrimDrag(e, o) {
+    const f = store.findClip(o.id);
+    if (!f) return;
+    if ((f.lane && f.lane.locked) || (f.track && f.track.locked)) {
+      toast(t('Дорожка «{name}» закрыта замком', { name: store.trackName(f.lane ? f.lane.id : f.track.id) }), 'info', 1600);
+      return;
+    }
+    if (store.busy[o.id]) return;
+    store.select({ kind: f.kind, id: o.id });
+    const before = store.snapshot();
+    const x0 = e.clientX;
+    const fps = store.fps();
+    let moved = false; let got = 0;
+    const NAMES = { 'ripple-l': 'Ripple', 'ripple-r': 'Ripple', roll: 'Roll', slip: 'Slip', slide: 'Slide' };
+    this.drag = { mode: 'trim', id: o.id };
+    document.body.classList.add('is-trimming');
+    const apply = (ev) => {
+      const d = snapFrame((ev.clientX - x0) / this.pps, fps);
+      store.live(() => {
+        store.project = JSON.parse(before);
+        const p = store.project;
+        const linked = !ev.altKey || o.op === 'roll';
+        if (o.op === 'ripple-l') got = rippleTrim(p, o.id, 'l', d, { linked });
+        else if (o.op === 'ripple-r') got = rippleTrim(p, o.id, 'r', d, { linked });
+        else if (o.op === 'roll') got = rollEdit(p, o.id, d);
+        else if (o.op === 'slip') got = -slipClip(p, o.id, -d); // содержимое едет вслед за мышью
+        else got = slideClip(p, o.id, d);
+      });
+      const frames = trimFrames(store.project, o.op, o.id);
+      store.emit('trim-preview', { op: o.op, frames });
+      this.setHint(`${NAMES[o.op]} ${got >= 0 ? '+' : '−'}${fmtTime(Math.abs(got))}`);
+      this.autoScroll(ev.clientX);
+    };
+    const onMove = (ev) => {
+      if (!moved && Math.abs(ev.clientX - x0) < DRAG_THRESHOLD) return;
+      moved = true;
+      apply(ev);
+    };
+    const onUp = (ev) => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      document.body.classList.remove('is-trimming');
+      this.drag = null;
+      store.emit('trim-preview', null);
+      this.setHint('');
+      if (!moved) { store.setTime(this.xToTime(ev.clientX)); this.render(); return; }
+      store.commitFrom(before);
+      this.render();
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
   }
 
   splitAllAction() {
@@ -206,7 +328,10 @@ export class Timeline {
     if (!s || s.kind === 'track' || s.kind === 'strack') return;
     if (s.kind === 'transition') { store.setTransition(s.id, null); return; }
     if (s.kind === 'cue') { const f = store.findCue(s.id); if (f && !f.track.locked) store.deleteCue(s.id); return; }
-    store.deleteClip(s.id, { ripple });
+    const f = store.findClip(s.id);
+    if (f && ((f.lane && f.lane.locked) || (f.track && f.track.locked))) { toast(t('Дорожка «{name}» закрыта замком', { name: store.trackName(f.lane ? f.lane.id : f.track.id) }), 'info', 1600); return; }
+    const r = store.deleteClip(s.id, { ripple });
+    if (ripple && r) reportSkipped(r.skipped);
   }
 
   // ------------------------------------------------------------------------
@@ -292,6 +417,13 @@ export class Timeline {
       }, 'S');
       const delBtn = h('button', { class: 'icon-btn tiny', title: t('Удалить дорожку'), onclick: () => store.removeAudioTrack(trk.id) });
       delBtn.innerHTML = icon('close', 13);
+      // Замок (0.4.3): клипы дорожки не двигаются, не режутся и не сдвигаются при ripple
+      const lockBtn = h('button', {
+        class: `icon-btn tiny th-lock${trk.locked ? ' on' : ''}`,
+        title: trk.locked ? t('Снять замок') : t('Замок: клипы дорожки нельзя двигать и менять, ripple их не сдвигает'),
+        onclick: () => store.setTrack(trk.id, { locked: !trk.locked }),
+      });
+      lockBtn.innerHTML = icon(trk.locked ? 'lock' : 'unlock', 13);
       const trSel = store.selection && store.selection.kind === 'track' && store.selection.id === trk.id;
       const head = h('div', {
         class: `tl-head audio-head${trSel ? ' selected' : ''}`, dataset: { trackHead: trk.id },
@@ -301,9 +433,9 @@ export class Timeline {
         h('div', { class: 'th-row' },
           h('span', { class: 'th-ic', html: icon('music', 15) }), this.trackNameEl(trk.id),
           activeFx(trk.afx).length ? h('span', { class: 'th-fx', title: t('Эффекты дорожки: {fx}', { fx: fxSummary(trk.afx) }) }, 'ƒx') : null,
-          h('span', { class: 'th-actions' }, soloBtn, muteBtn, store.project.audioTracks.length > 1 || trk.clips.length ? delBtn : null)),
+          h('span', { class: 'th-actions' }, soloBtn, muteBtn, lockBtn, store.project.audioTracks.length > 1 || trk.clips.length ? delBtn : null)),
         this.trackVolumeEl(trk));
-      this.content.append(h('div', { class: 'tl-row audio', dataset: { track: trk.id } }, head, lane));
+      this.content.append(h('div', { class: `tl-row audio${trk.locked ? ' lane-locked' : ''}`, dataset: { track: trk.id } }, head, lane));
       if (!trk.clips.length && i === 0) lane.append(h('div', { class: 'lane-hint' }, t('Музыка и звук')));
       // На аудиодорожках показываем только пустоты между клипами (музыка может начинаться не с нуля)
       if (!this.drag) for (const g of store.gaps(trk.id)) if (g[0] > ADJ) lane.append(this.gapEl(g, trk.id));
@@ -322,6 +454,7 @@ export class Timeline {
         h('span', { class: 'lane-hint left' }, t('Перетащите аудио сюда, чтобы создать новую дорожку')))));
 
     this.content.append(this.playhead, this.marker, this.snapLine, this.bladeLine);
+    this.drawMarks(rulerLane);
     this.updatePlayhead();
     this.updateToolbar();
   }
@@ -402,6 +535,24 @@ export class Timeline {
     r.addEventListener('change', () => { store.commitFrom(before); before = null; });
     r.addEventListener('dblclick', () => store.setTrack(trk.id, { volume: 1 }));
     return h('div', { class: 'th-row vol' }, r, val);
+  }
+
+  // Метки In / Out (0.4.3): скобки на линейке и полупрозрачная полоса через все дорожки
+  drawMarks(rulerLane) {
+    const m = store.project.marks || {};
+    const has = (k) => typeof m[k] === 'number';
+    if (!has('in') && !has('out')) return;
+    const a = has('in') ? m.in : 0;
+    const b = has('out') ? m.out : Math.max(store.duration(), a);
+    const x0 = a * this.pps; const w = Math.max(0, (b - a) * this.pps);
+    rulerLane.append(h('div', { class: 'mark-range', style: { left: `${x0}px`, width: `${w}px` } }));
+    if (has('in')) rulerLane.append(h('div', { class: 'mark-flag in', title: t('In {t}', { t: fmtTime(m.in) }), style: { left: `${m.in * this.pps}px` } }));
+    if (has('out')) rulerLane.append(h('div', { class: 'mark-flag out', title: t('Out {t}', { t: fmtTime(m.out) }), style: { left: `${m.out * this.pps}px` } }));
+    if (has('in') && has('out')) {
+      this.markBand.style.left = `${HEAD_W + x0}px`;
+      this.markBand.style.width = `${w}px`;
+      this.content.append(this.markBand);
+    }
   }
 
   drawRuler(lane) {
@@ -726,13 +877,26 @@ export class Timeline {
     e.preventDefault();
 
     // Лезвие: щелчок по клипу разрезает его в этом месте (вместе со связанными; Alt — только его), курсор не двигается
+    // Shift+щелчок лезвием — все дорожки без замка в этой точке
     if (this.tool === 'blade' && !e.target.closest('.ruler-lane')) {
+      if (e.shiftKey && e.target.closest('.tl-lane')) {
+        if (!store.splitAll(this.bladeTime(e))) toast(t('Здесь нечего разрезать'), 'info', 1500);
+        return;
+      }
       if (clipEl) {
         const bt = this.bladeTime(e);
+        const f0 = store.findClip(clipEl.dataset.id);
+        if (f0 && ((f0.lane && f0.lane.locked) || (f0.track && f0.track.locked))) { toast(t('Дорожка «{name}» закрыта замком', { name: store.trackName(f0.lane ? f0.lane.id : f0.track.id) }), 'info', 1600); return; }
         const n = store.splitAt(bt, clipEl.dataset.id, { withLinked: !e.altKey });
         if (!n) toast(t('Слишком близко к краю клипа'), 'info', 1500);
       }
       return;
+    }
+
+    // Обрезка (0.4.3): ripple / roll / slip / slide; мимо клипа — перемотка
+    if (this.tool === 'trim' && clipEl) {
+      const o = this.trimOpAt(e);
+      if (o) { this.startTrimDrag(e, o); return; }
     }
 
     if (!clipEl) {
@@ -766,6 +930,12 @@ export class Timeline {
     // Видеодорожка с замком: клип (и связанный с ним звук) только выделяется
     const vFound = vOrig && store.findClip(vOrig.id);
     const fromLane = vFound && vFound.lane ? vFound.lane.id : null;
+    // Аудиодорожка с замком (0.4.3): клип только выделяется
+    if (f.kind === 'audio' && f.track.locked) {
+      if (!knob && !handle) store.setTime(this.xToTime(e.clientX));
+      toast(t('Дорожка «{name}» закрыта замком', { name: store.trackName(f.track.id) }), 'info', 1600);
+      return;
+    }
     if (vFound && vFound.lane && vFound.lane.locked) {
       if (!knob && !handle) store.setTime(this.xToTime(e.clientX));
       toast(t('Дорожка «{name}» закрыта замком', { name: store.trackName(fromLane) }), 'info', 1600);

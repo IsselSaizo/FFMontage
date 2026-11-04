@@ -185,7 +185,7 @@ async function main() {
     const names = list.result.tools.map((t) => t.name);
     const expected = ['get_project', 'import_media', 'add_clip', 'update_clip', 'split_clip', 'delete_clip', 'reverse_clip',
       'freeze_frame', 'set_transition', 'close_gaps', 'undo', 'redo', 'set_playhead', 'new_project', 'open_project',
-      'save_project', 'export_video', 'export_status', 'cancel_export', 'get_frame', 'detect_silence'];
+      'save_project', 'export_video', 'export_status', 'cancel_export', 'get_frame', 'detect_silence', 'remove_silence'];
     ok(expected.every((n) => names.includes(n)), `tools/list: ${names.length} инструментов`);
     ok(list.result.tools.every((t) => t.inputSchema && t.inputSchema.type === 'object' && t.description), 'у всех инструментов есть описание и схема');
     const unk = await cl.rpc('no/such/method', {});
@@ -329,6 +329,11 @@ async function main() {
     ok(Array.isArray(sil.silences) && typeof sil.total_silence === 'number', `detect_silence(media): найдено пауз ${sil.count}`);
     const sil2 = await cl.ok('detect_silence', { clip_id: cm.id }, 120000);
     ok(Array.isArray(sil2.silences), `detect_silence(clip): найдено пауз ${sil2.count}`);
+    // 0.4.3: remove_silence — строгий порог на клипе без пауз ничего не режет, ошибка на несуществующем клипе
+    const rs = await cl.ok('remove_silence', { clip_id: cm.id, threshold_db: -90, min_duration: 5 }, 120000);
+    ok(rs.removed_pauses === 0 && rs.duration_before === rs.duration_after, `remove_silence без пауз: ${JSON.stringify(rs)}`);
+    const rsBad = await cl.tool('remove_silence', { clip_id: 'nope' });
+    ok(rsBad.isError, 'remove_silence(неизвестный клип) → ошибка');
 
     console.log('Сохранение и экспорт:');
     const sv = await cl.ok('save_project', { path: path.join(PROJ, 'mcp-test') });

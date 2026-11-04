@@ -24,6 +24,9 @@ import { closePopover, popoverOpen } from './popover.js';
 import { initFonts } from './fonts.js';
 import { initSubtitleOverlay, importSubtitles } from './subtitlesUi.js';
 import { installDropped } from './vst.js';
+import * as edit from './edit.js';
+import { initShuttle } from './shuttle.js';
+import { initTrimPreview } from './trimPreview.js';
 
 // Мост для ИИ-ассистента грузим отдельно: если с ним что-то не так, редактор всё равно запустится
 const mcpReady = import('./mcpBridge.js').catch((e) => { console.error('mcpBridge', e); return null; });
@@ -33,7 +36,7 @@ const pluginsReady = import('./plugins/host.js').catch((e) => { console.error('p
 let pluginHost = null;
 
 const api = window.api;
-let preview; let timeline; let transport;
+let preview; let timeline; let transport; let shuttle;
 
 // ---------------------------------------------------------------------------
 // Верхняя панель
@@ -290,6 +293,23 @@ function initKeys() {
     'tool.blade': () => timeline.setTool(timeline.tool === 'blade' ? 'select' : 'blade'),
     'timeline.magnet': () => timeline.toggleMagnet(),
     'play.toggle': () => preview.toggle(),
+    'play.shuttleBack': (e) => shuttle.back(e),
+    'play.shuttleStop': (e) => shuttle.stop(e),
+    'play.shuttleFwd': (e) => shuttle.forward(e),
+    'tool.trim': () => timeline.setTool(timeline.tool === 'trim' ? 'select' : 'trim'),
+    'clip.trimStartRipple': () => edit.trimToPlayhead('start', true),
+    'clip.trimEndRipple': () => edit.trimToPlayhead('end', true),
+    'clip.trimStart': () => edit.trimToPlayhead('start', false),
+    'clip.trimEnd': () => edit.trimToPlayhead('end', false),
+    'clip.removePauses': () => { const id = clipSel() || edit.clipAtTime(store.time, { inside: false }); if (id) edit.openPausesDialog(id); },
+    'mark.in': () => edit.markIn(),
+    'mark.out': () => edit.markOut(),
+    'mark.clip': () => edit.markClip(),
+    'mark.clear': () => edit.clearMarks(),
+    'mark.goIn': () => edit.goToMark('in'),
+    'mark.goOut': () => edit.goToMark('out'),
+    'edit.lift': () => edit.liftOrExtract(false),
+    'edit.extract': () => edit.liftOrExtract(true),
     'play.frameBack': () => store.setTime(store.time - step()),
     'play.frameFwd': () => store.setTime(store.time + step()),
     'play.secBack': () => store.setTime(store.time - 1),
@@ -315,7 +335,7 @@ function initKeys() {
     if (dispatchKey(e, typing)) return;
     if (typing) return;
     // Esc не переназначается: выйти из лезвия или снять выделение
-    if (e.key === 'Escape' && !e.ctrlKey && !e.altKey) { if (timeline.tool === 'blade') timeline.setTool('select'); else store.select(null); return; }
+    if (e.key === 'Escape' && !e.ctrlKey && !e.altKey) { if (timeline.tool !== 'select') timeline.setTool('select'); else store.select(null); return; }
     // Не отдаём WebView его собственные сочетания (Ctrl+S «сохранить страницу» и т.п.)
     if ((e.ctrlKey || e.metaKey) && ['KeyS', 'KeyO', 'KeyN', 'KeyP', 'KeyF', 'KeyG', 'KeyU', 'KeyR'].includes(e.code)) e.preventDefault();
   });
@@ -358,6 +378,8 @@ async function main() {
   initEpisodes($('#timeline'));
   preview = new Preview($('#preview'));
   transport = initTransport(preview);
+  shuttle = initShuttle(preview);
+  initTrimPreview(preview);
   initViewbar();
   const crop = initCropMode(preview);
   const gizmo = initGizmo(preview);
@@ -386,7 +408,7 @@ async function main() {
   await restoreAutosave();
   restoreUiState();
   updateTitle();
-  window.__ffm = { store, preview, timeline, importPaths, openExport, browser, crop, gizmo, anim, openSettings, reloadUi, plugins: pluginHost, loadProjectText: loadFromText, subsOverlay, fontsReady };
+  window.__ffm = { store, preview, timeline, importPaths, openExport, browser, crop, gizmo, anim, openSettings, reloadUi, plugins: pluginHost, loadProjectText: loadFromText, subsOverlay, fontsReady, shuttle, edit };
   const bridge = await mcpReady;
   if (bridge) bridge.initMcpBridge({
     loadProjectText: (text, filePath) => loadFromText(text, filePath),

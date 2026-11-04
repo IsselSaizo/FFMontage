@@ -23,6 +23,17 @@ if ($Test -eq 'ui-selftest18') {
     if (Test-Path $p) { Copy-Item $p "$T\cache\tmp\engine-test\" -Force }
   }
 }
+# ui-selftest19 (режим нарезания 2.0): видео 8 с, звук с паузами 2–3,5 и 5–6 с — для «Удалить паузы»
+if ($Test -eq 'ui-selftest19') {
+  $ff = @((Get-Command ffmpeg -ErrorAction SilentlyContinue | ForEach-Object Source), (Join-Path $App 'ffmpeg\ffmpeg.exe')) +
+    @(Get-ChildItem (Split-Path -Parent $App) -Filter ffmpeg.exe -Recurse -Depth 3 -ErrorAction SilentlyContinue | ForEach-Object FullName) |
+    Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
+  $pp = "$T\cache\tmp\engine-test\p_pauses.mp4"
+  if ($ff -and -not (Test-Path $pp)) {
+    & $ff -v error -y -f lavfi -i 'testsrc2=s=640x360:r=25:d=8' -f lavfi -i 'sine=f=440:d=8:r=48000' `
+      -af "volume='if(between(t,2,3.5)+between(t,5,6),0,1)':eval=frame" -c:v libx264 -pix_fmt yuv420p -c:a aac -shortest $pp
+  }
+}
 $cfg = @{ version = 1; cacheDir = "$T\cache"; outputDir = "$T\out"; projectsDir = "$T\proj"; ffmpegDir = '' }
 if ($Lang) { $cfg.settings = @{ lang = $Lang } }
 $json = $cfg | ConvertTo-Json

@@ -7,6 +7,7 @@ import { openMenu } from './contextMenu.js';
 import { toggleReverse, freezeFrameAt, isReversed, isFreeze } from './fx.js';
 import { speedOf, tlLen, clipEnd } from './clipTime.js';
 import { isText, TEXT_MAX } from './textModel.js';
+import { openPausesDialog, markClipById } from './edit.js';
 const inside = (c, time) => time > c.start + MIN_CLIP && time < clipEnd(c) - MIN_CLIP;
 // Число как есть, но с десятичным разделителем языка (0.1 → «0,1» / «0.1»)
 const dec = (x) => (getLang() === 'ru' ? String(x).replace('.', ',') : String(x));
@@ -124,6 +125,8 @@ export function openClipMenu(id, x, y, clickTime = null) {
     { id: 'reverse', label: rev ? t('Убрать отзеркаливание') : t('Отзеркалить (задом наперёд)'), icon: 'reverse', key: keyHint('clip.reverse'), disabled: busy || isFreeze(c), onClick: () => reverseClip(id) },
     'sep',
     hasSound ? { id: 'mute', label: c.muted ? t('Включить звук') : t('Выключить звук'), icon: c.muted ? 'speaker' : 'mute', onClick: () => toggleMute(id) } : null,
+    hasSound && m.hasAudio ? { id: 'pauses', label: t('Удалить паузы…'), icon: 'silence', key: keyHint('clip.removePauses'), disabled: busy, onClick: () => openPausesDialog(id) } : null,
+    { id: 'mark-clip', label: t('Метки In / Out по клипу'), icon: 'markin', key: keyHint('mark.clip'), onClick: () => markClipById(id) },
     { id: 'fade', label: t('Затухание и появление…'), icon: 'fade', onClick: () => { store.select({ kind: f.kind, id }); focusInspector('fade'); } },
     { id: 'more', label: t('Дополнительные варианты'), icon: 'more', onClick: () => { store.select({ kind: f.kind, id }); focusInspector(); } },
   ]);

@@ -15,6 +15,11 @@ vendor/
 
 # Личные настройки и данные — у каждого свои
 config.json
+# portable-режим: настройки окна (M0.6), аудиоплагины пользователя и кэш их сканирования
+/settings.json
+/audio-plugins/
+/audio-plugins.json
+/user-fonts/
 .firstrun/
 .test-cache/
 Cache/

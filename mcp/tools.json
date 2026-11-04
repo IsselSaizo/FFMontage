@@ -1067,6 +1067,46 @@
     "destructiveHint": false,
     "openWorldHint": false
    }
+  },
+  {
+   "name": "remove_silence",
+   "title": "Remove pauses",
+   "description": "Cut the quiet parts (pauses in speech) out of a clip and close the gaps: the clip is split at every pause, its linked sound is cut the same way, and everything after it on all unlocked tracks shifts left (tracks where something lies across the cut stay in place and are listed in skipped_tracks). Same detection as detect_silence. margin keeps a little of each pause at both edges so speech is not clipped (default 0.15 s). One undo step; re-read get_project afterwards because the clip gets new pieces.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "clip_id": {
+      "type": "string",
+      "description": "Clip id (video with sound or audio clip)"
+     },
+     "threshold_db": {
+      "type": "number",
+      "description": "Silence threshold, dB (default -35)",
+      "minimum": -90,
+      "maximum": 0
+     },
+     "min_duration": {
+      "type": "number",
+      "description": "Minimum pause length to remove, seconds (default 0.5)",
+      "minimum": 0.05,
+      "maximum": 60
+     },
+     "margin": {
+      "type": "number",
+      "description": "Seconds of each pause kept at both edges (default 0.15)",
+      "minimum": 0,
+      "maximum": 2
+     }
+    },
+    "required": [
+     "clip_id"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": false,
+    "openWorldHint": false
+   }
   }
  ]
 }

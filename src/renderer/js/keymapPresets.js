@@ -1,6 +1,6 @@
 // Пресеты горячих клавиш других монтажных программ (решение D6: в ядре, обычный JSON).
 // В пресете только отличия от родных клавиш: id действия → [сочетания]; [] — в этой программе у действия клавиши нет.
-// Действия, которых у нас пока нет (In/Out, Q/W, Ripple/Roll), появятся вместе с функциями (0.4.4) — тогда и дополним.
+// In/Out, Q/W, Lift/Extract, JKL и инструмент обрезки появились в 0.4.3: у родных клавиш — раскладка Premiere.
 // «сверить» — по памяти, не по официальной таблице; перед выпуском 0.4.0 проверить в самих программах.
 import { t } from './i18n.js';
 
@@ -22,6 +22,13 @@ export const PRESETS = {
       'play.toggle': ['Space'],
       'view.fullscreen': ['Ctrl+KeyF'],
       'view.zoomFit': ['Shift+KeyZ'],
+      // Resolve: Shift+[ / Shift+] — обрезать до курсора, Ctrl+Shift+[ / ] — со сдвигом (сверить)
+      'clip.trimStart': ['Shift+BracketLeft'],
+      'clip.trimEnd': ['Shift+BracketRight'],
+      'clip.trimStartRipple': ['Ctrl+Shift+BracketLeft'],
+      'clip.trimEndRipple': ['Ctrl+Shift+BracketRight'],
+      'edit.lift': [],
+      'edit.extract': [],
     },
   },
 
@@ -46,6 +53,9 @@ export const PRESETS = {
       'view.zoomIn': ['Equal'],
       'view.zoomOut': ['Minus'],
       'view.zoomFit': ['Backslash'],
+      // Premiere: B — Ripple Edit (у нас один инструмент обрезки), Ctrl+Shift+X — убрать In/Out
+      'tool.trim': ['KeyB'],
+      'mark.clear': ['Ctrl+Shift+KeyX'],
     },
   },
 

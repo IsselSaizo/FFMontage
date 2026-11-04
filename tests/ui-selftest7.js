@@ -63,7 +63,9 @@
     // ×2 со сдвигом: следующий клип переезжает на 4 с
     store.select({ kind: 'video', id: v0 }); await sleep(60);
     document.querySelector('#speed-ripple').click(); await sleep(30);
-    ok(localStorage.getItem('ffm.speedRipple') === '1', 'галочка запоминается');
+    // С M0.6 настройки окна — в settings.json (js/prefs.js), не в localStorage
+    const prefs = await import('./js/prefs.js');
+    ok(prefs.getPref('ui.speedRipple', false) === true, 'галочка запоминается');
     document.querySelector('#inspector [data-speed="2"]').click(); await sleep(80);
     ok(near(store.findClip(v1).clip.start, 4) && near(store.duration(), 12), `со сдвигом: следующий клип с ${store.findClip(v1).clip.start}, ролик ${store.duration()} с`);
     store.undo(); await sleep(50);

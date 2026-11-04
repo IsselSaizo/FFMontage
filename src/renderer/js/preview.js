@@ -69,6 +69,7 @@ export class Preview {
     this.current = null;         // что показано на основной дорожке: результат layersAt()
     this.playing = false;
     this.clock = { wall: 0, t: 0 };
+    this.rate = 1;               // JKL-шаттл (js/shuttle.js): ×1…×8 вперёд; назад шаттл двигает курсор сам
     this.view(MAIN_LANE);
 
     store.on('time', (src) => { if (src !== 'preview') this.onExternalSeek(); });
@@ -377,7 +378,7 @@ export class Preview {
       const el = els[i];
       const mt = this.clampMt(x.clip, x.mt);
       // Скорость клипа: playbackRate (тон звука сохраняется). После смены файла WebView сбрасывает её к default.
-      const sp = isStill(x.clip) ? 1 : speedOf(x.clip);
+      const sp = isStill(x.clip) ? 1 : Math.min(16, speedOf(x.clip) * this.rate);
       if (el.defaultPlaybackRate !== sp) el.defaultPlaybackRate = sp;
       if (el.playbackRate !== sp) el.playbackRate = sp;
       const before = x.mt < -0.001;                       // клип ещё не начался в файле (переход без «запаса» кадров)
@@ -559,7 +560,15 @@ export class Preview {
   }
 
   // --- воспроизведение ---
-  toggle() { if (this.playing) this.pause(); else this.play(); }
+  toggle() { if (this.playing) this.pause(); else { this.rate = 1; this.play(); } }
+
+  /** Скорость воспроизведения (шаттл L): 1…8; во время игры часы и элементы перестраиваются сразу */
+  setRate(r) {
+    const v = Math.max(0.25, Math.min(8, Number(r) || 1));
+    if (v === this.rate) return;
+    this.rate = v;
+    if (this.playing) this.startAt(store.time);
+  }
 
   play() {
     const dur = store.duration();
@@ -607,7 +616,7 @@ export class Preview {
     if (!this.playing) return;
     const dur = store.duration();
     const now = performance.now();
-    let t = this.clock.t + (now - this.clock.wall) / 1000;  // по умолчанию — часы
+    let t = this.clock.t + ((now - this.clock.wall) / 1000) * this.rate;  // по умолчанию — часы
     const ms = this.master;
     // Вне переходов время берём с играющего видео (основная дорожка, иначе нижняя из верхних): картинка и звук не расходятся
     if (ms && !this.masterTrans && store.findClip(ms.clip.id) && !ms.el.failed && !ms.el.ended && playUrl(ms.clip.mediaId)) {
@@ -643,6 +652,7 @@ export class Preview {
 
   // Элемент звука: позиция expected (с), скорость sp, громкость gain
   playEl(el, expected, sp, gain, force) {
+    sp = Math.min(16, sp * this.rate);
     if (el.defaultPlaybackRate !== sp) el.defaultPlaybackRate = sp;
     if (el.playbackRate !== sp) el.playbackRate = sp;
     this.setGain(el, gain);
