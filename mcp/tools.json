@@ -178,7 +178,7 @@
   {
    "name": "split_clip",
    "title": "Split clip",
-   "description": "Cut a clip into two at a timeline time (seconds). Without clip_id the video clip under that time is split; pass clip_id to split an audio clip. The cut must be at least 0.1 s from the clip edges. Returns both halves.",
+   "description": "Cut a clip into two at a timeline time (seconds). Without clip_id the video clip under that time is split; pass clip_id to split an audio clip. Linked clips (a video and its own sound) are cut together. The cut must be at least 0.1 s from the clip edges. Returns both halves.",
    "inputSchema": {
     "type": "object",
     "properties": {

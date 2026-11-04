@@ -96,6 +96,24 @@
   ok(rightV && auds().filter((x) => x.link === rightV.link).length === 2, 'правая половина видео связана с правыми половинами звука');
   ok(store.time === 5, 'курсор не сдвинулся');
 
+  // --- 4b. S на выделенном видео режет и его звук (раньше связь половин рвалась) ---
+  {
+    const mid = rightV.start + (rightV.out - rightV.in) / 2;
+    store.select({ kind: 'video', id: rightV.id });
+    store.setTime(mid);
+    const nv2 = store.project.videoClips.length; const na2 = auds().length;
+    key('KeyS', { key: 's' });
+    await sleep(100);
+    ok(store.project.videoClips.length === nv2 + 1 && auds().length === na2 + 2, `S: видео ${nv2}→${store.project.videoClips.length}, звук ${na2}→${auds().length}`);
+    const rv2 = vids().find((x) => Math.abs(x.start - mid) < 1e-6 && x.mediaId === e);
+    ok(rv2 && auds().filter((x) => x.link === rv2.link).length === 2, 'S: правая половина видео связана с правыми половинами звука');
+    store.undo();
+    await sleep(50);
+    ok(store.project.videoClips.length === nv2 && auds().length === na2, 'S: отмена разреза');
+    store.select(null);
+    store.setTime(5);
+  }
+
   // --- 5. Лезвие ---
   timeline.setTool('blade');
   ok(timeline.root.classList.contains('blade-mode'), 'режим лезвия включён');

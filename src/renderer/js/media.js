@@ -1,6 +1,6 @@
 // Импорт файлов, подготовка миниатюр/волны/прокси и панель «Ваши медиа».
 import { store } from './store.js';
-import { h, $, fmtTime, toast, iconEl, confirmDialog, fmtBytes } from './util.js';
+import { h, $, fmtTime, toast, iconEl, confirmDialog, fmtBytes, errText } from './util.js';
 import { rebuildDerived } from './fx.js';
 
 const api = window.api;
@@ -10,7 +10,89 @@ export function playUrl(mediaId) {
   const rt = store.runtime[mediaId] || {};
   if (!m || rt.missing) return null;
   if (rt.proxyUrl) return rt.proxyUrl;
-  return m.needsProxy ? null : m.url;
+  return m.needsProxy || rt.forceProxy ? null : m.url;
+}
+
+// Играет ли окно этот файл без прокси. Список кодеков в программе — только догадка: HEVC и AV1 в WebView2
+// зависят от расширений Windows и видеокарты, на Linux/macOS — от GStreamer/WKWebView.
+// Поэтому спрашиваем сам WebView (MediaCapabilities / canPlayType) — это мгновенно и не занимает декодер.
+const VIDEO_CT = {
+  h264: () => 'avc1.640033',
+  hevc: (ten) => (ten ? 'hvc1.2.4.L153.B0' : 'hvc1.1.6.L153.B0'),
+  av1: (ten) => (ten ? 'av01.0.13M.10' : 'av01.0.13M.08'),
+  vp9: (ten) => (ten ? 'vp09.02.51.10' : 'vp09.00.51.08'),
+  vp8: () => 'vp8',
+};
+function contentType(m) {
+  const codec = VIDEO_CT[m.vcodec];
+  if (!codec) return null;
+  const ten = /10|12/.test(m.pixFmt || '');
+  const mime = ['vp8', 'vp9'].includes(m.vcodec) ? 'video/webm' : 'video/mp4';
+  return `${mime}; codecs="${codec(ten)}"`;
+}
+
+async function codecSupported(m) {
+  const ct = contentType(m);
+  if (!ct) return true;
+  try {
+    if (navigator.mediaCapabilities) {
+      const r = await navigator.mediaCapabilities.decodingInfo({
+        type: 'file',
+        video: { contentType: ct, width: m.width || 1920, height: m.height || 1080, bitrate: Math.round(m.vbitrate || 8e6), framerate: m.fps || 30 },
+      });
+      return !!r.supported;
+    }
+  } catch (e) { console.warn('mediaCapabilities', ct, e); }
+  return document.createElement('video').canPlayType(ct) !== '';
+}
+
+async function checkPlayable(mediaId) {
+  const m = store.media(mediaId);
+  if (!m || !m.hasVideo || m.isImage || m.needsProxy || !m.url) return true;
+  const ok = await codecSupported(m);
+  if (!ok) console.warn('media: окно не умеет', m.vcodec, m.pixFmt, '— нужен прокси');
+  return ok;
+}
+
+// Первый кадр в отдельном скрытом <video>: true — играет, false — ошибка, null — не дождались
+function probePlayable(url, ms = 8000) {
+  return new Promise((resolve) => {
+    const v = document.createElement('video');
+    v.muted = true; v.preload = 'auto';
+    let done = false;
+    const finish = (ok) => {
+      if (done) return;
+      done = true; clearTimeout(timer);
+      v.removeAttribute('src'); v.load();
+      resolve(ok);
+    };
+    const timer = setTimeout(() => finish(null), ms);
+    v.addEventListener('error', () => finish(false));
+    // Без декодера видео WebView иногда играет только звук: ширина кадра 0
+    v.addEventListener('loadeddata', () => finish(v.videoWidth > 0));
+    v.src = url;
+  });
+}
+
+// Плеер не смог открыть файл, который считался «играбельным» (например, HEVC 10 бит, который видеокарта
+// не декодирует) — переходим на прокси. Сначала переспрашиваем отдельным <video>: ошибка бывает и временной.
+const reprobing = new Set();
+export async function playbackFailed(mediaId) {
+  const m = store.media(mediaId);
+  const rt = store.runtime[mediaId] || {};
+  if (!m || !m.url || m.needsProxy || rt.forceProxy || rt.proxyUrl || m.isImage || reprobing.has(mediaId)) return;
+  reprobing.add(mediaId);
+  try {
+    if ((await probePlayable(m.url)) !== false) return;
+    console.warn('media: плеер не смог открыть', m.name, '— переход на прокси');
+    startProxy(mediaId);
+  } finally { reprobing.delete(mediaId); }
+}
+function startProxy(mediaId) {
+  const m = store.media(mediaId);
+  store.setRuntime(mediaId, { forceProxy: !m.needsProxy, status: 'proxy', progress: 0 });
+  return api.proxy(m).then((url) => store.setRuntime(mediaId, { proxyUrl: url, status: 'ready' }))
+    .catch((e) => { store.setRuntime(mediaId, { status: 'error', error: errText(e) }); toast(`Не удалось подготовить ${m.name}`, 'error'); });
 }
 
 // Сколько звуковых потоков в файле (записи NVIDIA/OBS: игра, микрофон…)
@@ -53,10 +135,8 @@ async function prepare(mediaId) {
       }).catch((e) => console.warn('audio stream', s, e)));
     }
   }
-  if (m.needsProxy) {
-    store.setRuntime(mediaId, { status: 'proxy', progress: 0 });
-    jobs.push(api.proxy(m).then((url) => store.setRuntime(mediaId, { proxyUrl: url, status: 'ready' }))
-      .catch((e) => { store.setRuntime(mediaId, { status: 'error', error: e.message }); toast(`Не удалось подготовить ${m.name}`, 'error'); }));
+  if (m.needsProxy || !(await checkPlayable(mediaId))) {
+    jobs.push(startProxy(mediaId));
   } else {
     store.setRuntime(mediaId, { status: 'ready' });
   }

@@ -6,7 +6,7 @@ import { store, placeVideo, MIN_CLIP, newTrack } from './store.js';
 import { importPaths } from './media.js';
 import { toggleReverse, freezeFrameAt, isReversed, isFreeze } from './fx.js';
 import { TRANSITIONS, MIN_DURATION as TR_MIN, MAX_DURATION as TR_MAX } from './transitions.js';
-import { h, icon, toast, uid } from './util.js';
+import { h, icon, toast, uid, errText } from './util.js';
 
 const api = window.api;
 
@@ -84,7 +84,7 @@ function audioTrackArg(id) {
   return id;
 }
 
-const cleanErr = (e) => String((e && e.message) || e).replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
+const cleanErr = errText;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function ai(msg) { toast(`ИИ: ${msg}`, 'info', 2200); }
@@ -445,16 +445,18 @@ const TOOLS = {
         fail(`Time ${t} s is not inside clip ${cid} (${r3(f.clip.start)}–${r3(end(f.clip))} s) or is closer than ${MIN_CLIP} s to its edge.`);
       }
     } else {
-      const seg = store.videoLayout().find((s) => t > s.start + MIN_CLIP / 2 && t < s.end - MIN_CLIP / 2);
+      const seg = store.videoLayout().find((s) => t > s.start + MIN_CLIP && t < s.end - MIN_CLIP);
       if (!seg) fail(`No video clip under ${t} s (or the time is too close to a clip edge). Pass clip_id to split an audio clip.`);
       target = seg.clip;
     }
     const before = new Set(store.project.videoClips.map((c) => c.id));
     for (const tr of store.project.audioTracks) for (const c of tr.clips) before.add(c.id);
-    const n = store.splitAt(t, cid || null);
+    const n = store.splitAt(t, target.id);
     if (!n) fail('Nothing was split (the cut is too close to the clip edge).');
-    let right = store.project.videoClips.find((c) => !before.has(c.id));
-    if (!right) for (const tr of store.project.audioTracks) right = right || tr.clips.find((c) => !before.has(c.id));
+    // Связанный звук режется вместе с видео — правую половину ищем на дорожке самого клипа
+    const tf = store.findClip(target.id);
+    const pool = tf?.kind === 'video' ? store.project.videoClips : (tf?.track?.clips || []);
+    const right = pool.find((c) => !before.has(c.id));
     ai(`разрез на ${r3(t)} с`);
     return { left: describeById(target.id), right: right ? describeById(right.id) : null };
   },
@@ -709,7 +711,7 @@ export function isMcpBridgeReady() { return inited; }
 export function initMcpBridge({ loadProjectText, newProject, saveProject } = {}) {
   hooks = { loadProjectText, newProject, saveProject };
   if (inited) return;
-  if (!api || typeof api.onMcpCall !== 'function') { console.warn('MCP: preload API missing'); return; }
+  if (!api || typeof api.onMcpCall !== 'function') { console.warn('MCP: window.api is not ready'); return; }
   inited = true;
   api.onMcpCall(async ({ id, tool, args }) => {
     try {
@@ -797,7 +799,7 @@ export async function showMcpDialog() {
       codeBlock(info.vscodeJson),
       section('Claude Code (командная строка)'),
       codeBlock(info.claudeCodeCommand, true),
-      h('p', { class: 'muted small' }, `Сервер: ${info.serverScript}${info.serverExists ? '' : ' — файл не найден!'}`),
+      h('p', { class: 'muted small' }, `Сервер: ${info.command} --mcp`),
       h('p', { class: 'muted small' }, 'Если FF Montage закрыт, ассистент запустит программу сам.'),
       section('Что можно попросить'),
       h('ul', { class: 'muted small', style: { margin: '4px 0 0', paddingLeft: '20px', lineHeight: '1.6' } }, ...examples.map((x) => h('li', {}, `«${x}»`))),

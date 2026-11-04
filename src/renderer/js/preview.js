@@ -3,7 +3,7 @@
 // на переходе играют оба, а картинку смешивает CSS (см. transitions.js).
 // Музыка — отдельные <audio>, громкость (можно > 100%) и затухания — через Web Audio.
 import { store } from './store.js';
-import { playUrl, audioUrl } from './media.js';
+import { playUrl, audioUrl, playbackFailed } from './media.js';
 import { h, $, icon, fmtTime } from './util.js';
 import { applyTransition, resetLayer } from './transitions.js';
 import { cssEffects } from './effects.js';
@@ -30,7 +30,12 @@ export class Preview {
       const v = h('video', { class: 'slot', preload: 'auto', playsinline: true, disablepictureinpicture: true, crossorigin: 'anonymous' });
       v.dataset.slot = i;
       v.clipId = null;
-      v.addEventListener('error', () => { v.failed = true; this.updateMessage(); });
+      v.addEventListener('error', () => {
+        v.failed = true; this.updateMessage();
+        // Файл не декодируется (нет кодека в системе) — переключить этот файл на прокси
+        const f = v.clipId && store.findClip(v.clipId);
+        if (f && v.error && v.error.code >= 3) playbackFailed(f.clip.mediaId);
+      });
       v.addEventListener('loadeddata', () => { v.failed = false; this.updateMessage(); });
       return v;
     });

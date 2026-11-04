@@ -4,10 +4,9 @@
 param([string]$Test = 'ui-selftest3', [int]$TimeoutSec = 240, [switch]$KeepAutosave)
 $ErrorActionPreference = 'Stop'
 $App = Split-Path -Parent $PSScriptRoot
-$cfg = Get-Content (Join-Path $App 'config.json') -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json
-$src = if ($cfg) { Join-Path $cfg.cacheDir 'tmp\engine-test' } else { Join-Path $App '.test-cache\tmp\engine-test' }
+# Всё — в .test-cache проекта: кэш пользователя из config.json не трогаем
+$src = Join-Path $App '.test-cache\tmp\engine-test'
 $T = Join-Path $App '.test-cache\tmp\uitest'
-if ($cfg) { $T = Join-Path $cfg.cacheDir 'tmp\uitest' }
 New-Item -ItemType Directory -Force "$T\cache\tmp\engine-test", "$T\out", "$T\proj" | Out-Null
 foreach ($f in 'a_av1_1440p60.mp4', 'b_h264_1080p30.mp4', 'c_music.mp3', 'd_old.avi', 'e_2audio.mp4', 'f_photo.png', 'g_anim.gif') {
   $p = Join-Path $src $f

@@ -22,6 +22,8 @@ export function h(tag, attrs = {}, ...children) {
 }
 
 export const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
+// Текст ошибки: Tauri отклоняет invoke строкой (не Error), JS-код бросает Error
+export const errText = (e) => String((e && e.message) || e || 'неизвестная ошибка');
 export const uid = (p = 'id') => `${p}_${Math.random().toString(36).slice(2, 9)}${Date.now().toString(36).slice(-3)}`;
 
 // 75.5 -> "1:15.5"; with frames=false -> "1:15"

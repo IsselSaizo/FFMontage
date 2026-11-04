@@ -829,16 +829,14 @@ class Store {
     return nout - f.clip.in;
   }
 
-  // Разрезать клип по времени таймлайна t. withLinked — вместе со связанными (видео + его звук).
-  splitAt(t, id = null, { withLinked = false } = {}) {
-    const targets = [];
-    if (id) {
-      targets.push(id);
-      if (withLinked) for (const x of this.linkedOf(id)) targets.push(x.clip.id);
-    } else {
-      const seg = this.videoLayout().find((s) => t > s.start + MIN_CLIP / 2 && t < s.end - MIN_CLIP / 2);
-      if (seg) targets.push(seg.clip.id);
-    }
+  // Разрезать клип по времени таймлайна t. withLinked (по умолчанию) — вместе со связанными
+  // (видео + его звук), иначе связь половин рвётся: удаление левой половины убрало бы весь звук.
+  splitAt(t, id = null, { withLinked = true } = {}) {
+    const hit = (c) => t > c.start + MIN_CLIP - 1e-6 && t < end(c) - MIN_CLIP + 1e-6;
+    if (!id) id = this.project.videoClips.find(hit)?.id || null;
+    if (!id) return 0;
+    const targets = [id];
+    if (withLinked) for (const x of this.linkedOf(id)) if (hit(x.clip)) targets.push(x.clip.id);
     return this.splitClips(t, targets);
   }
 
@@ -860,7 +858,7 @@ class Store {
         if (!f) continue;
         const c = f.clip;
         const local = c.in + (t - c.start);
-        if (local - c.in < MIN_CLIP || c.out - local < MIN_CLIP) continue;
+        if (local - c.in < MIN_CLIP - 1e-6 || c.out - local < MIN_CLIP - 1e-6) continue;
         const right = { ...c, id: uid('clp'), in: local, start: t, fadeIn: 0 };
         delete right.transition;
         if (c.link) right.link = splitLink(c.link, t);

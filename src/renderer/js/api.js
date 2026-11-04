@@ -1,4 +1,4 @@
-// Связь окна с программой (Tauri): window.api — те же функции, что были в preload Electron-версии.
+// Связь окна с программой (Tauri): window.api — все вызовы команд Rust и подписки на события.
 // Подключается первым модулем (index.html, setup.html), до остальных скриптов.
 import { exportCommand } from './exportPlan.js';
 
@@ -10,7 +10,7 @@ const on = (event, fn) => {
   return () => { dead = true; if (off) off(); };
 };
 
-// Журнал окна → <кэш>/app/logs/renderer.log (как раньше в Electron)
+// Журнал окна → <кэш>/app/logs/renderer.log
 const log = (level, args) => {
   try {
     const msg = args.map((a) => (a instanceof Error ? (a.stack || a.message) : typeof a === 'object' ? JSON.stringify(a) : String(a))).join(' ');
@@ -27,8 +27,6 @@ window.addEventListener('unhandledrejection', (e) => log('error', ['unhandled:',
 let infoCache = null;
 const info = async () => {
   const i = await invoke('app_info');
-  i.platform = i.platform === 'windows' ? 'win32' : i.platform;
-  i.electron = undefined;
   infoCache = i;
   return i;
 };
@@ -72,7 +70,7 @@ window.api = {
   startExport: async (project, settings) => {
     const i = infoCache || await info();
     let plan;
-    try { plan = exportCommand(project, settings, i.ffMajor); } catch (e) { return { ok: false, error: e.message }; }
+    try { plan = exportCommand(project, settings, i.ffMajor); } catch (e) { return { ok: false, error: String(e?.message || e) }; }
     return invoke('export_start', { plan });
   },
   cancelExport: () => invoke('export_cancel'),
@@ -99,7 +97,7 @@ window.api = {
   updateApply: () => invoke('update_apply'),
   onUpdateLog: (fn) => on('update:log', fn),
   // окно настроек папок / первого запуска
-  setupInfo: async () => { const i = await invoke('setup_info'); i.platform = i.platform === 'windows' ? 'win32' : i.platform; return i; },
+  setupInfo: () => invoke('setup_info'),
   pickFolder: (current) => invoke('setup_pick_folder', { current }),
   checkFfmpeg: (dir) => invoke('setup_check_ffmpeg', { dir }),
   setupEncoders: (dir) => invoke('setup_encoders', { dir }),

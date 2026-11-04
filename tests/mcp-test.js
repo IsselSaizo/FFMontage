@@ -1,10 +1,10 @@
 'use strict';
 // Сквозная проверка ИИ-ассистента (MCP): MCP-сервер по stdio → программа FF Montage → результат.
 //
-// Запуск:  node tests/mcp-test.js            (или electron с ELECTRON_RUN_AS_NODE=1)
-// Нужны тестовые файлы tests/engine-test.js (папка <кэш>/tmp/engine-test).
+// Запуск:  node tests/mcp-test.js
+// Нужны тестовые файлы tests/engine-test.js (папка .test-cache/tmp/engine-test).
 //
-// Программа запускается с ОТДЕЛЬНЫМ config.json (FFM_CONFIG) и отдельным кэшем в <кэш>/tmp/mcp-test,
+// Программа запускается с ОТДЕЛЬНЫМ config.json (FFM_CONFIG) и отдельным кэшем в .test-cache/tmp/mcp-test,
 // поэтому ваш проект и автосохранение не затрагиваются. В конце программа закрывается.
 const fs = require('fs');
 const path = require('path');
@@ -13,15 +13,8 @@ const { spawn } = require('child_process');
 
 const APP_DIR = path.resolve(__dirname, '..');
 
-// Папки: рядом с тестовыми файлами engine-test (в кэше из основного config.json)
-function realCacheDir() {
-  try {
-    const cfg = JSON.parse(fs.readFileSync(path.join(APP_DIR, 'config.json'), 'utf8'));
-    if (cfg.cacheDir) return path.resolve(APP_DIR, cfg.cacheDir);
-  } catch { /* программа не настроена */ }
-  return path.join(APP_DIR, '.test-cache');
-}
-const REAL_CACHE = realCacheDir();
+// Папки: рядом с тестовыми файлами engine-test — в .test-cache проекта, не в кэше пользователя
+const REAL_CACHE = path.join(APP_DIR, '.test-cache');
 const MEDIA_DIR = process.env.MCP_TEST_MEDIA || path.join(REAL_CACHE, 'tmp', 'engine-test');
 const BASE = process.env.MCP_TEST_DIR || path.join(REAL_CACHE, 'tmp', 'mcp-test');
 const CACHE = path.join(BASE, 'cache');

@@ -1,11 +1,11 @@
 // Действия над клипами: общие для контекстного меню, горячих клавиш и инспектора.
 import { store, MIN_CLIP } from './store.js';
-import { toast, promptDialog, parseDuration, fmtTime } from './util.js';
+import { toast, promptDialog, parseDuration, fmtTime, errText } from './util.js';
 import { openMenu } from './contextMenu.js';
 import { toggleReverse, freezeFrameAt, isReversed, isFreeze } from './fx.js';
 
 const clipEnd = (c) => c.start + c.out - c.in;
-const inside = (c, t) => t > c.start + MIN_CLIP / 2 && t < clipEnd(c) - MIN_CLIP / 2;
+const inside = (c, t) => t > c.start + MIN_CLIP && t < clipEnd(c) - MIN_CLIP;
 
 export function splitClip(id, t = store.time) {
   const f = store.findClip(id);
@@ -28,11 +28,11 @@ export function pasteClip(at = store.time, lane = null) {
 }
 
 export async function reverseClip(id) {
-  try { await toggleReverse(id); } catch (e) { toast(`Реверс не получился: ${e.message}`, 'error', 5000); }
+  try { await toggleReverse(id); } catch (e) { toast(`Реверс не получился: ${errText(e)}`, 'error', 5000); }
 }
 
 export async function freezeFrame(t = store.time) {
-  try { await freezeFrameAt(t, 3); } catch (e) { toast(`Стоп-кадр: ${e.message}`, 'error', 4000); }
+  try { await freezeFrameAt(t, 3); } catch (e) { toast(`Стоп-кадр: ${errText(e)}`, 'error', 4000); }
 }
 
 export async function renameClip(id) {

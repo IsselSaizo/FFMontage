@@ -1,6 +1,6 @@
 'use strict';
 // Движок программы для автотестов: вызывает «ff-montage --engine <команда>» (src-tauri/src/cli.rs)
-// и даёт те же функции, что были у src/main/ffmpeg.js в Electron-версии.
+// и даёт тестам функции анализа и подготовки медиа.
 const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
@@ -20,10 +20,10 @@ function findExe() {
 }
 const EXE = findExe();
 
-// Программа ещё не настроена (CI) — отдельный config.json во временной папке проекта
+// Тесты всегда работают в отдельной папке .test-cache внутри проекта (в .gitignore) —
+// кэш, проекты и автосохранение пользователя не трогаются. Своя папка — через FFM_CONFIG.
 function ensureConfig() {
   if (process.env.FFM_CONFIG) return;
-  if (fs.existsSync(path.join(APP_DIR, 'config.json'))) return;
   const base = path.join(APP_DIR, '.test-cache');
   fs.mkdirSync(base, { recursive: true });
   const cfg = path.join(base, 'config.json');

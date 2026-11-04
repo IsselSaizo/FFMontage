@@ -1,5 +1,5 @@
 // Окно выбора папок (первый запуск и меню «Настройки папок»). Результат пишется в config.json.
-import { h, icon } from './util.js';
+import { h, icon, errText } from './util.js';
 
 const api = window.api;
 
@@ -42,7 +42,7 @@ async function main() {
     if (seq !== checkSeq) return;
     if (!r.ok) {
       ffStatus.className = 'ff-status bad small';
-      ffStatus.textContent = `✗ ${r.error}. ${info.platform === 'win32' ? 'Запустите setup.cmd' : 'Запустите ./setup.sh или установите ffmpeg из репозитория дистрибутива'} либо укажите папку вручную.`;
+      ffStatus.textContent = `✗ ${r.error}. ${info.platform === 'windows' ? 'Запустите setup.cmd' : 'Запустите ./setup.sh или установите ffmpeg из репозитория дистрибутива'} либо укажите папку вручную.`;
       return;
     }
     ffStatus.className = 'ff-status good small';
@@ -97,4 +97,4 @@ async function main() {
   await check();
 }
 
-main().catch((e) => { document.body.textContent = `Ошибка: ${e.message}`; });
+main().catch((e) => { document.body.textContent = `Ошибка: ${errText(e)}`; });

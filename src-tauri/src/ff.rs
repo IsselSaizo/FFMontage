@@ -37,7 +37,8 @@ fn bin_in(dir: &Path) -> Option<Bin> {
     None
 }
 
-/// Порядок поиска: папка из настроек → vendor/ffmpeg → ffmpeg рядом/внутри программы → ffmpeg-* рядом с программой → PATH
+/// Порядок поиска: папка из настроек → $FFMONTAGE_FFMPEG_DIR → ffmpeg рядом с программой → ffmpeg-* рядом с программой →
+/// vendor/ffmpeg (старые установки 0.2) → PATH
 pub fn search_binaries(configured: Option<&Path>) -> Option<Bin> {
     if let Some(c) = configured {
         return bin_in(c);
@@ -49,7 +50,6 @@ pub fn search_binaries(configured: Option<&Path>) -> Option<Bin> {
             cands.push(PathBuf::from(e));
         }
     }
-    cands.push(p.vendor_dir.join("ffmpeg"));
     cands.push(p.app_dir.join("ffmpeg"));
     if let Some(parent) = p.app_dir.parent() {
         if let Ok(rd) = std::fs::read_dir(parent) {
@@ -62,6 +62,7 @@ pub fn search_binaries(configured: Option<&Path>) -> Option<Bin> {
             cands.extend(names);
         }
     }
+    cands.push(p.vendor_dir.join("ffmpeg"));
     for d in cands {
         if let Some(b) = bin_in(&d) {
             return Some(b);
@@ -119,6 +120,7 @@ pub struct Output {
 /// Запуск с захватом вывода. on_chunk — потоковая обработка stdout (тогда stdout в результате пуст).
 pub async fn run_with<F: FnMut(&[u8]) + Send>(prog: &Path, args: &[String], mut on_chunk: Option<F>, timeout: Option<Duration>) -> Res<Output> {
     let mut child = command(prog).args(args).spawn().map_err(|e| format!("Не удалось запустить {}: {e}", prog.display()))?;
+    let _tracked = crate::procs::track(&child);
     let mut so = child.stdout.take().unwrap();
     let mut se = child.stderr.take().unwrap();
     let read_out = async {
@@ -204,7 +206,7 @@ fn mtime_ms(meta: &std::fs::Metadata) -> f64 {
     meta.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map(|d| d.as_secs_f64() * 1000.0).unwrap_or(0.0)
 }
 
-/// Ключ кэша: тот же, что был у версии на Electron (кэш миниатюр и прокси сохраняется)
+/// Ключ кэша совместим с версией 0.2 (кэш миниатюр и прокси старых установок сохраняется)
 pub fn cache_key(file: &Path, meta: &std::fs::Metadata) -> String {
     let abs = paths::absolute(file, &std::env::current_dir().unwrap_or_default());
     let s = format!("{}|{}|{}", abs.to_string_lossy().to_lowercase(), meta.len(), mtime_ms(meta).round() as i64);
@@ -512,6 +514,7 @@ pub async fn proxy(info: &Value, on_progress: &(dyn Fn(f64) + Send + Sync), enc:
         return Ok(file);
     }
     let tmp = PathBuf::from(format!("{}.part.mp4", file.display()));
+    let _part = crate::procs::part(&tmp);
     let bin = find();
     let mut args = sv(&["-hide_banner", "-loglevel", "error", "-y"]);
     if i.b("isAnimation") {
@@ -551,6 +554,7 @@ pub async fn audio_stream(info: &Value, stream: usize) -> Res<PathBuf> {
         return Ok(file);
     }
     let tmp = PathBuf::from(format!("{}.part.m4a", file.display()));
+    let _part = crate::procs::part(&tmp);
     let bin = find();
     let mut args = sv(&["-hide_banner", "-loglevel", "error", "-y", "-i"]);
     args.push(s(&i.path()));
@@ -677,6 +681,7 @@ pub async fn freeze(info: &Value, at: f64, enc: &Value) -> Res<PathBuf> {
         return Err("Не удалось взять кадр из файла".into());
     }
     let tmp = dir.join(format!("{base}.part.mp4"));
+    let _part = crate::procs::part(&tmp);
     run(&bin.ffmpeg, &[common, sv(&["-loop", "1", "-framerate", "10", "-i"]), vec![s(&png)],
         sv(&["-t", &FREEZE_FILE_SEC.to_string(), "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p"]),
         fx_video_args(enc, 10.0), sv(&["-movflags", "+faststart"]), vec![s(&tmp)]].concat()).await?;

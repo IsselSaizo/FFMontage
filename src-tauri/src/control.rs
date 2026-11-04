@@ -159,8 +159,6 @@ pub fn info() -> Value {
     let env_flags: Vec<String> = env.iter().map(|(k, v)| format!("-e {k}={}", q(v.as_str().unwrap_or("")))).collect();
     let claude = format!("claude mcp add ff-montage {}{}-- {} --mcp", env_flags.join(" "), if env_flags.is_empty() { "" } else { " " }, q(&command));
     json!({
-        "serverScript": command,
-        "serverExists": true,
         "command": command, "args": ["--mcp"], "env": env,
         "configJson": config_json, "vscodeJson": vscode_json, "claudeCodeCommand": claude,
         "endpoint": endpoint_file().to_string_lossy(),
@@ -296,7 +294,7 @@ async fn serve(pipe: &str, token: &str) -> std::io::Result<()> {
 }
 
 /// Уже запущена копия программы с этим же кэшем? Тогда просим её показать окно (true — надо выйти).
-/// Копии с разными кэшами (автотесты) друг другу не мешают — как было в Electron.
+/// Копии с разными кэшами (автотесты) друг другу не мешают.
 pub fn focus_existing() -> bool {
     let Ok(text) = std::fs::read_to_string(endpoint_file()) else { return false };
     let Ok(ep) = serde_json::from_str::<Value>(&text) else { return false };

@@ -1,6 +1,6 @@
 // Точка входа интерфейса: собирает панели, горячие клавиши, сохранение проекта.
 import { store, emptyProject } from './store.js';
-import { $, h, icon, toast, confirmDialog, debounce } from './util.js';
+import { $, h, icon, toast, confirmDialog, debounce, errText } from './util.js';
 import { initMediaPanel, importPaths, pickAndImport, restoreMedia } from './media.js';
 import { Preview, initTransport } from './preview.js';
 import { Timeline } from './timeline.js';
@@ -165,7 +165,7 @@ async function openProject() {
   if (store.dirty && store.filePath && !(await confirmDialog('Открыть другой проект?', 'Несохранённые изменения текущего проекта будут потеряны (автосохранение тоже перезапишется).', 'Открыть'))) return;
   const r = await api.openProject();
   if (!r) return;
-  try { await loadFromText(r.text, r.filePath); toast('Проект открыт', 'success', 2000); } catch (e) { toast(`Не удалось открыть проект: ${e.message}`, 'error', 5000); }
+  try { await loadFromText(r.text, r.filePath); toast('Проект открыт', 'success', 2000); } catch (e) { toast(`Не удалось открыть проект: ${errText(e)}`, 'error', 5000); }
 }
 
 async function newProject() {
@@ -356,4 +356,4 @@ function initResizers() {
   });
 }
 
-main().catch((e) => { console.error(e); toast(`Ошибка запуска: ${e.message}`, 'error', 10000); });
+main().catch((e) => { console.error(e); toast(`Ошибка запуска: ${errText(e)}`, 'error', 10000); });

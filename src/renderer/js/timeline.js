@@ -155,7 +155,7 @@ export class Timeline {
       const f = store.findClip(store.selection.id);
       if (f) return t > f.clip.start + MIN_CLIP && t < clipEnd(f.clip) - MIN_CLIP;
     }
-    return store.videoLayout().some((s) => t > s.start + MIN_CLIP / 2 && t < s.end - MIN_CLIP / 2);
+    return store.videoLayout().some((s) => t > s.start + MIN_CLIP && t < s.end - MIN_CLIP);
   }
 
   splitAction() {

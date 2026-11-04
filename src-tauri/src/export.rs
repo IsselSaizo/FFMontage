@@ -71,7 +71,9 @@ pub async fn run(plan: Plan, on_progress: impl Fn(Value) + Send + Sync) -> Resul
     let _ = std::fs::write(&log_file, format!("ffmpeg {}\n\n--- filter ---\n{}\n\n--- stderr ---\n", quoted.join(" "), plan.filter));
 
     let started = Instant::now();
+    let _part_guard = crate::procs::part(&part);
     let mut child = ff::command(&bin.ffmpeg).args(&args).spawn().map_err(|e| err(format!("Не удалось запустить FFmpeg: {e}"), false))?;
+    let _tracked = crate::procs::track(&child);
     let mut so = child.stdout.take().unwrap();
     let mut se = child.stderr.take().unwrap();
     let duration = plan.duration.max(0.001);
