@@ -113,7 +113,9 @@ export function downmixMatrix(p) {
   if (kind === 'mono') return [[1, 1]];
   if (kind === '5.1') return [[1, 0], [0, 1], [c, c], [0, 0], [c, 0], [0, c]];
   if (kind === '7.1') return [[1, 0], [0, 1], [c, c], [0, 0], [c, 0], [0, c], [c, 0], [0, c]];
-  return Array.from({ length: channels }, (_, k) => (k === channels - 1 && channels % 2 ? [c, c] : k % 2 ? [0, 1] : [1, 0]));
+  // N моно: на сторону приходится до ⌈N/2⌉ каналов — делим по мощности (1/√n), чтобы сумма не перегружала
+  const s = 1 / Math.sqrt(Math.max(1, Math.ceil(channels / 2)));
+  return Array.from({ length: channels }, (_, k) => (k === channels - 1 && channels % 2 ? [c * s, c * s] : k % 2 ? [0, s] : [s, 0]));
 }
 /** pan=stereo|… — даунмикс всего микса в стерео ('' — уже стерео) */
 export function downmixPan(p) {
@@ -150,14 +152,16 @@ export function outputMode(p, { mode = 'mix', codec = 'aac', container = 'mp4' }
   const { kind, channels } = layoutOf(p);
   if (kind === 'stereo') return { mode: 'mix' };
   const singleStream = ['wav', 'mp3', 'm4a', 'ogg'].includes(container);
-  const maxCh = codec.startsWith('mp3') ? 2 : codec.startsWith('pcm') || codec === 'flac' ? 64 : 8;
+  // FLAC — до 8 каналов и только стандартные раскладки (как AAC / Opus / Vorbis); PCM — любые
+  const maxCh = codec.startsWith('mp3') ? 2 : codec.startsWith('pcm') ? 64 : 8;
   const named = kind !== 'multi';
-  const anyLayout = codec.startsWith('pcm') || codec === 'flac';
+  const anyLayout = codec.startsWith('pcm');
   if (mode === 'stereo') return { mode: 'stereo' };
   if (mode === 'mono' && !singleStream) return { mode: 'mono' };
   // одна многоканальная дорожка
-  if (channels > maxCh) return { mode: 'stereo', note: 'channels' };
+  // Раскладка без имён (N моно) не у PCM — отдельными моно-дорожками, если формат позволяет несколько потоков
   if (!named && !anyLayout) return singleStream ? { mode: 'stereo', note: 'layout' } : { mode: 'mono', note: 'layout' };
+  if (channels > maxCh) return { mode: 'stereo', note: 'channels' };
   if (kind === 'mono') return { mode: 'mix' };
   return { mode: 'mix' };
 }

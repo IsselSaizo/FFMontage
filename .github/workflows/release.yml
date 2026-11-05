@@ -144,6 +144,8 @@ jobs:
             **Linux / Steam Deck:** `FF-Montage-…-linux-x86_64.AppImage` — `chmod +x`, затем запустить; всё внутри (окно, GStreamer, FFmpeg). Как добавить в Steam — в [README](https://github.com/${{ github.repository }}/blob/${{ env.TAG }}/README.md#linux-и-steam-deck-appimage).
             **Linux (архив):** `FF-Montage-…-linux-x86_64.tar.gz`, затем `./ff-montage` (нужны WebKitGTK 4.1 и GStreamer good).
 
+            **Обновление с 0.3.0:** «Проверить обновления…» в программе находит и ставит эту версию само; вручную — распакуйте архив поверх старой папки (настройки и проекты останутся). Подробности — в разделе «Обновление с 0.3.0» CHANGELOG.
+
             Что нового — в [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/${{ env.TAG }}/CHANGELOG.md).
 
             Проверка файлов: `sha256sum -c SHA256SUMS --ignore-missing`. `SHA256SUMS.sig` — подпись ed25519; программа проверяет её сама перед обновлением.

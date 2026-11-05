@@ -88,10 +88,15 @@ jobs:
         run: |
           node tests/subtitles-test.js
           node tests/registry-test.js
+      - name: Звук (громкость, каналы, мастер-копия) и отчёты об ошибках
+        run: |
+          node tools/syntax-check.mjs
+          node tests/audio-test.js
+          node tests/crashlog-test.js
       - name: Автотест интерфейса
         shell: pwsh
         run: |
-          foreach ($t in 'ui-selftest3', 'ui-selftest4', 'ui-selftest5', 'ui-selftest6', 'ui-selftest11', 'ui-selftest14', 'ui-selftest15', 'ui-selftest16') {
+          foreach ($t in 'ui-selftest3', 'ui-selftest4', 'ui-selftest5', 'ui-selftest6', 'ui-selftest11', 'ui-selftest14', 'ui-selftest15', 'ui-selftest16', 'ui-selftest20') {
             ./tests/run-ui.ps1 $t -TimeoutSec 300 | Tee-Object -Variable out
             if ($out -cmatch 'FAIL|ERROR|TIMEOUT') { exit 1 }
           }
@@ -154,6 +159,8 @@ jobs:
         run: |
           node tests/subtitles-test.js
           node tests/registry-test.js
+      - name: Звук (громкость, каналы, мастер-копия)
+        run: node tests/audio-test.js
       - name: Тест ИИ-ассистента (MCP)
         run: xvfb-run -a node tests/mcp-test.js
       - name: Журналы

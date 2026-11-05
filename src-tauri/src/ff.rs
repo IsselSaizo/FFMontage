@@ -780,7 +780,12 @@ pub async fn proxy(info: &Value, on_progress: &(dyn Fn(f64) + Send + Sync), enc:
 pub async fn audio_stream(info: &Value, stream: usize, channel: Option<usize>) -> Res<PathBuf> {
     let i = Info(info);
     let key = i.key()?;
-    let channel = channel.filter(|c| (*c as f64) < stream_channels(&i, stream) && *c < 64);
+    // Канал вне потока (или число каналов неизвестно) — ошибка, а не молча весь поток: окно считает, что это моно-канал
+    if let Some(c) = channel {
+        if c >= 64 || (c as f64) >= stream_channels(&i, stream) {
+            return Err(tr!("В звуковом потоке нет канала {}", "The audio stream has no channel {}", c + 1));
+        }
+    }
     let tag = channel.map(|c| format!("-c{c}")).unwrap_or_default();
     let lock = key_lock(&format!("astream:{key}:{stream}{tag}"));
     let _g = lock.lock().await;

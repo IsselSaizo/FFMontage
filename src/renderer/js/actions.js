@@ -8,14 +8,20 @@ import { toggleReverse, freezeFrameAt, isReversed, isFreeze } from './fx.js';
 import { speedOf, tlLen, clipEnd } from './clipTime.js';
 import { isText, TEXT_MAX } from './textModel.js';
 import { openPausesDialog, markClipById } from './edit.js';
-import { streamChannels, isStereo } from './audioLayout.js';
+import { streamChannels, channelCount } from './audioLayout.js';
 import { openRouting } from './routingDialog.js';
+import { channelUrl } from './media.js';
 
 /** Разложить клип по каналам (0.5.1); в стерео-проекте каналы лягут на дорожки, маршрут — по умолчанию */
 export function splitChannelsUi(id) {
+  const f = store.findClip(id);
+  if (f && f.track && f.track.locked) { toast(t('Дорожка под замком'), 'info', 2000); return; }
   const ids = store.splitChannels(id);
   if (!ids.length) return;
-  toast(isStereo(store.project)
+  // Моно-файлы каналов для плеера — сразу, а не при первом воспроизведении
+  for (const cid of ids) { const x = store.findClip(cid); if (x) channelUrl(x.clip.mediaId, x.clip.stream || 0, x.clip.channel); }
+  // Маршруты по каналам ставятся, только если в проекте больше двух каналов (store.splitChannels)
+  toast(channelCount(store.project) <= 2
     ? t('Каналов: {n} — каждый на своей дорожке. Чтобы развести их по каналам экспорта, выберите раскладку проекта (щелчок по «L·R» у дорожки).', { n: ids.length })
     : t('Каналов: {n} — каждый на своей дорожке и в своём канале проекта.', { n: ids.length }), 'success', 5000);
 }

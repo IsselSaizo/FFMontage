@@ -323,7 +323,8 @@ async function exportVideo(args) {
   let output = strArg(args, 'path');
   if (output) {
     if (!isAbs(output)) fail('"path" must be an absolute path.');
-    if (!/\.(mp4|mkv|mov|gif|mp3|m4a|wav|ogg|mxf)$/i.test(output)) output += '.mp4';
+    if (!/\.(mp4|mkv|mov|gif|mp3|m4a|wav|ogg|mxf)$/i.test(output)) output += `.${bc ? bc.container : 'mp4'}`;
+    if (!bc && /\.mxf$/i.test(output)) fail(`.mxf is written only by broadcast presets (${BROADCAST.filter((x) => x.container === 'mxf').map((x) => x.id).join(', ')}) — set "broadcast".`);
     if (bc && !output.toLowerCase().endsWith(`.${bc.container}`)) fail(`The "${bc.id}" preset writes .${bc.container} files — change the path extension.`);
   } else {
     output = await api.defaultExportPath(store.project.name || t('Видео'), bc ? bc.container : 'mp4');
@@ -680,6 +681,7 @@ const TOOLS = {
     const f = store.findClip(id);
     if (!f || f.kind !== 'audio') fail(`Audio clip "${id}" not found (only clips on audio tracks can be split into channels).`);
     if (f.clip.channel !== undefined) fail('This clip already plays a single channel.');
+    if (f.track && f.track.locked) fail('The track is locked by the user.');
     const n = streamChannels(store.media(f.clip.mediaId), f.clip.stream || 0);
     if (n < 2) fail('The clip source is mono — nothing to split.');
     const ids = store.splitChannels(id);

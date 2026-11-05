@@ -31,9 +31,10 @@ mod vst;
 mod windows;
 
 fn main() {
-    // Падение — в журнал <кэш>/app/logs/panic.log и отчёт logs/reports/*-panic.txt (у окна нет консоли)
-    crashlog::install();
+    // Падение — в журнал <кэш>/app/logs/panic.log и отчёт logs/reports/*-panic.txt (у окна нет консоли).
+    // Хост аудиоплагинов — отдельно: падение стороннего плагина ожидаемо и изолировано, «программа упала» не показываем
     let args: Vec<String> = std::env::args().collect();
+    crashlog::install(args.get(1).map(String::as_str) == Some("--vst-host"));
     // Процесс-хост аудиоплагинов VST3/CLAP (vst/host.rs) — до всего остального: только плагин и stdin/stdout
     if args.get(1).map(String::as_str) == Some("--vst-host") {
         #[cfg(windows)]
@@ -224,6 +225,8 @@ fn arm_exit_watchdog() {
     if ARMED.swap(true, Ordering::SeqCst) {
         return;
     }
+    // Выход начался по воле пользователя: зависание при закрытии (или жёсткое завершение ниже) — не «падение»
+    crashlog::session_end();
     std::thread::spawn(|| {
         std::thread::sleep(std::time::Duration::from_secs(5));
         let _ = std::fs::OpenOptions::new().create(true).append(true).open(paths::get().logs.join("renderer.log")).and_then(|mut f| {

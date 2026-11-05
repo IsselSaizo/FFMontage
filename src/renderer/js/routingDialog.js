@@ -27,7 +27,9 @@ export function toggleRoute(route, k) {
 export function openRouting() {
   if (openOverlay) return;
   const body = h('div', { class: 'modal-body' });
-  const close = () => { off(); overlay.remove(); openOverlay = null; };
+  const close = () => { off(); document.removeEventListener('keydown', onKey, true); overlay.remove(); openOverlay = null; };
+  // Esc — на уровне документа: щелчок по матрице перерисовывает окно, и фокус уходит на страницу
+  const onKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); } };
   const render = () => {
     body.innerHTML = '';
     const p = store.project;
@@ -58,9 +60,9 @@ export function openRouting() {
         const at = route.indexOf(k);
         const mark = at < 0 ? '' : route.length === 1 ? 'M' : at === 0 ? 'L' : 'R';
         grid.append(h('button', {
-          class: at < 0 ? '' : 'on', dataset: { route: `${row.id}:${k}` },
+          class: at < 0 ? '' : 'on', dataset: { route: `${row.id}:${k}` }, 'aria-pressed': at < 0 ? 'false' : 'true',
           title: at < 0 ? t('Направить в канал {ch}', { ch: labels[k] }) : mark === 'M' ? t('Моно (L+R) в канал {ch}', { ch: labels[k] }) : t('{side} → канал {ch}', { side: mark, ch: labels[k] }),
-          onclick: () => store.setTrackRoute(row.id, toggleRoute(route, k)),
+          onclick: () => { refocus = `${row.id}:${k}`; store.setTrackRoute(row.id, toggleRoute(route, k)); },
         }, mark));
       }
     }
@@ -70,15 +72,21 @@ export function openRouting() {
       body.append(h('p', { class: 'muted small' }, t('Многоканальный клип можно разложить по каналам: правый щелчок по клипу → «Разложить по каналам».')));
     }
   };
-  const off = store.on('project', render);
+  let refocus = null;
+  const off = store.on('project', () => {
+    render();
+    const b = refocus && body.querySelector(`[data-route="${refocus}"]`);
+    (b || overlay.querySelector('.btn.primary'))?.focus();
+  });
   const overlay = h('div', { class: 'modal-overlay', id: 'routing-dialog' },
-    h('div', { class: 'modal' },
+    h('div', { class: 'modal', role: 'dialog', 'aria-modal': 'true', 'aria-label': t('Каналы и маршруты звука') },
       h('div', { class: 'modal-head' }, h('h2', {}, t('Каналы и маршруты звука')), h('button', { class: 'icon-btn', onclick: close, html: icon('close', 18) })),
       body,
       h('div', { class: 'modal-foot' }, h('button', { class: 'btn primary', onclick: close }, t('Готово')))));
   overlay.addEventListener('mousedown', (e) => { if (e.target === overlay) close(); });
-  overlay.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); e.stopPropagation(); });
+  document.addEventListener('keydown', onKey, true);
   document.body.append(overlay);
   openOverlay = overlay;
   render();
+  overlay.querySelector('.btn.primary').focus();
 }

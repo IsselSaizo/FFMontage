@@ -5,7 +5,7 @@
 Intel QSV, AMD AMF, VAAPI на Linux), если она есть, иначе на процессоре.
 
 Сделан на [Tauri 2](https://tauri.app) (Rust + системный WebView): программа — один файл, FFmpeg лежит рядом.
-Версия 0.4.0, что нового — в [CHANGELOG.md](CHANGELOG.md).
+Версия 0.4.7, что нового — в [CHANGELOG.md](CHANGELOG.md).
 
 ## Системные требования
 
@@ -211,7 +211,7 @@ CI также проверяет `cargo fmt --check`, `cargo clippy`, актуа
 `src/renderer/js/i18n/en/*.js`, в Rust — `tr!("…", "…")`.
 
 **Выпуск релиза:** поднять версию в `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json`, `package.json` (и `Cargo.lock`),
-дополнить `CHANGELOG.md`, затем `git tag v0.4.0 && git push origin v0.4.0`. Workflow проверит, что тег совпадает с версией,
+дополнить `CHANGELOG.md`, затем `git tag v0.4.7 && git push origin v0.4.7`. Workflow проверит, что тег совпадает с версией,
 соберёт архивы, посчитает `SHA256SUMS` и подпишет его ключом из секрета `FFM_SIGNING_KEY` (`tools/sign-release.mjs`).
 Без верной подписи программа обновление не установит.
 

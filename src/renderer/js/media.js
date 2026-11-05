@@ -124,7 +124,10 @@ export function audioUrl(mediaId, stream = 0) {
 
 // Один канал потока (клип «разложен по каналам», 0.5.1): моно-файл в кэше делается по первому запросу.
 // null — ещё готовится (плеер пока молчит у этого клипа), по готовности — событие media (runtime).
-const chanJobs = new Set();
+// Задания: job -> { status: 'run' | 'error', at }. Готовое задание удаляется (адрес — в runtime): после сброса runtime
+// (открыт другой проект, восстановление автосохранения) файл канала запрашивается снова (из кэша — мгновенно).
+const chanJobs = new Map();
+const CHAN_RETRY_MS = 30000;
 export function channelUrl(mediaId, stream = 0, ch = 0) {
   const rt = store.runtime[mediaId] || {};
   if (rt.missing) return null;
@@ -133,14 +136,25 @@ export function channelUrl(mediaId, stream = 0, ch = 0) {
   if (have) return have;
   const m = store.media(mediaId);
   const job = `${mediaId}|${k}`;
-  if (m && !chanJobs.has(job)) {
-    chanJobs.add(job);
+  const j = chanJobs.get(job);
+  if (m && (!j || (j.status === 'error' && Date.now() - j.at > CHAN_RETRY_MS))) {
+    const rec = { status: 'run', at: Date.now() };
+    chanJobs.set(job, rec);
     api.audioStream(m, stream, ch).then((url) => {
+      chanJobs.delete(job);
       const r = store.runtime[mediaId] || {};
       store.setRuntime(mediaId, { channelUrl: { ...(r.channelUrl || {}), [k]: url } });
-    }).catch((e) => { console.warn('audio channel', k, e); setTimeout(() => chanJobs.delete(job), 10000); });
+    }).catch((e) => {
+      if (!j) console.warn('audio channel', k, errText(e));   // в журнал — один раз, повторы молча
+      Object.assign(rec, { status: 'error', at: Date.now() });
+    });
   }
   return null;
+}
+/** Состояние файла канала для значка плеера: 'pending' | 'error' | null (готов или не нужен) */
+export function channelState(mediaId, stream = 0, ch = 0) {
+  const j = chanJobs.get(`${mediaId}|${stream}:${ch}`);
+  return j ? (j.status === 'error' ? 'error' : 'pending') : null;
 }
 
 // Волна потока N: { rate, data, channels? }

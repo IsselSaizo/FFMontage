@@ -49,6 +49,8 @@ export default {
   'каналы проекта: {l}': 'project channels: {l}',
   'маршрут дорожки': 'track routing',
   'разложено по каналам: {n}': 'split into channels: {n}',
+  'Дорожка под замком': 'The track is locked',
+  'DNxHR: кадр не меньше 256×120 (сейчас {w}×{h})': 'DNxHR: the frame must be at least 256×120 (now {w}×{h})',
   // --- экспорт: каналы и мастер-копия ---
   'Одна дорожка: {n} каналов ({names})': 'One track: {n} channels ({names})',
   '{n} моно-дорожек — каждый канал отдельно': '{n} mono tracks — each channel separately',

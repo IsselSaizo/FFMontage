@@ -418,6 +418,10 @@ pub fn clear(cats: &[String], keep: &[String]) -> Value {
                 rm(&path, &mut freed, &mut failed);
                 continue;
             }
+            // Признак работающей сессии: пустой — и падение в этом же запуске не заметили бы
+            if path.file_name().is_some_and(|n| n == "session.json") {
+                continue;
+            }
             let size = path.metadata().map(|m| m.len()).unwrap_or(0);
             if std::fs::write(&path, b"").is_ok() {
                 freed += size;
@@ -548,6 +552,12 @@ pub fn startup() {
     let stale: Vec<String> = meta_lock().as_ref().map(|m| m.keys().filter(|k| !dirs.contains(*k)).cloned().collect()).unwrap_or_default();
     gone.extend(stale);
     forget(&gone);
+    // Первый запуск после 0.3.x: meta.json (время использования) ещё нет — LRU не знает, что нужно, и срезал бы
+    // прокси и реверсы до лимита (пересчёт — часы). В этот раз только пишем meta.json, автоочистка — со следующего.
+    if !meta_file().exists() {
+        flush_meta();
+        return;
+    }
     autoclean(&[], AutoOpts::default());
 }
 

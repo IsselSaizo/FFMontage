@@ -241,14 +241,8 @@ async fn run_inner(
         let lines: Vec<&str> = tail.trim().lines().filter(|l| !l.trim().is_empty()).collect();
         let last = lines[lines.len().saturating_sub(6)..].join("\n");
         // Отчёт: команда, граф и вывод FFmpeg целиком (большой журнал — начало и конец)
-        let full = std::fs::read_to_string(&log_file).unwrap_or_default();
-        let body = if full.len() > 300_000 {
-            let head = (0..=100_000).rev().find(|&i| full.is_char_boundary(i)).unwrap_or(0);
-            let tail = (full.len() - 100_000..full.len()).find(|&i| full.is_char_boundary(i)).unwrap_or(full.len());
-            format!("{}\n…\n{}", &full[..head], &full[tail..])
-        } else {
-            full
-        };
+        // Байты, а не строка: FFmpeg выводит теги как есть (Latin-1 и т. п.) — read_to_string дал бы пустой отчёт
+        let body = crate::crashlog::head_tail(&log_file, 100_000);
         crate::crashlog::report("export-failed", &format!("FFmpeg exit code {}", st.code().unwrap_or(-1)), &body, None);
         return Err(err(
             tr!("FFmpeg завершился с ошибкой (код {}).\n{}", "FFmpeg failed (code {}).\n{}", st.code().unwrap_or(-1), last),

@@ -1,6 +1,6 @@
 [package]
 name = "ff-montage"
-version = "0.5.2"
+version = "0.4.7"
 description = "FF Montage — видеоредактор с FFmpeg под капотом"
 license = "GPL-3.0-or-later"
 edition = "2021"

@@ -17,6 +17,17 @@ const MAX_JS_PER_SESSION: usize = 20;
 const LOG_TAIL_LINES: usize = 150;
 
 static JS_REPORTS: AtomicUsize = AtomicUsize::new(0);
+/// Отчёты не о падении (export-failed, render-failed, js-error…) за запуск: цикл повторов не должен вытеснить
+/// из ротации тот единственный отчёт о падении, ради которого папку откроют
+static OTHER_REPORTS: AtomicUsize = AtomicUsize::new(0);
+const MAX_OTHER_PER_SESSION: usize = 30;
+/// Процесс — хост аудиоплагинов (--vst-host): его паника — отдельный вид, без «программа упала» в окне
+static VST_HOST: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Виды «программа упала» (уведомление при запуске, app.js noticeCrashReports)
+fn is_crash(kind: &str) -> bool {
+    matches!(kind, "panic" | "native" | "unclean-exit" | "window-crash")
+}
 
 pub fn dir() -> PathBuf {
     paths::get().logs.join("reports")
@@ -84,6 +95,31 @@ pub fn tail(path: &Path, n: usize) -> String {
     lines[lines.len().saturating_sub(n)..].join("\n")
 }
 
+/// Начало и конец файла (по max байт) — байты, без требования UTF-8 (журнал FFmpeg может содержать что угодно)
+pub fn head_tail(path: &Path, max: usize) -> String {
+    let Ok(buf) = std::fs::read(path) else { return String::new() };
+    if buf.len() <= max * 3 {
+        return String::from_utf8_lossy(&buf).into_owned();
+    }
+    format!("{}\n…\n{}", String::from_utf8_lossy(&buf[..max]), String::from_utf8_lossy(&buf[buf.len() - max..]))
+}
+
+/// Домашняя папка в тексте отчёта → «~» (в путях — имя пользователя; отчёт могут приложить к сообщению об ошибке)
+fn redact(text: &str) -> String {
+    let home = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")).unwrap_or_default();
+    let home = home.trim_end_matches(['/', '\\']);
+    if home.len() < 4 {
+        return text.to_string();
+    }
+    let mut out = text.replace(home, "~");
+    // То же в виде, как его пишет FFmpeg в графе (\\ и экранированное двоеточие)
+    let esc = home.replace('\\', "/");
+    if esc != home {
+        out = out.replace(&esc, "~");
+    }
+    out
+}
+
 /// Шапка отчёта: версия, ОС, режим данных
 pub fn header(kind: &str, secs: u64) -> String {
     let p = paths::get();
@@ -103,6 +139,9 @@ pub fn header(kind: &str, secs: u64) -> String {
 /// Записать отчёт; log — журнал, хвост которого приложить (None — без журнала). Возвращает путь файла.
 pub fn report(kind: &str, title: &str, body: &str, log: Option<&Path>) -> Option<PathBuf> {
     let kind = clean_kind(kind);
+    if !is_crash(&kind) && OTHER_REPORTS.fetch_add(1, Ordering::SeqCst) >= MAX_OTHER_PER_SESSION {
+        return None;
+    }
     let secs = now_secs();
     let d = dir();
     std::fs::create_dir_all(&d).ok()?;
@@ -121,7 +160,7 @@ pub fn report(kind: &str, title: &str, body: &str, log: Option<&Path>) -> Option
             text.push_str(&format!("\n=== last {LOG_TAIL_LINES} lines of {name} ===\n{t}\n"));
         }
     }
-    std::fs::write(&path, text).ok()?;
+    std::fs::write(&path, redact(&text)).ok()?;
     prune(&d, MAX_REPORTS);
     Some(path)
 }
@@ -203,6 +242,8 @@ pub fn list(mark_seen: bool) -> Value {
 
 /// Начало сессии окна (после проверки «одна копия на папку кэша»). prev_log — журнал прошлого запуска.
 pub fn session_start(prev_log: &Path) {
+    #[cfg(unix)]
+    unix_signals::install(&session_file());
     let f = session_file();
     // Пустой файл — «очистка журналов» в настройках кэша, а не след падения
     let old: Value = std::fs::read_to_string(&f).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(Value::Null);
@@ -233,9 +274,50 @@ pub fn session_start(prev_log: &Path) {
         std::fs::write(&f, json!({ "pid": std::process::id(), "started": now_secs(), "version": env!("CARGO_PKG_VERSION") }).to_string());
 }
 
-/// Штатный выход: признак сессии больше не нужен
+/// Штатный выход: признак сессии больше не нужен. Только свой: при перезапуске после обновления новая копия
+/// уже могла записать свой признак, пока старая завершалась.
 pub fn session_end() {
-    let _ = std::fs::remove_file(session_file());
+    let f = session_file();
+    let v: Value = std::fs::read_to_string(&f).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(Value::Null);
+    if v["pid"].as_u64().is_none_or(|p| p == u64::from(std::process::id())) {
+        let _ = std::fs::remove_file(f);
+    }
+}
+
+/// Linux / Steam Deck: SIGTERM и SIGHUP (выход из игрового режима, завершение сеанса) — не падение. Обработчик делает
+/// только async-signal-safe: unlink признака сессии, затем стандартное действие сигнала.
+#[cfg(unix)]
+mod unix_signals {
+    use std::ffi::CString;
+    use std::path::Path;
+    use std::sync::OnceLock;
+
+    static MARKER: OnceLock<CString> = OnceLock::new();
+
+    extern "C" fn on_signal(sig: libc::c_int) {
+        if let Some(p) = MARKER.get() {
+            unsafe {
+                libc::unlink(p.as_ptr());
+            }
+        }
+        unsafe {
+            libc::signal(sig, libc::SIG_DFL);
+            libc::raise(sig);
+        }
+    }
+
+    pub fn install(marker: &Path) {
+        use std::os::unix::ffi::OsStrExt;
+        let Ok(c) = CString::new(marker.as_os_str().as_bytes()) else { return };
+        if MARKER.set(c).is_err() {
+            return;
+        }
+        let h = on_signal as extern "C" fn(libc::c_int) as libc::sighandler_t;
+        unsafe {
+            libc::signal(libc::SIGTERM, h);
+            libc::signal(libc::SIGHUP, h);
+        }
+    }
 }
 
 /// Журнал при запуске: прошлый переименовывается в <name>.prev.log (раньше он затирался — и с ним следы падения)
@@ -255,31 +337,73 @@ pub fn rotate_log(name: &str) -> PathBuf {
 // Паника Rust и исключения Windows
 // ---------------------------------------------------------------------------
 
-/// Перехват паник (все режимы: окно, --mcp, --engine, --vst-host) и необработанных исключений Windows
-pub fn install() {
+/// Перехват паник (все режимы: окно, --mcp, --engine, --vst-host) и необработанных исключений Windows.
+/// vst_host — процесс-хост аудиоплагинов: паника — вид vst-host-panic, исключения Windows (падение стороннего
+/// плагина, изолировано by design) не перехватываются.
+pub fn install(vst_host: bool) {
+    VST_HOST.store(vst_host, Ordering::SeqCst);
     std::panic::set_hook(Box::new(|info| {
         let bt = std::backtrace::Backtrace::force_capture();
         let thread = std::thread::current().name().unwrap_or("?").to_string();
-        let msg = format!("{info}\nthread: {thread}\n\n{bt}");
+        // {bt:#} — с адресами (в релизе символов нет); база exe — чтобы перевести адреса в смещения по PDB сборки
+        let msg = format!("{info}\nthread: {thread}\n{}\n{bt:#}", exe_base());
         eprintln!("{msg}");
         let p = paths::get();
         let _ = std::fs::create_dir_all(&p.logs);
         if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(p.logs.join("panic.log")) {
             let _ = writeln!(f, "--- {}\n{msg}\n", utc_text(now_secs()));
         }
-        report("panic", "Rust panic", &msg, Some(&p.logs.join("renderer.log")));
+        let kind = if VST_HOST.load(Ordering::SeqCst) { "vst-host-panic" } else { "panic" };
+        report(kind, "Rust panic", &msg, Some(&p.logs.join("renderer.log")));
     }));
     #[cfg(windows)]
-    native::install();
+    if !vst_host {
+        native::install();
+    }
+}
+
+/// Адрес загрузки exe (ASLR): адреса стека минус база = смещения в символах (PDB) этой сборки
+fn exe_base() -> String {
+    #[cfg(windows)]
+    {
+        let h = unsafe { windows::Win32::System::LibraryLoader::GetModuleHandleW(None) };
+        h.map(|h| format!("exe base: 0x{:X}", h.0 as usize)).unwrap_or_default()
+    }
+    #[cfg(not(windows))]
+    String::new()
 }
 
 #[cfg(windows)]
 mod native {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use windows::Win32::Foundation::HMODULE;
     use windows::Win32::System::Diagnostics::Debug::{SetUnhandledExceptionFilter, EXCEPTION_POINTERS};
+    use windows::Win32::System::LibraryLoader::{
+        GetModuleFileNameW, GetModuleHandleExW, GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+    };
 
     const EXCEPTION_CONTINUE_SEARCH: i32 = 0;
+    static BUSY: AtomicBool = AtomicBool::new(false);
+
+    /// Модуль (exe или DLL), в котором адрес, и смещение от его начала — по ним сбой находится в символах сборки
+    fn module_of(addr: usize) -> String {
+        let mut h = HMODULE::default();
+        let flags = GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT;
+        if unsafe { GetModuleHandleExW(flags, windows::core::PCWSTR(addr as *const u16), &mut h) }.is_err() {
+            return "?".into();
+        }
+        let mut buf = [0u16; 520];
+        let n = unsafe { GetModuleFileNameW(Some(h), &mut buf) } as usize;
+        let name = String::from_utf16_lossy(&buf[..n.min(buf.len())]);
+        let name = name.rsplit(['\\', '/']).next().unwrap_or("?").to_string();
+        format!("{name}+0x{:X}", addr.wrapping_sub(h.0 as usize))
+    }
 
     unsafe extern "system" fn filter(info: *const EXCEPTION_POINTERS) -> i32 {
+        // Повторный сбой внутри самого обработчика — дальше системе, без отчёта
+        if BUSY.swap(true, Ordering::SeqCst) {
+            return EXCEPTION_CONTINUE_SEARCH;
+        }
         // Процесс уже в аварийном состоянии: только самое простое — код, адрес, стек Rust (если получится)
         let (code, addr) = unsafe {
             match info.as_ref().and_then(|i| i.ExceptionRecord.as_ref()) {
@@ -297,8 +421,13 @@ mod native {
             0x8000_0003 => "BREAKPOINT",
             _ => "unknown",
         };
-        let bt = std::backtrace::Backtrace::force_capture();
-        let body = format!("exception 0x{code:08X} ({name}) at 0x{addr:016X}\n\n{bt}");
+        // Переполнение стека: места на стеке почти нет — без захвата стека вызовов
+        let bt = if code == 0xC000_00FD {
+            String::from("(stack overflow: no backtrace)")
+        } else {
+            format!("{:#}", std::backtrace::Backtrace::force_capture())
+        };
+        let body = format!("exception 0x{code:08X} ({name}) at 0x{addr:016X} ({})\n{}\n{bt}", module_of(addr), super::exe_base());
         super::report("native", "Unhandled Windows exception", &body, Some(&crate::paths::get().logs.join("renderer.log")));
         EXCEPTION_CONTINUE_SEARCH
     }

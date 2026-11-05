@@ -207,6 +207,8 @@ export function buildExport(project, settings) {
   const W = even(settings.width);
   const H = even(settings.height);
   const F = Number(settings.fps) || 30;
+  // Точная частота для фильтра fps (мастер-копии: 30000/1001 вместо 29.97 — MXF принимает только стандартные)
+  const FX = settings.fpsExpr || F;
   // Формат кадров в графе: обычно 4:2:0; вещательные пресеты (0.5.2) — 4:2:2 / 4:4:4 10 бит без промежуточного 4:2:0
   const PF = /^yuv4[24][024]p(10le)?$/.test(settings.pixFmt || '') ? settings.pixFmt : 'yuv420p';
   const media = project.media || {};
@@ -261,10 +263,10 @@ export function buildExport(project, settings) {
   // fit 'cover' — заполнить кадр (лишнее обрезается), 'stretch' — растянуть без сохранения пропорций,
   // иначе вписать целиком с полями цвета фона
   const scaleChain = (c) => cropChain(c) + (c.fit === 'cover'
-    ? `fps=${F},scale=${W}:${H}:force_original_aspect_ratio=increase:flags=lanczos,crop=${W}:${H},setsar=1,format=${PF}`
+    ? `fps=${FX},scale=${W}:${H}:force_original_aspect_ratio=increase:flags=lanczos,crop=${W}:${H},setsar=1,format=${PF}`
     : c.fit === 'stretch'
-      ? `fps=${F},scale=${W}:${H}:flags=lanczos,setsar=1,format=${PF}`
-      : `fps=${F},scale=${W}:${H}:force_original_aspect_ratio=decrease:flags=lanczos,` +
+      ? `fps=${FX},scale=${W}:${H}:flags=lanczos,setsar=1,format=${PF}`
+      : `fps=${FX},scale=${W}:${H}:force_original_aspect_ratio=decrease:flags=lanczos,` +
         `pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2:color=0x${bg},setsar=1,format=${PF}`);
   // Слой клипа с трансформом (transform.js): кадрирование → подгонка в рамку W·scale × H·scale → прозрачность → поворот.
   // На выходе — картинка с альфой своего размера; где она стоит в кадре — решает overlay (центр + сдвиг).
@@ -277,7 +279,7 @@ export function buildExport(project, settings) {
         ? `scale=${bw}:${bh}:flags=lanczos`
         : `scale=${bw}:${bh}:force_original_aspect_ratio=decrease:force_divisible_by=2:flags=lanczos`;
     const rad = (tf.rotate * Math.PI) / 180;
-    return cropChain(c) + `fps=${F},${fit},setsar=1,format=yuva420p` +
+    return cropChain(c) + `fps=${FX},${fit},setsar=1,format=yuva420p` +
       (tf.opacity < 1 ? `,colorchannelmixer=aa=${n6(tf.opacity)}` : '') +
       (Math.abs(rad) > 1e-6 ? `,rotate=a=${n6(rad)}:c=none:ow=rotw(${n6(rad)}):oh=roth(${n6(rad)})` : '');
   };
@@ -287,7 +289,7 @@ export function buildExport(project, settings) {
     return `x=${n6(W / 2 + tf.x * W)}-overlay_w/2:y=${n6(H / 2 + tf.y * H)}-overlay_h/2`;
   };
   const audioFmt = AUDIO_FMT;
-  const black = (dur) => `color=c=0x${bg}:s=${W}x${H}:r=${F},format=${PF},setsar=1,trim=duration=${n6(dur)},setpts=PTS-STARTPTS`;
+  const black = (dur) => `color=c=0x${bg}:s=${W}x${H}:r=${FX},format=${PF},setsar=1,trim=duration=${n6(dur)},setpts=PTS-STARTPTS`;
   // alpha — на верхних дорожках клип проявляется из прозрачности, а не из цвета фона
   const vFades = (c, head, len, alpha = false) => {
     const how = alpha ? ':alpha=1' : `:color=0x${bg}`;
@@ -368,7 +370,7 @@ export function buildExport(project, settings) {
       // (y — выражение overlay по времени: у одиночного клипа верхней дорожки t — время ролика, иначе — время клипа)
       const tx = m._text;
       const rollY = (t0) => `y=${H}-(t-${n6(t0)})/${n6(len)}*${H + tx.h}`;
-      const chainOf = (cc) => (tx ? `fps=${F},setsar=1,format=yuva420p` : layerChain(cc));
+      const chainOf = (cc) => (tx ? `fps=${FX},setsar=1,format=yuva420p` : layerChain(cc));
       const posOf = (cc, local) => (tx ? (tx.roll ? `x=0:${rollY(local ? h : cc.start)}` : 'x=0:y=0') : layerPos(cc));
       if (showVideo) {
         warnFx(c);
@@ -379,7 +381,7 @@ export function buildExport(project, settings) {
           filters.push(`${src}${chainOf(c)}${tail}`);
         } else {
           // Слой на холсте во весь кадр: цвет фона (основная дорожка) или прозрачный (верхние, для переходов)
-          const cv = alpha ? `color=c=black@0:s=${W}x${H}:r=${F},format=yuva420p` : `color=c=0x${bg}:s=${W}x${H}:r=${F},format=${PF}`;
+          const cv = alpha ? `color=c=black@0:s=${W}x${H}:r=${FX},format=yuva420p` : `color=c=0x${bg}:s=${W}x${H}:r=${FX},format=${PF}`;
           filters.push(`${src}${chainOf(c)}[${P}ly${i}]`);
           filters.push(`${cv}[${P}cv${i}]`);
           filters.push(`[${P}cv${i}][${P}ly${i}]overlay=${posOf(c, true)}:shortest=1:format=auto,format=${alpha ? 'yuva420p' : PF},setsar=1${tail}`);
@@ -514,8 +516,6 @@ export function buildExport(project, settings) {
     filters.push(`[vsub]ass=filename=${ffPath(burn.ass)}${burn.fontsdir ? `:fontsdir=${ffPath(burn.fontsdir)}` : ''}:original_size=${W}x${H},format=${PF}[vout]`);
   }
 
-  // Нормализация громкости (0.5.0) — только общий микс [aout]: замер (loudnessMeasure) или второй проход по замеру
-  const ln = loudnessChain(settings, (m) => warnings.add(m));
   // 0.5.1: раскладка каналов. Каждая дорожка (и звук видео) — стерео; на выходе дорожки pan раскладывает её по каналам
   // проекта (маршрут), общий микс — N каналов. out.mode: 'mix' — одна N-канальная дорожка, 'stereo' — даунмикс,
   // 'mono' — N моно-дорожек (asplit + pan=mono)
@@ -527,7 +527,12 @@ export function buildExport(project, settings) {
   const monoOut = out.mode === 'mono' && (lay.channels > 1 || pad > 1);
   const MAIN = monoOut ? '[amain]' : '[aout]';
   const down = out.mode === 'stereo' ? downmixPan(project) : '';
-  const tailTo = (o) => `apad,atrim=duration=${n6(total)},alimiter=limit=0.98:attack=5:release=50:level=0${down ? `,${down}` : ''}${o === MAIN ? ln : ''}${o}`;
+  // Нормализация громкости (0.5.0) — только общий микс: замер (loudnessMeasure) или второй проход по замеру.
+  // loudnorm верно взвешивает только моно / стерео / 5.1 (каналы с 7-го не слышит) — иначе замер по даунмиксу
+  const lnSafe = !!down || ['stereo', 'mono', '5.1'].includes(lay.kind) || lay.channels <= 2;
+  const ln = loudnessChain(settings, (m) => warnings.add(m), lnSafe ? '' : downmixPan(project));
+  // Даунмикс — до лимитера: сумма каналов (5.1: L + 0,7·C + 0,7·Ls) иначе перегружала бы стерео
+  const tailTo = (o) => `apad,atrim=duration=${n6(total)}${down ? `,${down}` : ''},alimiter=limit=0.98:attack=5:release=50:level=0${o === MAIN ? ln : ''}${o}`;
   const routeLabel = (label, group, i) => {
     const tr = group === 'video' ? 'video' : (project.audioTracks || []).find((x) => x.id === group);
     const pan = routePan(routeOf(project, tr), project);
@@ -600,16 +605,22 @@ export function cleanLoudness(x) {
   return out;
 }
 const f2 = (x) => Number(x).toFixed(2);
-// Звено графа после лимитера: '' | ',loudnorm=…'
-function loudnessChain(settings, warn) {
+// Звено графа после лимитера: '' | ',loudnorm=…'. fold — pan даунмикса для замера (7.1, N моно: loudnorm не видит
+// каналы с 7-го); тогда второй проход — volume на разницу и лимитер пика, а не loudnorm по N каналам
+function loudnessChain(settings, warn, fold = '') {
   const L = cleanLoudness(settings.loudness);
   if (!L) return '';
   const base = `loudnorm=I=${f2(L.i)}:TP=${f2(L.tp)}:LRA=${f2(L.lra)}`;
-  if (settings.loudnessMeasure) return `,${base}:print_format=json`;
+  if (settings.loudnessMeasure) return `,${fold ? `${fold},` : ''}${base}:print_format=json`;
   const m = L.measured;
   if (!m) { warn(t('Нормализация громкости пропущена: нет замера')); return ''; }
   // Тишина (−inf) или почти тишина: поднимать нечего
   if (m.input_i === null || m.input_i < -69 || m.input_thresh === null) { warn(t('Звук слишком тихий — нормализация громкости пропущена')); return ''; }
+  // Замер по даунмиксу или громче 0 LUFS (loudnorm принимает measured_I только −99…0): одним множителем + лимитер
+  if (fold || m.input_i > 0 || m.input_thresh > 0) {
+    const lim = Math.min(1, Math.max(0.0625, 10 ** (L.tp / 20)));
+    return `,volume=${f2(L.i - m.input_i)}dB,alimiter=limit=${lim.toFixed(4)}:attack=5:release=50:level=0`;
+  }
   const mtp = m.input_tp === null ? -99 : Math.max(-99, m.input_tp);
   const mlra = m.input_lra === null ? 0 : Math.max(0, m.input_lra);
   // loudnorm считает на 192 кГц — назад к 48 кГц
@@ -623,7 +634,7 @@ function loudnessChain(settings, warn) {
  */
 export function loudnessPlan(project, settings, ffMajor = 99) {
   const plan = buildExport(project, {
-    ...settings, audioMode: audioModeFor(project, settings), width: 16, height: 16, fps: 10, audioOnly: true, stems: false, loudnessMeasure: true,
+    ...settings, audioMode: resolveAudioMode(project, settings), width: 16, height: 16, fps: 10, audioOnly: true, stems: false, loudnessMeasure: true,
     assets: { ...(settings.assets || {}), subtitles: null },
   });
   const filterArgs = ffMajor >= 7 ? ['-/filter_complex', '@@FILTER@@'] : ['-filter_complex_script', '@@FILTER@@'];
@@ -721,6 +732,19 @@ function audioStreamArgs(plan) {
  * Как писать звук при раскладке проекта (0.5.1): settings.audioOut — 'mix' (по умолчанию) | 'stereo' | 'mono';
  * формат и кодек могут не позволить (audioLayout.js outputMode). → { mode, note? }
  */
+/** Режим звука для экспорта и для замера громкости — один и тот же (мастер-копия, GIF — свои правила) */
+export function resolveAudioMode(project, settings) {
+  const bc = broadcastById(settings.broadcast);
+  if (bc) {
+    if (bc.mono) return { mode: 'mono', pad: bc.mono };
+    // ProRes: одна дорожка или N моно; «стерео» в мастер-копии не предлагается — сохранённый выбор не действует
+    const out = settings.audioOut === 'stereo' ? 'mix' : settings.audioOut;
+    return audioModeFor(project, { ...settings, audioOut: out, container: 'mov', audioCodec: 'pcm' });
+  }
+  // GIF: звука нет, [aout] уходит в anullsink — всегда один микс
+  if (containerOf(settings) === 'gif') return { mode: 'mix' };
+  return audioModeFor(project, settings);
+}
 export function audioModeFor(project, settings) {
   const container = containerOf(settings);
   const codec = audioCodecFor(container, settings.audioCodec);
@@ -748,19 +772,32 @@ export const BROADCAST = [
   },
 ];
 export const broadcastById = (id) => BROADCAST.find((x) => x.id === id) || null;
-/** Таймкод начала «ЧЧ:ММ:СС:КК» (кадры — меньше частоты); неверный → 10:00:00:00 (принято в эфире) */
+// Стандартные частоты: MXF принимает только их, MOV пишет точную дробь (2997/100 у 29.97 уводил бы таймкод)
+const STD_RATES = [[23.976, '24000/1001'], [24, '24'], [25, '25'], [29.97, '30000/1001'], [30, '30'], [50, '50'], [59.94, '60000/1001'], [60, '60']];
+/** Частота мастер-копии: { fps, expr }. mxf — ближайшая стандартная; mov — дробь NTSC для 23.976 / 29.97 / 59.94 */
+export function broadcastRate(fps, container) {
+  const f = Number(fps) || 25;
+  const near = STD_RATES.reduce((a, b) => (Math.abs(b[0] - f) < Math.abs(a[0] - f) ? b : a));
+  if (container === 'mxf' || Math.abs(near[0] - f) < 0.01) return { fps: near[0], expr: near[1] };
+  return { fps: f, expr: String(f) };
+}
+const isNtsc = (fps) => Math.abs(fps - 29.97) < 0.01 || Math.abs(fps - 59.94) < 0.01;
+/** Таймкод начала «ЧЧ:ММ:СС:КК» (кадры — меньше частоты; «;» — drop-frame, только у 29.97 / 59.94); неверный → 10:00:00:00 */
 export function cleanTimecode(tc, fps = 25) {
-  const m = /^(\d{2}):([0-5]\d):([0-5]\d)[:;](\d{2})$/.exec(String(tc || '').trim());
-  if (!m || Number(m[1]) > 23 || Number(m[4]) >= Math.ceil(fps)) return '10:00:00:00';
-  return `${m[1]}:${m[2]}:${m[3]}:${m[4]}`;
+  const m = /^(\d{2}):([0-5]\d):([0-5]\d)([:;])(\d{2})$/.exec(String(tc || '').trim());
+  if (!m || Number(m[1]) > 23 || Number(m[5]) >= Math.ceil(fps)) return '10:00:00:00';
+  return `${m[1]}:${m[2]}:${m[3]}${m[4] === ';' && isNtsc(fps) ? ';' : ':'}${m[5]}`;
 }
 
 function broadcastCommand(project, settings, b, ffMajor) {
   const W = b.width || settings.width; const H = b.height || settings.height;
-  const fps = b.fps || settings.fps;
+  // DNxHR: кадр не меньше 256×120 — иначе кодировщик не откроется с невнятной ошибкой
+  if (/^dnxhr/.test(b.id) && (W < 256 || H < 120)) throw new Error(t('DNxHR: кадр не меньше 256×120 (сейчас {w}×{h})', { w: W, h: H }));
+  const rate = broadcastRate(b.fps || settings.fps, b.container);
+  const fps = rate.fps;
   // ProRes: звук — одна дорожка или N моно (settings.audioOut); MXF — всегда 8 моно (дополняется тишиной)
-  const audioMode = b.mono ? { mode: 'mono', pad: b.mono } : audioModeFor(project, { ...settings, container: 'mov', audioCodec: 'pcm' });
-  const plan = buildExport(project, { ...settings, width: W, height: H, fps, pixFmt: b.pix, stems: false, audioMode });
+  const audioMode = resolveAudioMode(project, settings);
+  const plan = buildExport(project, { ...settings, width: W, height: H, fps, fpsExpr: rate.expr, pixFmt: b.pix, stems: false, audioMode });
   const filterArgs = ffMajor >= 7 ? ['-/filter_complex', '@@FILTER@@'] : ['-filter_complex_script', '@@FILTER@@'];
   const filter = b.field ? `${plan.filter};\n[vout]setfield=${b.field}[vbc]` : plan.filter;
   const args = ['-hide_banner', '-y', '-nostdin', ...plan.inputs, ...filterArgs,
@@ -780,7 +817,7 @@ export function exportCommand(project, settings, ffMajor = 99) {
   const bc = broadcastById(settings.broadcast);
   if (bc) return broadcastCommand(project, settings, bc, ffMajor);
   const container = containerOf(settings);
-  settings = { ...settings, audioMode: audioModeFor(project, settings) };
+  settings = { ...settings, audioMode: resolveAudioMode(project, settings) };
   const filterArgs0 = ffMajor >= 7 ? ['-/filter_complex', '@@FILTER@@'] : ['-filter_complex_script', '@@FILTER@@'];
   // Только звук: картинка не нужна — видеодорожки скрыты, кадр 16×16 (граф дешёвый), его выход уходит в nullsink
   if (isAudioOnly(container)) {

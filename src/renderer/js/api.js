@@ -48,6 +48,7 @@ window.addEventListener('unhandledrejection', (e) => {
 });
 
 let infoCache = null;
+let exportCancelled = false;   // «Отмена» во время экспорта (в т. ч. между проходами нормализации)
 const info = async () => {
   const i = await invoke('app_info');
   infoCache = i;
@@ -90,6 +91,7 @@ window.api = {
   pickExportPath: (suggested, ext = 'mp4') => invoke('export_pick', { suggested, ext }),
   defaultExportPath: (base, ext = 'mp4') => invoke('export_default_path', { base, ext }),
   startExport: async (project, settings) => {
+    exportCancelled = false;
     const i = infoCache || await info();
     let plan;
     try {
@@ -103,6 +105,8 @@ window.api = {
         const r = await invoke('export_loudness', { plan: loudnessPlan(project, s, i.ffMajor) });
         if (!r || !r.ok) return { ok: false, error: (r && r.error) || 'loudness', cancelled: !!(r && r.cancelled) };
         s.loudness = { ...L, measured: r.result };
+        // «Отмена» между проходами: замер уже закончился (отменять в Rust нечего) — второй проход не начинаем
+        if (exportCancelled) return { ok: false, error: 'cancelled', cancelled: true };
       }
       plan = exportCommand(project, s, i.ffMajor);
       const res = await invoke('export_start', { plan });
@@ -112,7 +116,7 @@ window.api = {
   },
   // Готовый план FFmpeg (запекание анимаций): { args, filter, duration, output }
   runPlan: (plan) => invoke('export_start', { plan: { args: plan.args, filter: plan.filter, duration: plan.duration, output: plan.output } }),
-  cancelExport: () => invoke('export_cancel'),
+  cancelExport: () => { exportCancelled = true; return invoke('export_cancel'); },
   onExportProgress: (fn) => on('export:progress', fn),
   saveProject: (args) => invoke('project_save', { args }),
   openProject: () => invoke('project_open'),

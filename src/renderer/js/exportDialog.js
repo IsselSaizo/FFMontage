@@ -3,7 +3,7 @@ import { store } from './store.js';
 import { h, fmtTime, fmtBytes, fmtDur, icon, toast } from './util.js';
 import { t, num } from './i18n.js';
 import { listExportPresets, listLoudnessTargets, loudnessTargetById, onRegistryChange } from './registry.js';
-import { buildExport, gpuFamily, CONTAINERS, VIDEO_CONTAINERS, AUDIO_CONTAINERS, AUDIO_CODECS, audioCodecFor, stemsAllowed, isAudioOnly, GIF_FPS, GIF_MAX_SEC, BROADCAST, broadcastById, cleanTimecode } from './exportPlan.js';
+import { buildExport, gpuFamily, CONTAINERS, VIDEO_CONTAINERS, AUDIO_CONTAINERS, AUDIO_CODECS, audioCodecFor, stemsAllowed, isAudioOnly, GIF_FPS, GIF_MAX_SEC, BROADCAST, broadcastById, cleanTimecode, broadcastRate } from './exportPlan.js';
 import { layoutOf, channelLabels } from './audioLayout.js';
 import { invoke } from './tauri.js';
 import './core/exportPresets.js';
@@ -224,7 +224,9 @@ export async function openExport() {
     const bcSel = h('select', { class: 'input', id: 'export-broadcast' }, ...BROADCAST.map((x) => h('option', { value: x.id, selected: x.id === st.broadcast }, x.label)));
     bcSel.addEventListener('change', () => { const was = extOf(); st.broadcast = bcSel.value; if (extOf() !== was) st.output = null; renderForm(); });
     const tcInput = h('input', { class: 'input', id: 'export-timecode', value: st.timecode, maxlength: '11', spellcheck: 'false', style: { width: '9em' }, title: t('Таймкод первого кадра: ЧЧ:ММ:СС:КК') });
-    tcInput.addEventListener('change', () => { st.timecode = cleanTimecode(tcInput.value, bc.fps || 25); tcInput.value = st.timecode; });
+    // Кадры таймкода — по настоящей частоте мастер-копии (50/60 кадров: КК до 49/59)
+    const tcFps = () => broadcastRate(bc.fps || (fpsOptions.find((r) => r.id === st.fps) || {}).v || store.sourceFormat().fps || 25, bc.container).fps;
+    tcInput.addEventListener('change', () => { st.timecode = cleanTimecode(tcInput.value, tcFps()); tcInput.value = st.timecode; });
     // Звук при раскладке проекта не стерео (0.5.1)
     const lay = layoutOf(store.project);
     const multi = lay.kind !== 'stereo';
@@ -317,7 +319,7 @@ export async function openExport() {
     const subtitles = audioOnly ? 'none' : (gif || pro) && st.subtitles === 'soft' ? 'burn' : st.subtitles;
     const settings = { width: res.w, height: res.h, fps: fps.v, codec: enc.enc, quality: st.quality, output, subtitles,
       container: pro ? bc.container : st.container, audioCodec: audioCodecFor(st.container, st.audioCodec).id, stems: !pro && st.stems && stemsAllowed(st.container), audioOut: st.audioOut };
-    if (pro) { settings.broadcast = bc.id; settings.timecode = cleanTimecode(st.timecode, fps.v); }
+    if (pro) { settings.broadcast = bc.id; settings.timecode = cleanTimecode(st.timecode, broadcastRate(fps.v, bc.container).fps); }
     const lnT = gif ? null : loudnessTargetById(st.loudness);
     if (lnT) settings.loudness = { i: lnT.i, tp: lnT.tp, lra: lnT.lra };
     // Что экспорт пропустит (эффекты и переходы пропавших плагинов) — показать до и после
@@ -384,7 +386,7 @@ export async function openExport() {
             h('dt', {}, t('Средний битрейт')), h('dd', {}, t('{n} Мбит/с', { n: num(ratio, 1) })),
             h('dt', {}, t('Длительность')), h('dd', {}, fmtTime(r.duration)),
             h('dt', {}, t('Экспорт занял')), h('dd', {}, fmtDur(r.elapsed)),
-            ...(r.loudness && r.loudness.measured && r.loudness.measured.input_i !== null ? [
+            ...(r.loudness && r.loudness.measured && r.loudness.measured.input_i !== null && r.loudness.measured.input_i >= -69 ? [
               h('dt', {}, t('Громкость')),
               h('dd', { id: 'export-loudness-result' }, t('{to} LUFS (было {from})', { to: num(r.loudness.i, 1), from: num(r.loudness.measured.input_i, 1) }))] : [])), warnNote()),
         h('div', { class: 'modal-foot' },

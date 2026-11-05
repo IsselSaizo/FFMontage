@@ -1077,7 +1077,8 @@ class Store {
     if (!f || f.kind !== 'audio') return [];
     const m = this.media(f.clip.mediaId);
     const n = streamChannels(m, f.clip.stream || 0);
-    if (n < 2 || f.clip.channel !== undefined) return [];
+    // Дорожка клипа под замком — не трогаем (как и остальные правки)
+    if (n < 2 || f.clip.channel !== undefined || (f.track && f.track.locked)) return [];
     const ids = [];
     this.mutate((p) => {
       const src = p.audioTracks.flatMap((x) => x.clips).find((c) => c.id === clipId);
@@ -1085,16 +1086,17 @@ class Store {
       if (!src || !home) return;
       const nch = channelCount(p);
       const s = src.start; const d = len(src);
-      const free = (tr) => tr.clips.every((c) => c === src || end(c) <= s + 1e-6 || c.start >= s + d - 1e-6);
       let at = p.audioTracks.indexOf(home);
       const used = new Set();
+      const base = src.name || (m && m.name) || '';
       for (let k = 0; k < n; k++) {
         const c = k === 0 ? src : { ...JSON.parse(JSON.stringify(src)), id: uid('clp') };
         c.channel = k;
-        c.name = `${(m && m.name) || ''} · ${k + 1}`.trim();
+        // Своё имя клипа сохраняется, к нему — номер канала
+        c.name = `${base} · ${k + 1}`.trim();
         let tr = k === 0 ? home : null;
         if (!tr) {
-          tr = p.audioTracks.slice(at + 1).find((x) => !used.has(x) && !x.clips.length && free(x)) || null;
+          tr = p.audioTracks.slice(at + 1).find((x) => !used.has(x) && !x.clips.length && !x.locked) || null;
           if (!tr) { tr = newTrack(); p.audioTracks.splice(at + 1, 0, tr); }
           tr.clips.push(c);
         }

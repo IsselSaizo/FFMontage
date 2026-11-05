@@ -84,6 +84,34 @@ async function unit() {
   ok(/measured_I=-30\.00:measured_TP=-10\.00:measured_LRA=3\.00:measured_thresh=-40\.00:offset=0\.20:linear=true/.test(c2.filter), 'проход 2: measured_* и linear=true');
   const c3 = P.buildExport(pr, { width: 320, height: 180, fps: 30, loudness: { i: -14, measured: { input_i: null } } });
   ok(!/loudnorm/.test(c3.filter) && c3.warnings.some((w) => /тихий|quiet/i.test(w)), 'тишина: нормализация пропущена с предупреждением');
+
+  console.log('Аудит 0.4.7 (регрессии):');
+  const meas = { input_i: -30, input_tp: -10, input_lra: 3, input_thresh: -40, target_offset: 0 };
+  const p71 = { ...pr, audioLayout: { kind: '7.1' } };
+  const lp71 = P.loudnessPlan(p71, { width: 320, height: 180, fps: 30, output: 'C:\\x\\o.mov', container: 'mov', audioCodec: 'pcm', loudness: { i: -23, tp: -1, lra: 11 } });
+  ok(/pan=stereo\|[^;]*,loudnorm=I=-23\.00[^;]*print_format=json\[aout\]/.test(lp71.filter), 'E-2: 7.1 — замер по даунмиксу (loudnorm не слышит каналы с 7-го)');
+  const e71 = P.exportCommand(p71, { width: 320, height: 180, fps: 30, codec: 'libx264', quality: 'compact', output: 'C:\\x\\o.mov', container: 'mov', audioCodec: 'pcm', loudness: { i: -23, tp: -1, lra: 11, measured: meas } });
+  ok(/volume=7\.00dB,alimiter=limit=0\.8913/.test(e71.filter) && !/loudnorm/.test(e71.filter), 'E-2: 7.1 — второй проход volume + лимитер');
+  const hot = P.exportCommand(pr, { width: 320, height: 180, fps: 30, codec: 'libx264', quality: 'compact', output: 'C:\\x\\o.mp4', loudness: { i: -14, tp: -1, lra: 11, measured: { ...meas, input_i: 1.2, input_thresh: -8.8 } } });
+  ok(/volume=-15\.20dB/.test(hot.filter) && !/measured_I=1/.test(hot.filter), 'E-9: громче 0 LUFS — volume, а не measured_I вне диапазона');
+  const d51 = P.exportCommand({ ...pr, audioLayout: { kind: '5.1' } }, { width: 320, height: 180, fps: 30, codec: 'libx264', quality: 'compact', output: 'C:\\x\\o.mp4', audioOut: 'stereo' });
+  ok(/pan=stereo\|[^;]*,alimiter=/.test(d51.filter), 'E-5: даунмикс до лимитера');
+  ok(P.exportCommand(pr, { width: 320, height: 180, fps: 30, codec: 'libx264', quality: 'compact', output: 'C:\\x\\o.mp4' }).filter.includes('alimiter=limit=0.98:attack=5:release=50:level=0[aout]'), 'стерео-проект: хвост графа как раньше');
+  const gif = P.exportCommand({ ...pr, audioLayout: { kind: 'multi', channels: 4 } }, { width: 320, height: 180, fps: 15, output: 'C:\\x\\o.gif', container: 'gif', audioOut: 'mono' });
+  ok(!/amono/.test(gif.filter) && /\[aout\]anullsink/.test(gif.filter), 'E-1: GIF при N моно — один микс в anullsink');
+  const pro = P.exportCommand({ ...pr, audioLayout: { kind: '5.1' } }, { width: 320, height: 180, fps: 30, output: 'C:\\x\\o.mov', broadcast: 'prores_hq', audioOut: 'stereo' });
+  ok(!/pan=stereo/.test(pro.filter), 'E-4: сохранённое «стерео» не действует на ProRes');
+  const mxf = P.exportCommand(pr, { width: 1920, height: 1080, fps: 29.97, output: 'C:\\x\\o.mxf', broadcast: 'dnxhr_hq', timecode: '01:00:00;00' });
+  ok(/r=30000\/1001/.test(mxf.filter) && mxf.args.includes('01:00:00;00'), 'E-7/E-10: MXF 29.97 → 30000/1001, drop-frame «;» сохранён');
+  ok(P.broadcastRate(15, 'mxf').fps === 23.976 || P.broadcastRate(15, 'mxf').fps === 24, 'MXF: нестандартная частота → ближайшая стандартная');
+  ok(P.cleanTimecode('10:00:00:30', 60) === '10:00:00:30' && P.cleanTimecode('10:00:00;12', 25) === '10:00:00:12', 'таймкод: кадры по частоте, «;» только у NTSC');
+  let dnxErr = '';
+  try { P.exportCommand(pr, { width: 200, height: 112, fps: 25, output: 'C:\\x\\o.mxf', broadcast: 'dnxhr_sq' }); } catch (e) { dnxErr = e.message; }
+  ok(/256/.test(dnxErr), `E-8: DNxHR меньше 256×120 — понятная ошибка (${dnxErr})`);
+  const p16 = { audioLayout: { kind: 'multi', channels: 16 } };
+  ok(L.outputMode(p16, { codec: 'flac', container: 'mkv' }).mode === 'mono' && L.outputMode({ audioLayout: { kind: 'multi', channels: 3 } }, { codec: 'flac', container: 'mkv' }).mode === 'mono', 'E-6: FLAC — до 8 каналов и только именованные раскладки');
+  const dm = L.downmixMatrix(p16);
+  ok(dm.reduce((s, g) => s + g[0] ** 2, 0) <= 1.0001, 'E-5: даунмикс N моно по мощности не больше 1 на сторону');
 }
 
 async function setup() {
