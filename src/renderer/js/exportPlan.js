@@ -18,6 +18,7 @@ import { TRANSITIONS } from './transitions.js';
 import { t } from './i18n.js';
 import { tfOf, isIdentity } from './transform.js';
 import { ffPath } from './core/ffEscape.js';
+import { layoutOf, ffLayout, routeOf, routePan, downmixPan, clipChannel, channelPick, channelLabels, outputMode } from './audioLayout.js';
 
 export const QUALITY = {
   // Значение CQ: меньше — лучше качество и больше файл
@@ -99,7 +100,10 @@ function trackClips(tr, o) {
     const k = o.addInput(m, c.in, dur * sp);
     const nStreams = (m.audioStreams && m.audioStreams.length) || 1;
     const st = Math.min(Math.max(0, c.stream | 0), nStreams - 1);
-    list.push({ label, filter: `[${k}:a:${st}]${AUDIO_FMT}${aSpeed(sp)},volume=${n6(c.volume * o.gain)}${ffAudioFx(c.afx)}${tail}` });
+    // 0.5.1: клип одного канала многоканального потока — этот канал двойным моно
+    const ch = clipChannel(c, m);
+    const pick = ch === undefined ? '' : `,${channelPick(ch)}`;
+    list.push({ label, filter: `[${k}:a:${st}]${pick.slice(1)}${pick ? ',' : ''}${AUDIO_FMT}${aSpeed(sp)},volume=${n6(c.volume * o.gain)}${ffAudioFx(c.afx)}${tail}` });
   }
   return { list, end };
 }
@@ -203,6 +207,8 @@ export function buildExport(project, settings) {
   const W = even(settings.width);
   const H = even(settings.height);
   const F = Number(settings.fps) || 30;
+  // Формат кадров в графе: обычно 4:2:0; вещательные пресеты (0.5.2) — 4:2:2 / 4:4:4 10 бит без промежуточного 4:2:0
+  const PF = /^yuv4[24][024]p(10le)?$/.test(settings.pixFmt || '') ? settings.pixFmt : 'yuv420p';
   const media = project.media || {};
   const inputs = [];
   const filters = [];
@@ -255,11 +261,11 @@ export function buildExport(project, settings) {
   // fit 'cover' — заполнить кадр (лишнее обрезается), 'stretch' — растянуть без сохранения пропорций,
   // иначе вписать целиком с полями цвета фона
   const scaleChain = (c) => cropChain(c) + (c.fit === 'cover'
-    ? `fps=${F},scale=${W}:${H}:force_original_aspect_ratio=increase:flags=lanczos,crop=${W}:${H},setsar=1,format=yuv420p`
+    ? `fps=${F},scale=${W}:${H}:force_original_aspect_ratio=increase:flags=lanczos,crop=${W}:${H},setsar=1,format=${PF}`
     : c.fit === 'stretch'
-      ? `fps=${F},scale=${W}:${H}:flags=lanczos,setsar=1,format=yuv420p`
+      ? `fps=${F},scale=${W}:${H}:flags=lanczos,setsar=1,format=${PF}`
       : `fps=${F},scale=${W}:${H}:force_original_aspect_ratio=decrease:flags=lanczos,` +
-        `pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2:color=0x${bg},setsar=1,format=yuv420p`);
+        `pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2:color=0x${bg},setsar=1,format=${PF}`);
   // Слой клипа с трансформом (transform.js): кадрирование → подгонка в рамку W·scale × H·scale → прозрачность → поворот.
   // На выходе — картинка с альфой своего размера; где она стоит в кадре — решает overlay (центр + сдвиг).
   const layerChain = (c) => {
@@ -281,7 +287,7 @@ export function buildExport(project, settings) {
     return `x=${n6(W / 2 + tf.x * W)}-overlay_w/2:y=${n6(H / 2 + tf.y * H)}-overlay_h/2`;
   };
   const audioFmt = AUDIO_FMT;
-  const black = (dur) => `color=c=0x${bg}:s=${W}x${H}:r=${F},format=yuv420p,setsar=1,trim=duration=${n6(dur)},setpts=PTS-STARTPTS`;
+  const black = (dur) => `color=c=0x${bg}:s=${W}x${H}:r=${F},format=${PF},setsar=1,trim=duration=${n6(dur)},setpts=PTS-STARTPTS`;
   // alpha — на верхних дорожках клип проявляется из прозрачности, а не из цвета фона
   const vFades = (c, head, len, alpha = false) => {
     const how = alpha ? ':alpha=1' : `:color=0x${bg}`;
@@ -373,10 +379,10 @@ export function buildExport(project, settings) {
           filters.push(`${src}${chainOf(c)}${tail}`);
         } else {
           // Слой на холсте во весь кадр: цвет фона (основная дорожка) или прозрачный (верхние, для переходов)
-          const cv = alpha ? `color=c=black@0:s=${W}x${H}:r=${F},format=yuva420p` : `color=c=0x${bg}:s=${W}x${H}:r=${F},format=yuv420p`;
+          const cv = alpha ? `color=c=black@0:s=${W}x${H}:r=${F},format=yuva420p` : `color=c=0x${bg}:s=${W}x${H}:r=${F},format=${PF}`;
           filters.push(`${src}${chainOf(c)}[${P}ly${i}]`);
           filters.push(`${cv}[${P}cv${i}]`);
-          filters.push(`[${P}cv${i}][${P}ly${i}]overlay=${posOf(c, true)}:shortest=1:format=auto,format=${alpha ? 'yuva420p' : 'yuv420p'},setsar=1${tail}`);
+          filters.push(`[${P}cv${i}][${P}ly${i}]overlay=${posOf(c, true)}:shortest=1:format=auto,format=${alpha ? 'yuva420p' : PF},setsar=1${tail}`);
         }
       } else if (L.main) {
         filters.push(`${black(S)}[${P}s${i}]`);
@@ -493,42 +499,138 @@ export function buildExport(project, settings) {
   // Верхние видеодорожки: каждый кусок (одиночный клип или цепочка клипов с переходами) ставится на своё время
   // и накладывается overlay снизу вверх; до начала и после конца куска видно то, что под ним (eof_action=pass)
   const vbase = runs.length ? '[vbase]' : VOUT;
-  if (pieces.length === 1) filters.push(`${pieces[0]}format=yuv420p${vbase}`);
-  else filters.push(`${pieces.join('')}concat=n=${pieces.length}:v=1:a=0,format=yuv420p${vbase}`);
+  if (pieces.length === 1) filters.push(`${pieces[0]}format=${PF}${vbase}`);
+  else filters.push(`${pieces.join('')}concat=n=${pieces.length}:v=1:a=0,format=${PF}${vbase}`);
   let cur = vbase;
   runs.forEach((r, i) => {
     const out = i === runs.length - 1 ? VOUT : `[vo${i}]`;
     const a = r.start; const b = Math.min(total, r.start + r.len);
     filters.push(`${r.label}setpts=PTS-STARTPTS+${n6(a)}/TB[ov${i}]`);
-    filters.push(`${cur}[ov${i}]overlay=${r.pos || '0:0'}:format=auto:eof_action=pass:enable='between(t,${n6(a)},${n6(b)})',format=yuv420p${out}`);
+    filters.push(`${cur}[ov${i}]overlay=${r.pos || '0:0'}:format=auto:eof_action=pass:enable='between(t,${n6(a)},${n6(b)})',format=${PF}${out}`);
     cur = out;
   });
   if (burn) {
     // Шрифты — из папки, которую готовит программа (встроенные + свои); размер холста ASS = кадр экспорта
-    filters.push(`[vsub]ass=filename=${ffPath(burn.ass)}${burn.fontsdir ? `:fontsdir=${ffPath(burn.fontsdir)}` : ''}:original_size=${W}x${H},format=yuv420p[vout]`);
+    filters.push(`[vsub]ass=filename=${ffPath(burn.ass)}${burn.fontsdir ? `:fontsdir=${ffPath(burn.fontsdir)}` : ''}:original_size=${W}x${H},format=${PF}[vout]`);
   }
 
-  const tailTo = (out) => `apad,atrim=duration=${n6(total)},alimiter=limit=0.98:attack=5:release=50:level=0${out}`;
+  // Нормализация громкости (0.5.0) — только общий микс [aout]: замер (loudnessMeasure) или второй проход по замеру
+  const ln = loudnessChain(settings, (m) => warnings.add(m));
+  // 0.5.1: раскладка каналов. Каждая дорожка (и звук видео) — стерео; на выходе дорожки pan раскладывает её по каналам
+  // проекта (маршрут), общий микс — N каналов. out.mode: 'mix' — одна N-канальная дорожка, 'stereo' — даунмикс,
+  // 'mono' — N моно-дорожек (asplit + pan=mono)
+  const lay = layoutOf(project);
+  const out0 = settings.audioMode || { mode: 'mix' };
+  const out = settings.loudnessMeasure && out0.mode === 'mono' ? { mode: 'mix' } : out0;
+  // pad — не меньше стольких моно-дорожек (MXF: 8), лишние — тишина
+  const pad = Math.min(32, Math.max(0, Math.round(Number(out.pad) || 0)));
+  const monoOut = out.mode === 'mono' && (lay.channels > 1 || pad > 1);
+  const MAIN = monoOut ? '[amain]' : '[aout]';
+  const down = out.mode === 'stereo' ? downmixPan(project) : '';
+  const tailTo = (o) => `apad,atrim=duration=${n6(total)},alimiter=limit=0.98:attack=5:release=50:level=0${down ? `,${down}` : ''}${o === MAIN ? ln : ''}${o}`;
+  const routeLabel = (label, group, i) => {
+    const tr = group === 'video' ? 'video' : (project.audioTracks || []).find((x) => x.id === group);
+    const pan = routePan(routeOf(project, tr), project);
+    if (!pan) return label;
+    filters.push(`${label}${pan}[arte${i}]`);
+    return `[arte${i}]`;
+  };
+  for (let i = 0; i < audio.length; i++) audio[i] = routeLabel(audio[i], audioGroup[i], i);
   const mixTo = (labels, out) => filters.push(labels.length === 1 ? `${labels[0]}${tailTo(out)}`
     : `${labels.join('')}amix=inputs=${labels.length}:duration=longest:dropout_transition=0:normalize=0,${tailTo(out)}`);
   // 0.4.1: аудиодорожки отдельными потоками (MKV/MOV): поток 0 — общий микс, дальше — звук видео и каждая дорожка
   const groups = [...new Set(audioGroup)];
   const stems = [];
-  if (!audio.length) filters.push(`anullsrc=r=48000:cl=stereo,atrim=duration=${n6(total)}[aout]`);
-  else if (settings.stems && groups.length > 1) {
+  const silentCl = out.mode === 'stereo' ? 'stereo' : ffLayout(project);
+  if (!audio.length) filters.push(`anullsrc=r=48000:cl=${silentCl},atrim=duration=${n6(total)}${ln}${MAIN}`);
+  else if (settings.stems && !monoOut && groups.length > 1) {
     const mix = []; const parts = new Map(groups.map((g) => [g, []]));
     audio.forEach((l, i) => { filters.push(`${l}asplit=2[amx${i}][ast${i}]`); mix.push(`[amx${i}]`); parts.get(audioGroup[i]).push(`[ast${i}]`); });
-    mixTo(mix, '[aout]');
+    mixTo(mix, MAIN);
     groups.forEach((g, i) => {
       const tr = g === 'video' ? null : (project.audioTracks || []).find((x) => x.id === g);
       const n = (project.audioTracks || []).indexOf(tr) + 1;
       mixTo(parts.get(g), `[astem${i}]`);
       stems.push({ label: `[astem${i}]`, title: tr ? String(tr.name || t('Аудио {n}', { n })) : t('Звук видео') });
     });
-  } else mixTo(audio, '[aout]');
+  } else mixTo(audio, MAIN);
+  // N моно-дорожек: общий микс делится по каналам
+  let audioMaps = null;
+  if (monoOut) {
+    const labels = channelLabels(project);
+    const n = lay.channels;
+    filters.push(`[amain]asplit=${n}${Array.from({ length: n }, (_, k) => `[amsp${k}]`).join('')}`);
+    audioMaps = [];
+    for (let k = 0; k < n; k++) {
+      filters.push(`[amsp${k}]pan=mono|c0=c${k}[amono${k}]`);
+      const nm = labels[k] === String(k + 1) ? t('Канал {n}', { n: k + 1 }) : t('Канал {n} ({name})', { n: k + 1, name: labels[k] });
+      audioMaps.push({ label: `[amono${k}]`, title: nm });
+    }
+    for (let k = n; k < pad; k++) {
+      filters.push(`anullsrc=r=48000:cl=mono,atrim=duration=${n6(total)}[amono${k}]`);
+      audioMaps.push({ label: `[amono${k}]`, title: t('Канал {n}', { n: k + 1 }) });
+    }
+  }
 
   const filter = filters.join(';\n');
-  return { inputs, filter, duration: total, W, H, F, warnings: [...warnings], subtitles: subInputs, stems };
+  return { inputs, filter, duration: total, W, H, F, warnings: [...warnings], subtitles: subInputs, stems, audioMaps };
+}
+
+// ---------------------------------------------------------------------------
+// Нормализация громкости (0.5.0): loudnorm в 2 прохода. settings.loudness = { i, tp, lra, measured? }:
+//   1-й проход — loudnessPlan(): тот же звук, в конце loudnorm=…:print_format=json, вывод в никуда (export_loudness);
+//   2-й проход — экспорт с measured (input_i, input_tp, input_lra, input_thresh, target_offset) и linear=true:
+//   громкость меняется одним множителем, без «дыхания» динамического режима (если пик позволяет).
+// ---------------------------------------------------------------------------
+const LN_LIMITS = { i: [-70, -5, -14], tp: [-9, 0, -1], lra: [1, 20, 11] };
+/** Цель громкости из настроек: { i, tp, lra, measured } (числа в границах) или null */
+export function cleanLoudness(x) {
+  if (!x || typeof x !== 'object' || !Number.isFinite(Number(x.i))) return null;
+  const out = {};
+  for (const [k, [lo, hi, def]] of Object.entries(LN_LIMITS)) {
+    const v = Number(x[k] ?? def);
+    out[k] = Math.round(Math.min(hi, Math.max(lo, Number.isFinite(v) ? v : def)) * 10) / 10;
+  }
+  const m = x.measured;
+  if (m && typeof m === 'object') {
+    const keys = ['input_i', 'input_tp', 'input_lra', 'input_thresh', 'target_offset'];
+    const vals = keys.map((k) => (m[k] === null || m[k] === undefined || m[k] === '' ? NaN : Number(m[k])));
+    out.measured = Object.fromEntries(keys.map((k, i) => [k, Number.isFinite(vals[i]) ? vals[i] : null]));
+  }
+  return out;
+}
+const f2 = (x) => Number(x).toFixed(2);
+// Звено графа после лимитера: '' | ',loudnorm=…'
+function loudnessChain(settings, warn) {
+  const L = cleanLoudness(settings.loudness);
+  if (!L) return '';
+  const base = `loudnorm=I=${f2(L.i)}:TP=${f2(L.tp)}:LRA=${f2(L.lra)}`;
+  if (settings.loudnessMeasure) return `,${base}:print_format=json`;
+  const m = L.measured;
+  if (!m) { warn(t('Нормализация громкости пропущена: нет замера')); return ''; }
+  // Тишина (−inf) или почти тишина: поднимать нечего
+  if (m.input_i === null || m.input_i < -69 || m.input_thresh === null) { warn(t('Звук слишком тихий — нормализация громкости пропущена')); return ''; }
+  const mtp = m.input_tp === null ? -99 : Math.max(-99, m.input_tp);
+  const mlra = m.input_lra === null ? 0 : Math.max(0, m.input_lra);
+  // loudnorm считает на 192 кГц — назад к 48 кГц
+  return `,${base}:measured_I=${f2(m.input_i)}:measured_TP=${f2(mtp)}:measured_LRA=${f2(mlra)}:measured_thresh=${f2(m.input_thresh)}`
+    + `:offset=${f2(m.target_offset ?? 0)}:linear=true:print_format=none,aresample=48000`;
+}
+
+/**
+ * План первого прохода нормализации: звук проекта как в экспорте (картинка 16×16 → nullsink), в конце —
+ * loudnorm=…:print_format=json; '@@OUT@@' программа заменяет на «-f null -» (export_loudness / --engine loudness).
+ */
+export function loudnessPlan(project, settings, ffMajor = 99) {
+  const plan = buildExport(project, {
+    ...settings, audioMode: audioModeFor(project, settings), width: 16, height: 16, fps: 10, audioOnly: true, stems: false, loudnessMeasure: true,
+    assets: { ...(settings.assets || {}), subtitles: null },
+  });
+  const filterArgs = ffMajor >= 7 ? ['-/filter_complex', '@@FILTER@@'] : ['-filter_complex_script', '@@FILTER@@'];
+  return {
+    args: ['-hide_banner', '-nostdin', ...plan.inputs, ...filterArgs, '-map', '[aout]', '@@OUT@@'],
+    filter: `${plan.filter};\n[vout]nullsink`, duration: plan.duration,
+  };
 }
 
 // Название потока для -metadata: без управляющих символов, до 64 знаков (plancheck.rs is_sub_meta)
@@ -592,6 +694,17 @@ export const GIF_MAX_SEC = 120;
 export const stemsAllowed = (container) => container === 'mkv' || container === 'mov';
 
 function audioStreamArgs(plan) {
+  // 0.5.1: N моно-дорожек вместо общего микса
+  if (plan.audioMaps && plan.audioMaps.length) {
+    const out = [];
+    plan.audioMaps.forEach((x) => out.push('-map', x.label));
+    plan.audioMaps.forEach((x, i) => {
+      const title = streamTitle(x.title);
+      if (title) out.push(`-metadata:s:a:${i}`, `title=${title}`);
+      out.push(`-disposition:a:${i}`, i === 0 ? 'default' : '0');
+    });
+    return out;
+  }
   const out = ['-map', '[aout]'];
   if (!plan.stems || !plan.stems.length) return out;
   plan.stems.forEach((x) => out.push('-map', x.label));
@@ -604,9 +717,70 @@ function audioStreamArgs(plan) {
   return out;
 }
 
+/**
+ * Как писать звук при раскладке проекта (0.5.1): settings.audioOut — 'mix' (по умолчанию) | 'stereo' | 'mono';
+ * формат и кодек могут не позволить (audioLayout.js outputMode). → { mode, note? }
+ */
+export function audioModeFor(project, settings) {
+  const container = containerOf(settings);
+  const codec = audioCodecFor(container, settings.audioCodec);
+  const cname = (codec.args[codec.args.indexOf('-c:a') + 1] || 'aac').replace('libmp3lame', 'mp3').replace('libopus', 'opus').replace('libvorbis', 'vorbis');
+  return outputMode(project, { mode: settings.audioOut || 'mix', codec: cname, container });
+}
+
+// ---------------------------------------------------------------------------
+// Вещательный экспорт (0.5.2): мастер-копии для монтажных программ и эфира. Кодирование — только процессор.
+//   ProRes 422 / HQ / 4444 в MOV: звук PCM 24/48 — одна дорожка в раскладке проекта или N моно;
+//   MXF OP1a: DNxHR (SQ/HQ/HQX) или XDCAM HD422 (MPEG-2 50 Мбит/с 4:2:2, 1920×1080 25 кадров, поле — верхнее первым)
+//   + 8 моно-дорожек PCM 24/48 (каналы раскладки, остальные — тишина). Таймкод начала — settings.timecode.
+// ---------------------------------------------------------------------------
+export const BROADCAST = [
+  { id: 'prores422', container: 'mov', pix: 'yuv422p10le', v: ['-c:v', 'prores_ks', '-profile:v', '2', '-vendor', 'apl0'], label: 'Apple ProRes 422' },
+  { id: 'prores_hq', container: 'mov', pix: 'yuv422p10le', v: ['-c:v', 'prores_ks', '-profile:v', '3', '-vendor', 'apl0'], label: 'Apple ProRes 422 HQ' },
+  { id: 'prores4444', container: 'mov', pix: 'yuv444p10le', v: ['-c:v', 'prores_ks', '-profile:v', '4', '-vendor', 'apl0'], label: 'Apple ProRes 4444' },
+  { id: 'dnxhr_sq', container: 'mxf', pix: 'yuv422p', v: ['-c:v', 'dnxhd', '-profile:v', 'dnxhr_sq'], label: 'Avid DNxHR SQ (MXF OP1a)', mono: 8 },
+  { id: 'dnxhr_hq', container: 'mxf', pix: 'yuv422p', v: ['-c:v', 'dnxhd', '-profile:v', 'dnxhr_hq'], label: 'Avid DNxHR HQ (MXF OP1a)', mono: 8 },
+  { id: 'dnxhr_hqx', container: 'mxf', pix: 'yuv422p10le', v: ['-c:v', 'dnxhd', '-profile:v', 'dnxhr_hqx'], label: 'Avid DNxHR HQX 10 bit (MXF OP1a)', mono: 8 },
+  {
+    id: 'xdcam_hd422', container: 'mxf', pix: 'yuv422p', label: 'Sony XDCAM HD422 50 Mbit/s (MXF OP1a)', mono: 8, width: 1920, height: 1080, fps: 25, field: 'tff',
+    v: ['-c:v', 'mpeg2video', '-b:v', '50M', '-minrate', '50M', '-maxrate', '50M', '-bufsize', '36408333', '-g', '12', '-bf', '2',
+      '-flags', '+ildct+ilme', '-dc', '10', '-intra_vlc', '1', '-non_linear_quant', '1', '-qmin', '1', '-qmax', '12'],
+  },
+];
+export const broadcastById = (id) => BROADCAST.find((x) => x.id === id) || null;
+/** Таймкод начала «ЧЧ:ММ:СС:КК» (кадры — меньше частоты); неверный → 10:00:00:00 (принято в эфире) */
+export function cleanTimecode(tc, fps = 25) {
+  const m = /^(\d{2}):([0-5]\d):([0-5]\d)[:;](\d{2})$/.exec(String(tc || '').trim());
+  if (!m || Number(m[1]) > 23 || Number(m[4]) >= Math.ceil(fps)) return '10:00:00:00';
+  return `${m[1]}:${m[2]}:${m[3]}:${m[4]}`;
+}
+
+function broadcastCommand(project, settings, b, ffMajor) {
+  const W = b.width || settings.width; const H = b.height || settings.height;
+  const fps = b.fps || settings.fps;
+  // ProRes: звук — одна дорожка или N моно (settings.audioOut); MXF — всегда 8 моно (дополняется тишиной)
+  const audioMode = b.mono ? { mode: 'mono', pad: b.mono } : audioModeFor(project, { ...settings, container: 'mov', audioCodec: 'pcm' });
+  const plan = buildExport(project, { ...settings, width: W, height: H, fps, pixFmt: b.pix, stems: false, audioMode });
+  const filterArgs = ffMajor >= 7 ? ['-/filter_complex', '@@FILTER@@'] : ['-filter_complex_script', '@@FILTER@@'];
+  const filter = b.field ? `${plan.filter};\n[vout]setfield=${b.field}[vbc]` : plan.filter;
+  const args = ['-hide_banner', '-y', '-nostdin', ...plan.inputs, ...filterArgs,
+    '-map', b.field ? '[vbc]' : '[vout]', ...audioStreamArgs(plan),
+    ...b.v, '-pix_fmt', b.pix,
+    ...(ffMajor >= 6 ? ['-fps_mode', 'cfr'] : ['-vsync', 'cfr']),
+    '-c:a', 'pcm_s24le', '-ar', '48000',
+    '-timecode', cleanTimecode(settings.timecode, fps),
+    '-t', n6(plan.duration),
+    '-f', b.container,
+    '-progress', 'pipe:1', '-nostats', '@@OUT@@'];
+  return { args, filter, duration: plan.duration, output: settings.output, container: b.container, width: W, height: H, fps };
+}
+
 // Полная команда для программы: @@FILTER@@ и @@OUT@@ подставит export.rs
 export function exportCommand(project, settings, ffMajor = 99) {
+  const bc = broadcastById(settings.broadcast);
+  if (bc) return broadcastCommand(project, settings, bc, ffMajor);
   const container = containerOf(settings);
+  settings = { ...settings, audioMode: audioModeFor(project, settings) };
   const filterArgs0 = ffMajor >= 7 ? ['-/filter_complex', '@@FILTER@@'] : ['-filter_complex_script', '@@FILTER@@'];
   // Только звук: картинка не нужна — видеодорожки скрыты, кадр 16×16 (граф дешёвый), его выход уходит в nullsink
   if (isAudioOnly(container)) {

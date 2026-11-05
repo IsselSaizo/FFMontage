@@ -2,10 +2,12 @@
 import { store } from './store.js';
 import { h, fmtTime, fmtBytes, fmtDur, icon, toast } from './util.js';
 import { t, num } from './i18n.js';
-import { listExportPresets, onRegistryChange } from './registry.js';
-import { buildExport, gpuFamily, CONTAINERS, VIDEO_CONTAINERS, AUDIO_CONTAINERS, AUDIO_CODECS, audioCodecFor, stemsAllowed, isAudioOnly, GIF_FPS, GIF_MAX_SEC } from './exportPlan.js';
+import { listExportPresets, listLoudnessTargets, loudnessTargetById, onRegistryChange } from './registry.js';
+import { buildExport, gpuFamily, CONTAINERS, VIDEO_CONTAINERS, AUDIO_CONTAINERS, AUDIO_CODECS, audioCodecFor, stemsAllowed, isAudioOnly, GIF_FPS, GIF_MAX_SEC, BROADCAST, broadcastById, cleanTimecode } from './exportPlan.js';
+import { layoutOf, channelLabels } from './audioLayout.js';
 import { invoke } from './tauri.js';
 import './core/exportPresets.js';
+import './core/loudness.js';
 import { exportableSubs } from './exportAssets.js';
 import { getPref, setPref } from './prefs.js';
 
@@ -40,6 +42,16 @@ const CONTAINER_INFO = {
   m4a: { label: 'M4A', desc: t('Только звук, AAC: телефоны, iTunes, браузеры.') },
   wav: { label: 'WAV', desc: t('Только звук без сжатия — для звукорежиссёра и других программ.') },
   ogg: { label: 'OGG', desc: t('Только звук, Vorbis: свободный формат, игры и Linux.') },
+  pro: { label: t('Мастер-копия'), desc: t('Для эфира и монтажных программ: ProRes (MOV), DNxHR и XDCAM (MXF), звук PCM 24 бит, таймкод. Кодирование на процессоре, файлы большие.') },
+};
+const BROADCAST_INFO = {
+  prores422: t('Монтаж и цветокоррекция, обмен с Final Cut / Premiere / Resolve. ~150 Мбит/с для 1080p.'),
+  prores_hq: t('Мастер-копия высокого качества. ~220 Мбит/с для 1080p.'),
+  prores4444: t('Цвет 4:4:4 10 бит — для графики и дальнейшей обработки. ~330 Мбит/с для 1080p.'),
+  dnxhr_sq: t('Avid Media Composer, обмен с эфирными системами. Качество «для монтажа».'),
+  dnxhr_hq: t('Avid Media Composer: мастер-копия 8 бит.'),
+  dnxhr_hqx: t('Avid Media Composer: мастер-копия 10 бит.'),
+  xdcam_hd422: t('Сдача на телеканал (Sony XDCAM HD422): всегда 1920×1080, 25 кадров, чересстрочно, 50 Мбит/с.'),
 };
 const AUDIO_INFO = {
   aac: { label: t('AAC 192 кбит/с') },
@@ -97,10 +109,16 @@ export async function openExport() {
     codec: CODECS.find((c) => c.id === prefs.codec) ? prefs.codec : 'av1',
     quality: QUALITIES.find((q) => q.id === prefs.quality) ? prefs.quality : 'high',
     subtitles: ['burn', 'soft', 'none'].includes(prefs.subtitles) ? prefs.subtitles : 'burn',
-    container: CONTAINERS.includes(prefs.container) ? prefs.container : 'mp4',
+    container: CONTAINERS.includes(prefs.container) || prefs.container === 'pro' ? prefs.container : 'mp4',
     audioCodec: AUDIO_CODECS.some((a) => a.id === prefs.audioCodec) ? prefs.audioCodec : 'aac',
     stems: !!prefs.stems,
     gifFps: GIF_FPS.includes(Number(prefs.gifFps)) ? Number(prefs.gifFps) : 15,
+    // Нормализация громкости (0.5.0): id цели из реестра (core/loudness.js и плагины), '' — как есть
+    loudness: loudnessTargetById(prefs.loudness) ? prefs.loudness : '',
+    // 0.5.2: мастер-копия (container 'pro'): пресет, таймкод начала; 0.5.1: звук при раскладке не стерео
+    broadcast: broadcastById(prefs.broadcast) ? prefs.broadcast : 'prores_hq',
+    timecode: typeof prefs.timecode === 'string' ? prefs.timecode : '10:00:00:00',
+    audioOut: ['mix', 'stereo', 'mono'].includes(prefs.audioOut) ? prefs.audioOut : 'mix',
     output: null,
   };
 
@@ -110,7 +128,7 @@ export async function openExport() {
   document.body.append(overlay);
   // Список пресетов меняется, пока окно открыто (плагин включили/выключили) — перерисовать форму
   const offRegistry = onRegistryChange((ev) => {
-    if (ev.kind !== 'exportPreset' || modal.classList.contains('busy') || !modal.querySelector('#export-go')) return;
+    if ((ev.kind !== 'exportPreset' && ev.kind !== 'loudnessTarget') || modal.classList.contains('busy') || !modal.querySelector('#export-go')) return;
     if (st.preset && !presetById(st.preset)) st.preset = '';
     renderForm();
   });
@@ -134,6 +152,10 @@ export async function openExport() {
     },
   }, t('Проверить заново'));
 
+  // Расширение файла: у мастер-копии — от пресета (mov / mxf)
+  const extOf = () => (st.container === 'pro' ? broadcastById(st.broadcast).container : st.container);
+  const isPro = () => st.container === 'pro';
+
   // ---------------- Форма ----------------
   function renderForm() {
     modal.innerHTML = '';
@@ -141,10 +163,10 @@ export async function openExport() {
     const nameInput = h('input', { type: 'text', class: 'input', value: st.name, spellcheck: 'false' });
     nameInput.addEventListener('input', () => { st.name = nameInput.value; st.output = null; outLabel.textContent = outText(); });
     const outLabel = h('span', { class: 'out-path' });
-    const outText = () => st.output || `${appInfo.outputDir}${appInfo.sep}${(st.name || t('Видео')).replace(/[\\/:*?"<>|]+/g, '_')}.${st.container}`;
+    const outText = () => st.output || `${appInfo.outputDir}${appInfo.sep}${(st.name || t('Видео')).replace(/[\\/:*?"<>|]+/g, '_')}.${extOf()}`;
     outLabel.textContent = outText();
     const pickBtn = h('button', { class: 'btn ghost small', onclick: async () => {
-      const p = await api.pickExportPath(`${st.name || t('Видео')}.${st.container}`, st.container);
+      const p = await api.pickExportPath(`${st.name || t('Видео')}.${extOf()}`, extOf());
       if (p) { st.output = p; outLabel.textContent = p; }
     } }, h('span', { html: icon('folder', 16) }), t('Изменить…'));
 
@@ -192,9 +214,28 @@ export async function openExport() {
       } }, h('b', {}, CONTAINER_INFO[c].label));
     const contSeg = h('div', { id: 'export-container', class: 'export-formats' },
       h('div', { class: 'row gap' }, h('span', { class: 'muted small fmt-group' }, t('Видео')), h('div', { class: 'segmented' }, ...VIDEO_CONTAINERS.map(contBtn))),
-      h('div', { class: 'row gap' }, h('span', { class: 'muted small fmt-group' }, t('Только звук')), h('div', { class: 'segmented' }, ...AUDIO_CONTAINERS.map(contBtn))));
+      h('div', { class: 'row gap' }, h('span', { class: 'muted small fmt-group' }, t('Только звук')), h('div', { class: 'segmented' }, ...AUDIO_CONTAINERS.map(contBtn))),
+      h('div', { class: 'row gap' }, h('span', { class: 'muted small fmt-group' }, t('Эфир, монтаж')), h('div', { class: 'segmented' }, contBtn('pro'))));
     const audioOnly = isAudioOnly(st.container);
     const gif = st.container === 'gif';
+    // Мастер-копия (0.5.2): пресет, таймкод, звук
+    const pro = isPro();
+    const bc = broadcastById(st.broadcast);
+    const bcSel = h('select', { class: 'input', id: 'export-broadcast' }, ...BROADCAST.map((x) => h('option', { value: x.id, selected: x.id === st.broadcast }, x.label)));
+    bcSel.addEventListener('change', () => { const was = extOf(); st.broadcast = bcSel.value; if (extOf() !== was) st.output = null; renderForm(); });
+    const tcInput = h('input', { class: 'input', id: 'export-timecode', value: st.timecode, maxlength: '11', spellcheck: 'false', style: { width: '9em' }, title: t('Таймкод первого кадра: ЧЧ:ММ:СС:КК') });
+    tcInput.addEventListener('change', () => { st.timecode = cleanTimecode(tcInput.value, bc.fps || 25); tcInput.value = st.timecode; });
+    // Звук при раскладке проекта не стерео (0.5.1)
+    const lay = layoutOf(store.project);
+    const multi = lay.kind !== 'stereo';
+    const AOUT = [{ id: 'mix', label: t('Одна дорожка: {n} каналов ({names})', { n: lay.channels, names: channelLabels(store.project).join(' ') }) },
+      { id: 'mono', label: t('{n} моно-дорожек — каждый канал отдельно', { n: lay.channels }) },
+      { id: 'stereo', label: t('Даунмикс в стерео') }];
+    const aoutSel = h('select', { class: 'input', id: 'export-audio-out' }, ...AOUT.filter((x) => !(pro && x.id === 'stereo')).map((x) => h('option', { value: x.id, selected: st.audioOut === x.id }, x.label)));
+    aoutSel.addEventListener('change', () => { st.audioOut = aoutSel.value; });
+    const proAudio = !pro ? null : bc.mono
+      ? h('div', { class: 'muted' }, t('PCM 24 бит, 48 кГц — {n} моно-дорожек (каналы проекта, остальные — тишина)', { n: Math.max(bc.mono, lay.channels) }))
+      : h('div', {}, multi ? aoutSel : null, h('div', { class: 'muted small' }, t('PCM 24 бит, 48 кГц')));
     const gifSel = h('select', { class: 'input', id: 'export-gif-fps' }, ...GIF_FPS.map((v) => h('option', { value: String(v), selected: st.gifFps === v }, `${v} fps`)));
     gifSel.addEventListener('change', () => { st.gifFps = Number(gifSel.value); });
     const tooLong = gif && store.duration() > GIF_MAX_SEC;
@@ -208,6 +249,17 @@ export async function openExport() {
         (() => { const cb = h('input', { type: 'checkbox', id: 'export-stems', checked: st.stems }); cb.addEventListener('change', () => { st.stems = cb.checked; }); return cb; })(),
         ' ', t('Аудиодорожки отдельными потоками'))
       : null;
+    // Громкость: «как есть» или цель (два прохода: замер, потом экспорт)
+    const lnTargets = listLoudnessTargets();
+    if (st.loudness && !loudnessTargetById(st.loudness)) st.loudness = '';
+    const lnSel = h('select', { class: 'input', id: 'export-loudness' },
+      h('option', { value: '', selected: !st.loudness }, t('Как есть — без нормализации')),
+      ...lnTargets.map((x) => h('option', { value: x.id, selected: st.loudness === x.id, title: x.hint || '' }, x.name)));
+    lnSel.addEventListener('change', () => { st.loudness = lnSel.value; renderForm(); });
+    const lnNow = loudnessTargetById(st.loudness);
+    const lnHint = h('div', { class: 'muted small' }, lnNow
+      ? t('{hint} Экспорт пройдёт дважды: сначала замер громкости, потом запись.', { hint: lnNow.hint || '' }).trim()
+      : t('Громкость останется как на таймлайне.'));
     const qual = h('div', { class: 'segmented' }, ...QUALITIES.map((q) =>
       h('button', { class: st.quality === q.id ? 'on' : '', onclick: () => { st.quality = q.id; renderForm(); } },
         h('b', {}, q.title), h('small', {}, q.desc))));
@@ -223,15 +275,19 @@ export async function openExport() {
           h('label', {}, t('Сохранить в')), h('div', { class: 'row gap' }, outLabel, pickBtn),
           h('label', {}, t('Формат файла')), h('div', {}, contSeg, h('div', { class: 'muted small' }, CONTAINER_INFO[st.container].desc),
             tooLong ? h('div', { class: 'setup-error small' }, t('Ролик длиннее {n} с — для GIF слишком длинный. Обрежьте его или выберите видео.', { n: GIF_MAX_SEC })) : null),
-          presetSel && !audioOnly && !gif ? h('label', {}, t('Пресет')) : null, !audioOnly && !gif ? presetSel : null,
-          !audioOnly ? h('label', {}, t('Разрешение')) : null, audioOnly ? null : preset && !gif ? fromPreset(`${preset.width}×${preset.height}`) : select(resOptions, 'res'),
-          !audioOnly ? h('label', {}, t('Частота кадров')) : null, audioOnly ? null : gif ? gifSel : preset ? fromPreset(`${preset.fps} fps`) : select(fpsOptions, 'fps'),
-          !audioOnly && !gif ? h('label', {}, t('Кодек')) : null, !audioOnly && !gif ? codecCards : null,
-          !audioOnly && !gif ? h('label', {}, t('Качество')) : null, !audioOnly && !gif ? qual : null,
-          !gif ? h('label', {}, t('Звук')) : null, !gif ? h('div', { class: 'row gap' }, audioSel, stemsBox) : null,
+          pro ? h('label', {}, t('Кодек')) : null, pro ? h('div', {}, bcSel, h('div', { class: 'muted small' }, BROADCAST_INFO[bc.id] || '')) : null,
+          pro ? h('label', {}, t('Таймкод начала')) : null, pro ? tcInput : null,
+          presetSel && !audioOnly && !gif && !pro ? h('label', {}, t('Пресет')) : null, !audioOnly && !gif && !pro ? presetSel : null,
+          !audioOnly ? h('label', {}, t('Разрешение')) : null, audioOnly ? null : pro && bc.width ? fromPreset(`${bc.width}×${bc.height}`) : preset && !gif && !pro ? fromPreset(`${preset.width}×${preset.height}`) : select(resOptions, 'res'),
+          !audioOnly ? h('label', {}, t('Частота кадров')) : null, audioOnly ? null : gif ? gifSel : pro && bc.fps ? fromPreset(t('{fps} кадров, чересстрочно (верхнее поле первым)', { fps: bc.fps })) : preset && !pro ? fromPreset(`${preset.fps} fps`) : select(fpsOptions, 'fps'),
+          !audioOnly && !gif && !pro ? h('label', {}, t('Кодек')) : null, !audioOnly && !gif && !pro ? codecCards : null,
+          !audioOnly && !gif && !pro ? h('label', {}, t('Качество')) : null, !audioOnly && !gif && !pro ? qual : null,
+          !gif ? h('label', {}, t('Звук')) : null, !gif ? (pro ? proAudio : h('div', {}, h('div', { class: 'row gap' }, audioSel, stemsBox), multi ? aoutSel : null)) : null,
+          !gif ? h('label', {}, t('Громкость')) : null, !gif ? h('div', {}, lnSel, lnHint) : null,
           hasSubs && !audioOnly ? h('label', {}, t('Субтитры в видео')) : null,
-          hasSubs && !audioOnly ? select(gif ? SUB_MODES.filter((m) => m.id !== 'soft') : SUB_MODES, 'subtitles') : null),
-        audioOnly || gif ? h('p', { class: 'muted small' }, t('Длительность ролика: {dur}.', { dur: fmtTime(store.duration()) }),
+          hasSubs && !audioOnly ? select(gif || pro ? SUB_MODES.filter((m) => m.id !== 'soft') : SUB_MODES, 'subtitles') : null),
+        pro ? h('p', { class: 'muted small' }, t('Длительность ролика: {dur}. Кодирование идёт на процессоре — дольше.', { dur: fmtTime(store.duration()) }))
+        : audioOnly || gif ? h('p', { class: 'muted small' }, t('Длительность ролика: {dur}.', { dur: fmtTime(store.duration()) }),
           audioOnly ? ` ${t('Звук: {a}, 48 кГц.', { a: AUDIO_INFO[acodecNow].label })}` : '') : h('p', { class: 'muted small' },
           encoderFor(st.codec).gpu
             ? t('Длительность ролика: {dur}. Кодирование идёт на видеокарте ({gpu}) — быстро.', { dur: fmtTime(store.duration()), gpu: encoderFor(st.codec).vendor })
@@ -247,21 +303,26 @@ export async function openExport() {
 
   // ---------------- Экспорт ----------------
   async function start() {
-    savePrefs({ res: st.res, fps: st.fps, codec: st.codec, quality: st.quality, preset: st.preset, subtitles: st.subtitles, container: st.container, audioCodec: st.audioCodec, stems: st.stems, gifFps: st.gifFps });
+    savePrefs({ res: st.res, fps: st.fps, codec: st.codec, quality: st.quality, preset: st.preset, subtitles: st.subtitles, container: st.container, audioCodec: st.audioCodec, stems: st.stems, gifFps: st.gifFps, loudness: st.loudness, broadcast: st.broadcast, timecode: st.timecode, audioOut: st.audioOut });
     const audioOnly = isAudioOnly(st.container); const gif = st.container === 'gif';
+    const pro = isPro(); const bc = pro ? broadcastById(st.broadcast) : null;
     if (st.name && st.name !== store.project.name) store.mutate((p) => { p.name = st.name; });
-    const preset = audioOnly || gif ? null : presetById(st.preset);
-    const res = preset ? { w: preset.width, h: preset.height } : resOptions.find((r) => r.id === st.res);
-    const fps = preset ? { v: preset.fps } : gif ? { v: st.gifFps } : fpsOptions.find((r) => r.id === st.fps);
+    const preset = audioOnly || gif || pro ? null : presetById(st.preset);
+    const res = bc && bc.width ? { w: bc.width, h: bc.height } : preset ? { w: preset.width, h: preset.height } : resOptions.find((r) => r.id === st.res);
+    const fps = bc && bc.fps ? { v: bc.fps } : preset ? { v: preset.fps } : gif ? { v: st.gifFps } : fpsOptions.find((r) => r.id === st.fps);
     const enc = encoderFor(st.codec);
-    const output = st.output || await api.defaultExportPath(st.name || t('Видео'), st.container);
+    const output = st.output || await api.defaultExportPath(st.name || t('Видео'), extOf());
     const exists = await api.exists(output);
-    const subtitles = audioOnly ? 'none' : gif && st.subtitles === 'soft' ? 'burn' : st.subtitles;
+    // GIF и мастер-копия: мягких субтитров нет — вшиваются в кадр
+    const subtitles = audioOnly ? 'none' : (gif || pro) && st.subtitles === 'soft' ? 'burn' : st.subtitles;
     const settings = { width: res.w, height: res.h, fps: fps.v, codec: enc.enc, quality: st.quality, output, subtitles,
-      container: st.container, audioCodec: audioCodecFor(st.container, st.audioCodec).id, stems: st.stems && stemsAllowed(st.container) };
+      container: pro ? bc.container : st.container, audioCodec: audioCodecFor(st.container, st.audioCodec).id, stems: !pro && st.stems && stemsAllowed(st.container), audioOut: st.audioOut };
+    if (pro) { settings.broadcast = bc.id; settings.timecode = cleanTimecode(st.timecode, fps.v); }
+    const lnT = gif ? null : loudnessTargetById(st.loudness);
+    if (lnT) settings.loudness = { i: lnT.i, tp: lnT.tp, lra: lnT.lra };
     // Что экспорт пропустит (эффекты и переходы пропавших плагинов) — показать до и после
     let warnings = [];
-    try { warnings = buildExport(JSON.parse(JSON.stringify(store.project)), settings).warnings || []; } catch { /* ошибку покажет сам экспорт */ }
+    try { warnings = (buildExport(JSON.parse(JSON.stringify(store.project)), { ...settings, loudness: null }).warnings || []); } catch { /* ошибку покажет сам экспорт */ }
     const warnNote = () => (warnings.length ? h('p', { class: 'muted small export-warn' }, warnings.join(' ')) : null);
     if (warnings.length) toast(warnings.join(' '), 'info');
 
@@ -275,12 +336,20 @@ export async function openExport() {
       h('div', { class: 'modal-head' }, h('h2', {}, t('Экспорт…'))),
       h('div', { class: 'modal-body' },
         h('div', { class: 'export-target' }, output.split(/[\\/]/).pop(),
-          h('span', { class: 'muted' }, audioOnly ? ` · ${AUDIO_INFO[audioCodecFor(st.container, st.audioCodec).id].label}` : gif ? ` · ${res.w}×${res.h} · ${fps.v} fps · GIF` : ` · ${res.w}×${res.h} · ${fps.v} fps · ${CODECS.find((c) => c.id === st.codec).title}`)),
+          h('span', { class: 'muted' }, audioOnly ? ` · ${AUDIO_INFO[audioCodecFor(st.container, st.audioCodec).id].label}` : gif ? ` · ${res.w}×${res.h} · ${fps.v} fps · GIF` : pro ? ` · ${res.w}×${res.h} · ${fps.v} fps · ${bc.label}` : ` · ${res.w}×${res.h} · ${fps.v} fps · ${CODECS.find((c) => c.id === st.codec).title}`)),
         pct, h('div', { class: 'progress' }, bar), stats,
         exists ? h('p', { class: 'muted small' }, t('Файл с таким именем будет заменён.')) : null, warnNote()),
       h('div', { class: 'modal-foot' }, cancel));
 
     const off = api.onExportProgress((p) => {
+      // Первый проход нормализации — свой текст: файл ещё не пишется
+      if (p.phase === 'loudness') {
+        const v0 = Math.round(p.fraction * 1000) / 10;
+        bar.style.width = `${v0}%`;
+        pct.textContent = `${Math.floor(v0)}%`;
+        stats.textContent = t('Шаг 1 из 2: замер громкости… {time} из {total}', { time: fmtTime(p.time, { ms: false }), total: fmtTime(p.duration, { ms: false }) });
+        return;
+      }
       const v = Math.round(p.fraction * 1000) / 10;
       bar.style.width = `${v}%`;
       pct.textContent = `${Math.floor(v)}%`;
@@ -297,7 +366,7 @@ export async function openExport() {
       if (ffStarted || !p || !Number.isFinite(p.fraction)) return;
       stats.textContent = t('Обработка звука аудиоплагинами… {p}%', { p: Math.round(p.fraction * 100) });
     }) : () => {};
-    const offFf = api.onExportProgress(() => { ffStarted = true; });
+    const offFf = api.onExportProgress((p) => { if (!p || p.phase !== 'loudness') ffStarted = true; });
     const r = await api.startExport(JSON.parse(JSON.stringify(store.project)), settings);
     offExp(); offVst(); offFf();
 
@@ -314,7 +383,10 @@ export async function openExport() {
             h('dt', {}, t('Размер')), h('dd', {}, fmtBytes(r.size)),
             h('dt', {}, t('Средний битрейт')), h('dd', {}, t('{n} Мбит/с', { n: num(ratio, 1) })),
             h('dt', {}, t('Длительность')), h('dd', {}, fmtTime(r.duration)),
-            h('dt', {}, t('Экспорт занял')), h('dd', {}, fmtDur(r.elapsed))), warnNote()),
+            h('dt', {}, t('Экспорт занял')), h('dd', {}, fmtDur(r.elapsed)),
+            ...(r.loudness && r.loudness.measured && r.loudness.measured.input_i !== null ? [
+              h('dt', {}, t('Громкость')),
+              h('dd', { id: 'export-loudness-result' }, t('{to} LUFS (было {from})', { to: num(r.loudness.i, 1), from: num(r.loudness.measured.input_i, 1) }))] : [])), warnNote()),
         h('div', { class: 'modal-foot' },
           h('button', { class: 'btn ghost', onclick: () => api.showInFolder(r.output) }, h('span', { html: icon('folder', 17) }), t('Показать в папке')),
           h('button', { class: 'btn primary', onclick: () => api.openPath(r.output) }, h('span', { html: icon('play', 17) }), audioOnly ? t('Открыть файл') : t('Открыть видео'))));

@@ -26,8 +26,10 @@ export const AUDIO_FX = [];
 export const EXPORT_PRESETS = [];
 // Стили текстовых блоков (M5.3): { id, name, plugin, kind, text (полное оформление), transform|null, duration }
 export const TEXT_STYLES = [];
+// Цели нормализации громкости (0.5.0, loudnorm в 2 прохода): { id, name, hint?, plugin, i (LUFS), tp (dBTP), lra (LU) }
+export const LOUDNESS_TARGETS = [];
 
-const LISTS = { effect: EFFECTS, transition: TRANSITIONS, audioEffect: AUDIO_FX, exportPreset: EXPORT_PRESETS, textStyle: TEXT_STYLES };
+const LISTS = { effect: EFFECTS, transition: TRANSITIONS, audioEffect: AUDIO_FX, exportPreset: EXPORT_PRESETS, textStyle: TEXT_STYLES, loudnessTarget: LOUDNESS_TARGETS };
 
 const ID_RE = /^[a-z0-9][a-z0-9_-]{0,40}$/i;
 const PLUGIN_ID_RE = /^[a-z0-9][a-z0-9-]{1,40}$/;
@@ -341,6 +343,18 @@ function compileTextStyle(desc, owner, id) {
   return { id, name: localName(desc.name), plugin: owner.id, kind, text, transform: cleanTransform(desc.transform || null), duration: dur };
 }
 
+// ---------------- цели громкости ----------------
+// { id, name, hint?, i: −70…−5 LUFS, tp: −9…0 dBTP, lra?: 1…20 LU (по умолчанию 11; 20 — предел старых FFmpeg) }
+function compileLoudnessTarget(desc, owner, id) {
+  const i = Number(desc.i); const tp = Number(desc.tp ?? -1); const lra = Number(desc.lra ?? 11);
+  if (!(i >= -70 && i <= -5) || !(tp >= -9 && tp <= 0) || !(lra >= 1 && lra <= 20)) fail(t('неверные значения громкости'));
+  const r = (x) => Math.round(x * 10) / 10;
+  const out = { id, name: localName(desc.name), plugin: owner.id, i: r(i), tp: r(tp), lra: r(lra) };
+  const hint = localName(desc.hint, false);
+  if (hint) out.hint = hint;
+  return out;
+}
+
 // ---------------- регистрация ----------------
 const listeners = new Set();
 function emit(ev) {
@@ -358,8 +372,9 @@ const LABEL = {
   audioEffect: (id, reason) => t('Аудиоэффект «{id}»: {reason}', { id, reason }),
   exportPreset: (id, reason) => t('Пресет экспорта «{id}»: {reason}', { id, reason }),
   textStyle: (id, reason) => t('Стиль текста «{id}»: {reason}', { id, reason }),
+  loudnessTarget: (id, reason) => t('Цель громкости «{id}»: {reason}', { id, reason }),
 };
-const COMPILE = { effect: compileEffect, transition: compileTransition, audioEffect: compileAudioEffect, exportPreset: compileExportPreset, textStyle: compileTextStyle };
+const COMPILE = { effect: compileEffect, transition: compileTransition, audioEffect: compileAudioEffect, exportPreset: compileExportPreset, textStyle: compileTextStyle, loudnessTarget: compileLoudnessTarget };
 
 function register(kind, desc, owner) {
   const o = normOwner(owner);
@@ -392,6 +407,8 @@ export const registerAudioEffect = (desc, owner = CORE) => register('audioEffect
 export const registerExportPreset = (desc, owner = CORE) => register('exportPreset', desc, owner);
 /** Стиль текстового блока (заголовок, плашка, подпись, титры…) → полный id */
 export const registerTextStyle = (desc, owner = CORE) => register('textStyle', desc, owner);
+/** Цель нормализации громкости (−14 LUFS YouTube, −23 эфир…) → полный id */
+export const registerLoudnessTarget = (desc, owner = CORE) => register('loudnessTarget', desc, owner);
 
 /** Убрать всё, что регистрировал плагин; возвращает, сколько описаний убрано. Встроенные (core) не убираются */
 export function unregisterPlugin(pluginId) {
@@ -414,6 +431,8 @@ export const listAudioEffects = () => [...AUDIO_FX];
 export const listExportPresets = () => [...EXPORT_PRESETS];
 export const listTextStyles = () => [...TEXT_STYLES];
 export const textStyleById = (id) => TEXT_STYLES.find((x) => x.id === id) || null;
+export const listLoudnessTargets = () => [...LOUDNESS_TARGETS];
+export const loudnessTargetById = (id) => LOUDNESS_TARGETS.find((x) => x.id === id) || null;
 
 /**
  * Какие id эффектов / переходов / аудиоэффектов проекта не зарегистрированы (пропал плагин).

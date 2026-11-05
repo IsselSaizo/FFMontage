@@ -11,13 +11,16 @@ import { h, icon, toast, uid, errText } from './util.js';
 import { speedOf, tlLen, clipEnd, srcAt, tlAt, MIN_SPEED, MAX_SPEED } from './clipTime.js';
 import { t } from './i18n.js';
 import { isText, textDiff, cleanText, TEXT_KEYS, TEXT_MAX } from './textModel.js';
-import { listTextStyles, textStyleById } from './registry.js';
+import { listTextStyles, textStyleById, listLoudnessTargets, loudnessTargetById } from './registry.js';
 import './core/textStyles.js';
+import './core/loudness.js';
 import { fontList } from './fonts.js';
 import { parseSubtitles } from './subtitles.js';
 import { subtitleText } from './subtitlesUi.js';
 import { findPauses } from './edit.js';
 import { removeRanges } from './editOps.js';
+import { BROADCAST, broadcastById, cleanTimecode } from './exportPlan.js';
+import { layoutOf, channelLabels, channelCount, routeOf, streamChannels, MAX_CHANNELS } from './audioLayout.js';
 
 const api = window.api;
 
@@ -176,6 +179,8 @@ function describeClip(c, kind, track = null) {
   if (c.link) o.link = c.link;                       // видео и его звук (связаны, двигаются вместе)
   if (kind === 'video' && c.noAudio) o.sound_on_audio_track = true;
   if (kind === 'audio' && c.stream) o.audio_stream = c.stream;
+  if (kind === 'audio' && Number.isInteger(c.channel)) o.source_channel = c.channel + 1;   // 0.5.1: один канал файла (моно)
+  if (kind === 'audio' && m && streamChannels(m, c.stream || 0) > 2 && c.channel === undefined) o.source_channels = streamChannels(m, c.stream || 0);
   if (kind === 'video' && Array.isArray(c.effects) && c.effects.length) o.effects = c.effects;
   if (kind === 'video' && (c.fit === 'cover' || c.fit === 'stretch')) o.fit = c.fit;
   if (kind === 'video' && c.crop) o.crop = { left: c.crop.l, top: c.crop.t, right: c.crop.r, bottom: c.crop.b };
@@ -225,6 +230,8 @@ function getProject() {
     duration: r3(store.duration()),
     playhead: r3(store.time),
     aspect: store.project.aspect || 'auto', background: store.background(),
+    // 0.5.1: каналы проекта; у дорожек output_channels — куда идёт дорожка (номера с 1; пара — L, R; один — моно)
+    audio_layout: (() => { const l = layoutOf(store.project); return { layout: l.kind, channels: l.channels, labels: channelLabels(store.project), video_sound_channels: routeOf(store.project, 'video').map((k) => k + 1) }; })(),
     // Эпизоды (вкладки таймлайнов): всё ниже — про открытый; переключает пользователь вкладками над таймлайном
     episodes: store.episodes().map((e) => ({ id: e.id, name: e.name, open: e.id === store.activeEpisode() })),
     can_undo: store.undoStack.length > 0,
@@ -239,6 +246,7 @@ function getProject() {
     })),
     audio_tracks: store.project.audioTracks.map((t, i) => ({
       id: t.id, index: i + 1, name: store.trackName(t.id), muted: !!t.muted, volume: r3(t.volume ?? 1), solo: !!t.solo,
+      output_channels: routeOf(store.project, t).map((k) => k + 1),
       clips: [...t.clips].sort((a, b) => a.start - b.start).map((c) => describeClip(c, 'audio', t)),
       gaps: gapsR(store.gaps(t.id)),
     })),
@@ -273,6 +281,7 @@ function exportStatus() {
     o.settings = { width: e.settings.width, height: e.settings.height, fps: e.settings.fps, encoder: e.settings.codec, quality: e.settings.quality };
   }
   if (e.state === 'running') {
+    if (e.phase === 'loudness') o.phase = 'loudness analysis (pass 1 of 2)';
     o.fraction = r3(e.fraction || 0);
     o.percent = Math.floor((e.fraction || 0) * 100);
     o.rendered_seconds = r3(e.time || 0);
@@ -283,6 +292,7 @@ function exportStatus() {
     o.elapsed_seconds = r3((Date.now() - e.started) / 1000);
   } else if (e.state === 'done') {
     o.size_bytes = e.size; o.duration = r3(e.duration); o.elapsed_seconds = r3(e.elapsed);
+    if (e.loudness && e.loudness.measured) o.loudness = { target_lufs: e.loudness.i, measured_lufs: e.loudness.measured.input_i, measured_true_peak: e.loudness.measured.input_tp };
   } else if (e.state === 'error') {
     o.error = e.error;
   }
@@ -306,12 +316,17 @@ async function exportVideo(args) {
   const resolution = enumArg(args, 'resolution', ['source', '2160', '1440', '1080', '720', '480'], 'source');
   const src = store.sourceFormat();
   const fps = numArg(args, 'fps', { min: 1, max: 240, def: src.fps });
+  // 0.5.2: вещательный пресет — контейнер задан им (MOV для ProRes, MXF для DNxHR/XDCAM)
+  const bcId = strArg(args, 'broadcast');
+  const bc = bcId ? broadcastById(bcId) : null;
+  if (bcId && !bc) fail(`Unknown broadcast preset "${bcId}". Use one of: ${BROADCAST.map((x) => x.id).join(', ')}.`);
   let output = strArg(args, 'path');
   if (output) {
     if (!isAbs(output)) fail('"path" must be an absolute path.');
-    if (!/\.(mp4|mkv|mov|gif|mp3|m4a|wav|ogg)$/i.test(output)) output += '.mp4';
+    if (!/\.(mp4|mkv|mov|gif|mp3|m4a|wav|ogg|mxf)$/i.test(output)) output += '.mp4';
+    if (bc && !output.toLowerCase().endsWith(`.${bc.container}`)) fail(`The "${bc.id}" preset writes .${bc.container} files — change the path extension.`);
   } else {
-    output = await api.defaultExportPath(store.project.name || t('Видео'));
+    output = await api.defaultExportPath(store.project.name || t('Видео'), bc ? bc.container : 'mp4');
   }
   if (!encoders) encoders = await api.encoders();
   const c = CODECS[codec];
@@ -320,18 +335,38 @@ async function exportVideo(args) {
   if (resolution !== 'source') { height = Number(resolution); width = even(height * (src.width / src.height)); }
   width = even(width); height = even(height);
   const settings = { width, height, fps, codec: enc, quality, output };
+  if (bc) {
+    settings.broadcast = bc.id;
+    const tc = strArg(args, 'timecode');
+    if (tc && cleanTimecode(tc, bc.fps || fps) !== tc.replace(';', ':')) fail('"timecode" must be HH:MM:SS:FF (frames below the frame rate).');
+    settings.timecode = tc || '10:00:00:00';
+  }
+  // 0.5.1: звук при раскладке не стерео — 'mix' (одна многоканальная дорожка), 'stereo' (даунмикс), 'mono' (N моно-дорожек)
+  if (args.audio_out !== undefined) settings.audioOut = enumArg(args, 'audio_out', ['mix', 'stereo', 'mono'], 'mix');
+  // Нормализация громкости (0.5.0): id цели ('web' −14, 'podcast' −16, 'broadcast' −23, цели плагинов) или число LUFS
+  const ln = args.loudness;
+  if (ln !== undefined && ln !== null && ln !== '' && ln !== 'none') {
+    if (typeof ln === 'number') {
+      if (!(ln >= -70 && ln <= -5)) fail('"loudness" in LUFS must be between -70 and -5.');
+      settings.loudness = { i: ln, tp: -1, lra: 11 };
+    } else {
+      const x = loudnessTargetById(String(ln));
+      if (!x) fail(`Unknown loudness target "${String(ln)}". Use one of: ${listLoudnessTargets().map((y) => `'${y.id}' (${y.i} LUFS)`).join(', ')}, a number in LUFS, or "none".`);
+      settings.loudness = { i: x.i, tp: x.tp, lra: x.lra };
+    }
+  }
 
   if (store.playing) store.emit('request-pause');
   exp = { state: 'running', output, settings, started: Date.now(), fraction: 0, duration: store.duration() };
   const off = api.onExportProgress((p) => {
     if (exp.state !== 'running') return;
-    Object.assign(exp, { fraction: p.fraction, time: p.time, duration: p.duration, eta: p.eta, speed: p.speed, size: p.size });
+    Object.assign(exp, { phase: p.phase === 'loudness' ? 'loudness' : 'encode', fraction: p.fraction, time: p.time, duration: p.duration, eta: p.eta, speed: p.speed, size: p.size });
   });
   ai(t('экспорт видео → {file}', { file: fileName(output) }));
   api.startExport(JSON.parse(JSON.stringify(store.project)), settings).then((r) => {
     off();
     if (r && r.ok) {
-      finishExport({ state: 'done', output: r.output, size: r.size, duration: r.duration, elapsed: r.elapsed });
+      finishExport({ state: 'done', output: r.output, size: r.size, duration: r.duration, elapsed: r.elapsed, loudness: r.loudness || null });
       toast(t('ИИ: экспорт завершён — {file}', { file: fileName(r.output) }), 'success', 4000);
     } else if (r && r.cancelled) {
       finishExport({ state: 'cancelled' });
@@ -613,6 +648,45 @@ const TOOLS = {
     const out = { transition: { from_clip: j.a.id, to_clip: b.id, type: b.transition.type, duration: r3(b.transition.duration), at: r3(b.start) } };
     if (dur !== undefined && Math.abs(b.transition.duration - dur) > EPS) out.note = `Duration limited to ${r3(b.transition.duration)} s by the clip lengths.`;
     return out;
+  },
+
+  // --- каналы звука (0.5.1) ---
+  set_audio_layout(args) {
+    const layout = enumArg(args, 'layout', ['stereo', 'mono', '5.1', '7.1', 'multi'], undefined);
+    if (!layout) fail('"layout" is required: stereo, mono, 5.1, 7.1 or multi (N separate mono channels, set "channels").');
+    const n0 = numArg(args, 'channels', { min: 1, max: MAX_CHANNELS });
+    const n = n0 === undefined ? undefined : Math.round(n0);
+    if (layout === 'multi' && n === undefined) fail(`"channels" (1–${MAX_CHANNELS}) is required for layout "multi".`);
+    store.setAudioLayout(layout === 'multi' ? { kind: 'multi', channels: n } : { kind: layout });
+    ai(t('каналы проекта: {l}', { l: layout === 'multi' ? `${n}` : layout }));
+    return getProject().audio_layout;
+  },
+
+  route_track(args) {
+    const id = strArg(args, 'track_id', { required: true });
+    if (id !== 'video' && !store.project.audioTracks.find((x) => x.id === id)) fail(`Audio track "${id}" not found. Use an audio track id (${store.project.audioTracks.map((x) => x.id).join(', ')}) or "video".`);
+    const ch = args.channels;
+    const n = channelCount(store.project);
+    if (!Array.isArray(ch) || ch.length < 1 || ch.length > 2 || !ch.every((x) => Number.isInteger(x) && x >= 1 && x <= n) || (ch.length === 2 && ch[0] === ch[1])) {
+      fail(`"channels" must be one channel (mono) or two different channels (left, right), numbered 1–${n} (${channelLabels(store.project).join(' ')}).`);
+    }
+    store.setTrackRoute(id, ch.map((x) => x - 1));
+    ai(t('маршрут дорожки'));
+    return { track_id: id, output_channels: routeOf(store.project, id === 'video' ? 'video' : store.project.audioTracks.find((x) => x.id === id)).map((k) => k + 1) };
+  },
+
+  split_channels(args) {
+    const id = strArg(args, 'clip_id', { required: true });
+    const f = store.findClip(id);
+    if (!f || f.kind !== 'audio') fail(`Audio clip "${id}" not found (only clips on audio tracks can be split into channels).`);
+    if (f.clip.channel !== undefined) fail('This clip already plays a single channel.');
+    const n = streamChannels(store.media(f.clip.mediaId), f.clip.stream || 0);
+    if (n < 2) fail('The clip source is mono — nothing to split.');
+    const ids = store.splitChannels(id);
+    ai(t('разложено по каналам: {n}', { n: ids.length }));
+    return {
+      clips: ids.map((cid) => { const x = store.findClip(cid); return { clip_id: cid, source_channel: x.clip.channel + 1, audio_track_id: x.track.id, output_channels: routeOf(store.project, x.track).map((k) => k + 1) }; }),
+    };
   },
 
   close_gaps(args) {

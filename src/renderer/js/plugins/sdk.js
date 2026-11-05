@@ -167,6 +167,7 @@
       audioEffect: reg('audioEffect'),
       exportPreset: reg('exportPreset'),
       textStyle: reg('textStyle'),
+      loudnessTarget: reg('loudnessTarget'),
       keymap: reg('keymap'),
       /** desc = { id, title, category?, keys? }; handler({ id }) — при нажатии (id без префикса плагина) */
       action: function (desc, handler) {

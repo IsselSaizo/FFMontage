@@ -12,6 +12,7 @@ mod cache;
 mod cli;
 mod commands;
 mod control;
+mod crashlog;
 mod export;
 mod ff;
 mod fonts;
@@ -30,18 +31,8 @@ mod vst;
 mod windows;
 
 fn main() {
-    // Падение — в журнал <кэш>/app/logs/panic.log (у окна нет консоли)
-    std::panic::set_hook(Box::new(|info| {
-        let bt = std::backtrace::Backtrace::force_capture();
-        let msg = format!("{info}\n{bt}\n");
-        eprintln!("{msg}");
-        let p = paths::get();
-        let _ = std::fs::create_dir_all(&p.logs);
-        use std::io::Write;
-        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(p.logs.join("panic.log")) {
-            let _ = writeln!(f, "--- {:?}\n{msg}", std::time::SystemTime::now());
-        }
-    }));
+    // Падение — в журнал <кэш>/app/logs/panic.log и отчёт logs/reports/*-panic.txt (у окна нет консоли)
+    crashlog::install();
     let args: Vec<String> = std::env::args().collect();
     // Процесс-хост аудиоплагинов VST3/CLAP (vst/host.rs) — до всего остального: только плагин и stdin/stdout
     if args.get(1).map(String::as_str) == Some("--vst-host") {
@@ -136,6 +127,7 @@ fn run() {
             commands::export_default_path,
             commands::export_start,
             commands::export_cancel,
+            commands::export_loudness,
             commands::project_save,
             commands::project_open,
             commands::project_read,
@@ -149,6 +141,8 @@ fn run() {
             commands::mcp_info,
             commands::mcp_result,
             commands::log_line,
+            commands::crash_report,
+            commands::crash_reports,
             selftest::test_done,
             selftest::test_shot,
             update::update_check,
@@ -188,6 +182,8 @@ fn run() {
             } else {
                 let _ = std::fs::create_dir_all(&paths::get().output_dir);
                 windows::open_main(&h);
+                // Признак «программа работает»: остался с прошлого раза — отчёт unclean-exit (журнал прошлого запуска)
+                crashlog::session_start(&paths::get().logs.join("renderer.prev.log"));
                 tauri::async_runtime::spawn(async {
                     ff::detect_encoders(&ff::find()).await;
                 });
@@ -214,6 +210,7 @@ fn run() {
             vst::close_all();
             procs::kill_all();
             control::stop();
+            crashlog::session_end();
         }
         _ => {}
     });

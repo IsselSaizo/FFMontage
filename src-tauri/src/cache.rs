@@ -413,6 +413,11 @@ pub fn clear(cats: &[String], keep: &[String]) -> Value {
     if want.contains("logs") {
         // Текущие журналы открыты на запись — очищаем содержимое, а не удаляем
         for path in files_in(&p.logs) {
+            // Папка отчётов (crashlog.rs) — удалить целиком
+            if path.is_dir() {
+                rm(&path, &mut freed, &mut failed);
+                continue;
+            }
             let size = path.metadata().map(|m| m.len()).unwrap_or(0);
             if std::fs::write(&path, b"").is_ok() {
                 freed += size;

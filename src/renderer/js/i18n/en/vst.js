@@ -31,8 +31,8 @@ export default {
   'Окно плагина закрылось с ошибкой: {e}': 'The plugin window closed with an error: {e}',
   // --- плеер ---
   'Звук идёт через окно плагина': 'Sound goes through the plugin window',
-  'Аудиоплагины: ошибка обработки — слышно без них': 'Audio plugins: processing error — playing without them',
-  'Аудиоплагины: обработка звука… пока слышно без них': 'Audio plugins: processing sound… playing without them for now',
+  'Обработка звука (плагины, шумоподавление): ошибка — слышно без неё': 'Sound processing (plugins, noise reduction): error — playing without it',
+  'Обработка звука (плагины, шумоподавление)… пока слышно без неё': 'Processing sound (plugins, noise reduction)… playing without it for now',
   // --- экспорт ---
   'Аудиоплагины: не удалось обработать звук «{name}»: {e}': 'Audio plugins: could not process the sound of “{name}”: {e}',
   'Аудиодорожка': 'Audio track',

@@ -47,8 +47,57 @@ pub fn cancel() -> bool {
 
 /// inputs — какие входные файлы разрешены (окно / движок без окна); план проверяется до запуска FFmpeg (plancheck.rs)
 pub async fn run(plan: Plan, inputs: crate::plancheck::Inputs, on_progress: impl Fn(Value) + Send + Sync) -> Result<Value, Value> {
+    run_inner(plan, false, inputs, on_progress).await
+}
+
+/// Первый проход нормализации громкости (0.5.0): план звука (как у vst_render — без -f, выход @@OUT@@) с фильтром
+/// loudnorm=…:print_format=json в конце графа; вывод — в никуда (-f null). Ответ — замер loudnorm:
+/// { input_i, input_tp, input_lra, input_thresh, target_offset } (числа). Занимает «слот экспорта» — отменяется так же.
+pub async fn measure_loudness(
+    args: Vec<String>,
+    filter: String,
+    duration: f64,
+    inputs: crate::plancheck::Inputs,
+    on_progress: impl Fn(Value) + Send + Sync,
+) -> Result<Value, Value> {
+    let plan = Plan { args, filter, duration, output: String::new() };
+    run_inner(plan, true, inputs, on_progress).await
+}
+
+/// Замер loudnorm из вывода FFmpeg: последний JSON-блок с input_i; значения — строки («-23.51», «-inf»)
+pub fn parse_loudnorm(stderr: &str) -> Option<Value> {
+    let end = stderr.rfind('}')?;
+    let start = stderr[..end].rfind('{')?;
+    let v: Value = serde_json::from_str(&stderr[start..=end]).ok()?;
+    let num = |k: &str| -> Value {
+        let s = v[k].as_str().map(str::trim).unwrap_or("");
+        match s.parse::<f64>() {
+            Ok(x) if x.is_finite() => json!(x),
+            _ => Value::Null,
+        }
+    };
+    v.get("input_i")?;
+    Some(json!({
+        "input_i": num("input_i"), "input_tp": num("input_tp"), "input_lra": num("input_lra"),
+        "input_thresh": num("input_thresh"), "target_offset": num("target_offset"),
+    }))
+}
+
+async fn run_inner(
+    plan: Plan,
+    measure: bool,
+    inputs: crate::plancheck::Inputs,
+    on_progress: impl Fn(Value) + Send + Sync,
+) -> Result<Value, Value> {
     let err = |m: String, cancelled: bool| json!({ "message": m, "cancelled": cancelled });
-    crate::plancheck::check(&plan.args, &plan.filter, plan.duration, &plan.output, inputs).map_err(|e| err(e, false))?;
+    if measure {
+        crate::plancheck::check_pcm(&plan.args, &plan.filter, plan.duration, inputs).map_err(|e| err(e, false))?;
+        if !plan.filter.contains("loudnorm=") {
+            return Err(err(tr!("в плане нет замера громкости", "the plan has no loudness measurement").into(), false));
+        }
+    } else {
+        crate::plancheck::check(&plan.args, &plan.filter, plan.duration, &plan.output, inputs).map_err(|e| err(e, false))?;
+    }
     let (tx, mut rx) = tokio::sync::oneshot::channel::<()>();
     {
         let mut g = running();
@@ -70,32 +119,41 @@ pub async fn run(plan: Plan, inputs: crate::plancheck::Inputs, on_progress: impl
 
     let p = paths::get();
     let output = PathBuf::from(&plan.output);
-    if let Some(d) = output.parent() {
-        let _ = std::fs::create_dir_all(d);
+    if !measure {
+        if let Some(d) = output.parent() {
+            let _ = std::fs::create_dir_all(d);
+        }
     }
     let _ = std::fs::create_dir_all(&p.temp);
     let _ = std::fs::create_dir_all(&p.logs);
     let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
     let filter_file = p.temp.join(format!("export-{stamp}.filter.txt"));
     std::fs::write(&filter_file, &plan.filter).map_err(|e| err(e.to_string(), false))?;
-    let part = PathBuf::from(format!("{}.part", plan.output));
-    let args: Vec<String> = plan
-        .args
-        .iter()
-        .map(|a| match a.as_str() {
-            "@@FILTER@@" => filter_file.to_string_lossy().to_string(),
-            "@@OUT@@" => part.to_string_lossy().to_string(),
-            _ => a.clone(),
-        })
-        .collect();
+    // Замер громкости файла не пишет — части нет (путь «.part» относительно папки процесса трогать нельзя)
+    let part = (!measure).then(|| PathBuf::from(format!("{}.part", plan.output)));
+    let drop_part = || {
+        if let Some(p) = &part {
+            let _ = std::fs::remove_file(p);
+        }
+    };
+    let mut args: Vec<String> = vec![];
+    for a in &plan.args {
+        match a.as_str() {
+            "@@FILTER@@" => args.push(filter_file.to_string_lossy().to_string()),
+            // Замер: прогресс в stdout, звук — в никуда
+            "@@OUT@@" if measure => args.extend(["-progress", "pipe:1", "-nostats", "-f", "null", "-"].map(String::from)),
+            "@@OUT@@" => args.push(part.as_ref().map(|p| p.to_string_lossy().to_string()).unwrap_or_default()),
+            _ => args.push(a.clone()),
+        }
+    }
 
     let bin = ff::find();
-    let log_file = p.logs.join("last-export.log");
+    let log_file = p.logs.join(if measure { "last-loudness.log" } else { "last-export.log" });
     let quoted: Vec<String> = args.iter().map(|a| if a.contains(char::is_whitespace) { format!("\"{a}\"") } else { a.clone() }).collect();
     let _ = std::fs::write(&log_file, format!("ffmpeg {}\n\n--- filter ---\n{}\n\n--- stderr ---\n", quoted.join(" "), plan.filter));
 
     let started = Instant::now();
-    let _part_guard = crate::procs::part(&part);
+    let _part_guard = part.as_ref().map(|p| crate::procs::part(p));
     let mut child = ff::command(&bin.ffmpeg)
         .args(&args)
         .spawn()
@@ -170,23 +228,38 @@ pub async fn run(plan: Plan, inputs: crate::plancheck::Inputs, on_progress: impl
     let Some((tail, st)) = status else {
         let _ = child.kill().await;
         let _ = child.wait().await;
-        let _ = std::fs::remove_file(&part);
+        drop_part();
         return Err(err(tr!("Экспорт отменён.", "Export cancelled.").into(), true));
     };
     if CANCELLED.load(Ordering::SeqCst) {
-        let _ = std::fs::remove_file(&part);
+        drop_part();
         return Err(err(tr!("Экспорт отменён.", "Export cancelled.").into(), true));
     }
     let st = st.map_err(|e| err(e.to_string(), false))?;
     if !st.success() {
-        let _ = std::fs::remove_file(&part);
+        drop_part();
         let lines: Vec<&str> = tail.trim().lines().filter(|l| !l.trim().is_empty()).collect();
         let last = lines[lines.len().saturating_sub(6)..].join("\n");
+        // Отчёт: команда, граф и вывод FFmpeg целиком (большой журнал — начало и конец)
+        let full = std::fs::read_to_string(&log_file).unwrap_or_default();
+        let body = if full.len() > 300_000 {
+            let head = (0..=100_000).rev().find(|&i| full.is_char_boundary(i)).unwrap_or(0);
+            let tail = (full.len() - 100_000..full.len()).find(|&i| full.is_char_boundary(i)).unwrap_or(full.len());
+            format!("{}\n…\n{}", &full[..head], &full[tail..])
+        } else {
+            full
+        };
+        crate::crashlog::report("export-failed", &format!("FFmpeg exit code {}", st.code().unwrap_or(-1)), &body, None);
         return Err(err(
             tr!("FFmpeg завершился с ошибкой (код {}).\n{}", "FFmpeg failed (code {}).\n{}", st.code().unwrap_or(-1), last),
             false,
         ));
     }
+    if measure {
+        return parse_loudnorm(&tail)
+            .ok_or_else(|| err(tr!("FFmpeg не сообщил громкость", "FFmpeg did not report the loudness").into(), false));
+    }
+    let Some(part) = part else { return Err(err("part".into(), false)) };
     let _ = std::fs::remove_file(&output);
     std::fs::rename(&part, &output).map_err(|e| err(e.to_string(), false))?;
     let size = std::fs::metadata(&output).map(|m| m.len()).unwrap_or(0);
@@ -196,6 +269,20 @@ pub async fn run(plan: Plan, inputs: crate::plancheck::Inputs, on_progress: impl
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn loudnorm_json() {
+        let err = "[Parsed_loudnorm_5 @ 000001] \n{\n\t\"input_i\" : \"-27.61\",\n\t\"input_tp\" : \"-4.47\",\n\t\"input_lra\" : \"18.06\",\n\t\"input_thresh\" : \"-39.20\",\n\t\"output_i\" : \"-16.58\",\n\t\"target_offset\" : \"0.58\"\n}\n[out#0/null @ 0] audio:1kB\n";
+        let v = parse_loudnorm(err).unwrap();
+        assert_eq!(v["input_i"], json!(-27.61));
+        assert_eq!(v["input_thresh"], json!(-39.2));
+        assert_eq!(v["target_offset"], json!(0.58));
+        // тишина: -inf → null
+        let v = parse_loudnorm("{ \"input_i\" : \"-inf\", \"input_tp\" : \"-inf\" }").unwrap();
+        assert!(v["input_i"].is_null());
+        assert!(parse_loudnorm("no json").is_none());
+        assert!(parse_loudnorm("{ \"x\": 1 }").is_none());
+    }
 
     #[test]
     fn codec_of_plan() {

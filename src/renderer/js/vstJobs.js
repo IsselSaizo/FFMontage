@@ -9,6 +9,7 @@
 import { speedOf, tlLen } from './clipTime.js';
 import { hasVst, splitStages } from './audioFx.js';
 import { trackGraph } from './exportPlan.js';
+import { clipChannel } from './audioLayout.js';
 
 const r6 = (x) => Number(Number(x).toFixed(6));
 const isTextClip = (c) => c && c.kind === 'text';
@@ -40,8 +41,12 @@ export function clipJob(project, clip, { audio = true, upto = Infinity, warn = n
   const nStreams = (m.audioStreams && m.audioStreams.length) || 1;
   const stream = audio ? Math.min(Math.max(0, clip.stream | 0), nStreams - 1) : 0;
   const list = Array.isArray(clip.afx) ? clip.afx.slice(0, upto) : [];
+  const input = { kind: 'clip', file: m.path, stream, in: r6(Math.max(0, clip.in)), dur: r6(dur), speed: r6(speedOf(clip)) };
+  // 0.5.1: клип одного канала (clip.channel) — в ключе задания только если задан (старые рендеры не пересчитываются)
+  const ch = audio ? clipChannel(clip, m) : undefined;
+  if (ch !== undefined) input.channel = ch;
   return {
-    input: { kind: 'clip', file: m.path, stream, in: r6(Math.max(0, clip.in)), dur: r6(dur), speed: r6(speedOf(clip)) },
+    input,
     stages: splitStages(list, warn),
     dur: r6(dur),
   };

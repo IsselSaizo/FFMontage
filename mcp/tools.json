@@ -389,6 +389,98 @@
    }
   },
   {
+   "name": "split_channels",
+   "title": "Split clip into channels",
+   "description": "Split a multichannel audio clip (e.g. 5.1 or 8-channel recording) into mono clips, one per source channel, each on its own audio track; in a multichannel project each new track is routed to the matching project channel. Clips stay linked to their video. Undo with undo.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "clip_id": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "clip_id"
+    ]
+   },
+   "annotations": {
+    "title": "Split clip into channels",
+    "readOnlyHint": false,
+    "destructiveHint": false,
+    "idempotentHint": false,
+    "openWorldHint": false
+   }
+  },
+  {
+   "name": "route_track",
+   "title": "Route track to channels",
+   "description": "Choose which project channels an audio track (or \"video\" — the sound of video clips) goes to. channels: [left, right] — two different channels, or [n] — the track summed to mono into one channel. Channels are numbered from 1 (see get_project audio_layout.labels).",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "track_id": {
+      "type": "string",
+      "description": "Audio track id or \"video\""
+     },
+     "channels": {
+      "type": "array",
+      "items": {
+       "type": "number"
+      },
+      "minItems": 1,
+      "maxItems": 2
+     }
+    },
+    "required": [
+     "track_id",
+     "channels"
+    ]
+   },
+   "annotations": {
+    "title": "Route track to channels",
+    "readOnlyHint": false,
+    "destructiveHint": false,
+    "idempotentHint": true,
+    "openWorldHint": false
+   }
+  },
+  {
+   "name": "set_audio_layout",
+   "title": "Set audio channel layout",
+   "description": "Set the project audio channel layout: stereo (default), mono, 5.1 (L R C LFE Ls Rs), 7.1, or multi (N separate mono channels, e.g. 8 for broadcast). Every track stays stereo inside; route_track decides which project channels it feeds. Routes outside the new layout reset to channels 1-2. The player monitors a stereo downmix; export writes all channels (one multichannel track or one mono track per channel, see export_video audio_out).",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "layout": {
+      "type": "string",
+      "enum": [
+       "stereo",
+       "mono",
+       "5.1",
+       "7.1",
+       "multi"
+      ]
+     },
+     "channels": {
+      "type": "number",
+      "minimum": 1,
+      "maximum": 16,
+      "description": "Number of channels for layout \"multi\""
+     }
+    },
+    "required": [
+     "layout"
+    ]
+   },
+   "annotations": {
+    "title": "Set audio channel layout",
+    "readOnlyHint": false,
+    "destructiveHint": false,
+    "idempotentHint": true,
+    "openWorldHint": false
+   }
+  },
+  {
    "name": "close_gaps",
    "title": "Close gaps",
    "description": "Remove empty space on a track by shifting clips left. track: \"video\" or an audio track id. With time (seconds) only the gap containing that time is closed; otherwise all gaps on the track (including the one at the start). Other tracks are not moved.",
@@ -909,7 +1001,7 @@
   {
    "name": "export_video",
    "title": "Export video",
-   "description": "Render the timeline to an MP4 file in the background and return immediately; poll export_status. codec: av1 (smallest, default), hevc, h264 (most compatible); a GPU encoder is used when available (NVIDIA NVENC, then Intel Quick Sync, AMD AMF, VAAPI on Linux), otherwise the CPU. quality: high (default), medium, compact. resolution: source (default) or 2160/1440/1080/720/480 (height, keeps aspect). The file format follows the path extension: .mp4 (default), .mkv, .mov, .gif (silent looping animation, 15 fps unless fps is 10/12/20/25), or audio only — .mp3, .m4a, .wav, .ogg. fps: frames per second (default: as source). Without path the file goes to the output folder named after the project.",
+   "description": "Render the timeline to an MP4 file in the background and return immediately; poll export_status. codec: av1 (smallest, default), hevc, h264 (most compatible); a GPU encoder is used when available (NVIDIA NVENC, then Intel Quick Sync, AMD AMF, VAAPI on Linux), otherwise the CPU. quality: high (default), medium, compact. resolution: source (default) or 2160/1440/1080/720/480 (height, keeps aspect). The file format follows the path extension: .mp4 (default), .mkv, .mov, .gif (silent looping animation, 15 fps unless fps is 10/12/20/25), or audio only — .mp3, .m4a, .wav, .ogg. fps: frames per second (default: as source). Without path the file goes to the output folder named after the project. loudness: normalize to a target (web -14, podcast -16, broadcast -23 LUFS) — the audio is measured first, then exported. broadcast: ProRes/DNxHR/XDCAM master files with timecode.",
    "inputSchema": {
     "type": "object",
     "properties": {
@@ -952,6 +1044,39 @@
       "description": "Output frame rate (e.g. 30, 60)",
       "minimum": 1,
       "maximum": 240
+     },
+     "loudness": {
+      "type": [
+       "string",
+       "number"
+      ],
+      "description": "Loudness normalization (two-pass loudnorm: measure, then export): \"web\" (-14 LUFS, YouTube/Spotify), \"podcast\" (-16 LUFS), \"broadcast\" (-23 LUFS, EBU R128), a plugin target id, a number in LUFS (-70..-5), or \"none\" (default)"
+     },
+     "broadcast": {
+      "type": "string",
+      "enum": [
+       "prores422",
+       "prores_hq",
+       "prores4444",
+       "dnxhr_sq",
+       "dnxhr_hq",
+       "dnxhr_hqx",
+       "xdcam_hd422"
+      ],
+      "description": "Broadcast / mastering preset (CPU encode, PCM 24-bit 48 kHz): ProRes 422/HQ/4444 in .mov; DNxHR SQ/HQ/HQX or XDCAM HD422 (1920x1080 25 fps, 50 Mbit/s) in MXF OP1a (.mxf) with 8 mono audio tracks. codec/quality are ignored; path must use the preset extension"
+     },
+     "timecode": {
+      "type": "string",
+      "description": "Start timecode for broadcast presets, HH:MM:SS:FF (default 10:00:00:00)"
+     },
+     "audio_out": {
+      "type": "string",
+      "enum": [
+       "mix",
+       "stereo",
+       "mono"
+      ],
+      "description": "When the project audio layout is not stereo (5.1, 7.1, N mono): one multichannel track (mix, default), a stereo downmix, or one mono track per channel"
      }
     }
    },

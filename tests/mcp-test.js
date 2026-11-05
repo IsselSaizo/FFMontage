@@ -185,7 +185,8 @@ async function main() {
     const names = list.result.tools.map((t) => t.name);
     const expected = ['get_project', 'import_media', 'add_clip', 'update_clip', 'split_clip', 'delete_clip', 'reverse_clip',
       'freeze_frame', 'set_transition', 'close_gaps', 'undo', 'redo', 'set_playhead', 'new_project', 'open_project',
-      'save_project', 'export_video', 'export_status', 'cancel_export', 'get_frame', 'detect_silence', 'remove_silence'];
+      'save_project', 'export_video', 'export_status', 'cancel_export', 'get_frame', 'detect_silence', 'remove_silence',
+      'set_audio_layout', 'route_track', 'split_channels'];
     ok(expected.every((n) => names.includes(n)), `tools/list: ${names.length} инструментов`);
     ok(list.result.tools.every((t) => t.inputSchema && t.inputSchema.type === 'object' && t.description), 'у всех инструментов есть описание и схема');
     const unk = await cl.rpc('no/such/method', {});
@@ -249,6 +250,16 @@ async function main() {
     await cl.ok('redo');
     pj = await cl.ok('get_project');
     ok(pj.transitions.length === 1, 'redo возвращает переход');
+    // 0.5.1: каналы проекта и маршрут дорожки (потом — назад в стерео, чтобы не мешать остальным проверкам)
+    ok(pj.audio_layout && pj.audio_layout.layout === 'stereo' && pj.audio_layout.channels === 2, `get_project: audio_layout ${JSON.stringify(pj.audio_layout)}`);
+    const lay = await cl.ok('set_audio_layout', { layout: '5.1' });
+    ok(lay.layout === '5.1' && lay.channels === 6 && lay.labels.join(' ') === 'L R C LFE Ls Rs', 'set_audio_layout 5.1');
+    const rt = await cl.ok('route_track', { track_id: pj.audio_tracks[0].id, channels: [3] });
+    ok(JSON.stringify(rt.output_channels) === '[3]', 'route_track: дорожка в центр');
+    ok((await cl.tool('route_track', { track_id: pj.audio_tracks[0].id, channels: [7] })).isError, 'route_track: канала 7 в 5.1 нет → ошибка');
+    await cl.ok('set_audio_layout', { layout: 'stereo' });
+    pj = await cl.ok('get_project');
+    ok(pj.audio_layout.layout === 'stereo' && JSON.stringify(pj.audio_tracks[0].output_channels) === '[1,2]', 'назад в стерео: маршрут сброшен');
 
     const ph = await cl.ok('set_playhead', { time: 3 });
     ok(ph.playhead === 3, 'set_playhead');

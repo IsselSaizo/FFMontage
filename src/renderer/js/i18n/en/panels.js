@@ -164,7 +164,7 @@ export default {
   'Эффекты действуют только на этот клип.': 'Effects apply to this clip only.',
   'Включить / выключить': 'Enable / disable',
   'Убрать эффект': 'Remove effect',
-  'В плеере не слышно — только в готовом видео.': 'Not audible in the player — only in the exported video.',
+  'В плеере слышно после короткой обработки (пара секунд).': 'Audible in the player after a short render (a couple of seconds).',
   'Добавить': 'Add',
   'Другие эффекты появятся с плагинами.': 'More effects will come with plugins.',
 

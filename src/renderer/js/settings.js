@@ -696,7 +696,12 @@ async function renderAbout(body) {
       row(t('Настройки интерфейса'), p.settingsFile),
       row(t('Хранение данных'), p.mode === 'portable' ? t('переносной режим (рядом с программой)') : p.mode === 'system' ? t('системные папки') : 'FFM_CONFIG'),
     ]).catch(() => [])),
+    // Отчёты об ошибках (crashlog.rs): только на этом компьютере, никуда не отправляются
+    ...(await api.crashReports(false).then((r) => (r ? [
+      row(t('Отчёты об ошибках'), r.total ? t('{n} — последний: {name}', { n: r.total, name: r.last }) : t('нет')),
+    ] : [])).catch(() => [])),
     h('div', { class: 'row gap set-actions' },
       h('button', { class: 'btn primary', onclick: () => hooks.checkUpdates() }, h('span', { html: icon('refresh', 16) }), t('Проверить обновления…')),
-      h('button', { class: 'btn ghost', onclick: () => api.openPath(i.logsDir) }, h('span', { html: icon('folder', 16) }), t('Папка журналов'))));
+      h('button', { class: 'btn ghost', onclick: () => api.openPath(i.logsDir) }, h('span', { html: icon('folder', 16) }), t('Папка журналов'))),
+    h('p', { class: 'muted small' }, t('Журналы и отчёты об ошибках хранятся только на этом компьютере и никуда не отправляются. Если сообщаете об ошибке — приложите файлы из папки reports.')));
 }

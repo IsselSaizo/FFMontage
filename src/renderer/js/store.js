@@ -7,6 +7,7 @@ import { MIN_DURATION as TR_MIN, MAX_DURATION as TR_MAX, DEFAULT_DURATION as TR_
 import { cleanTransform } from './transform.js';
 import { isText, cleanText, textTitle, TEXT_MAX, TEXT_DEFAULT_DUR } from './textModel.js';
 import { cleanSubStyle } from './subtitles.js';
+import { cleanLayout, cleanRoute, isDefaultRoute, streamChannels, channelCount } from './audioLayout.js';
 // Циклический импорт безопасен: editOps использует экспорты store.js только при вызове функций
 import { rippleShift, snapFrame } from './editOps.js';
 
@@ -29,8 +30,11 @@ const byStart = (a, b) => a.start - b.start;
 //                in/out — фрагмент файла; на таймлайне клип длится (out − in) / speed (см. clipTime.js)
 //                основная дорожка: клипы по времени, без наложений, между ними могут быть пустоты.
 //                transition = { type, duration } — переход из предыдущего клипа (если стоят впритык)
-//   audioTracks  [{ id, name?, muted, solo?, volume?, clips: [{ id, mediaId, in, out, start, volume, muted, fadeIn, fadeOut, name?, stream?, link? }] }]
+//   audioTracks  [{ id, name?, muted, solo?, volume?, route?, clips: [{ id, mediaId, in, out, start, volume, muted, fadeIn, fadeOut, name?, stream?, channel?, link? }] }]
 //   videoName    имя видеодорожки (по умолчанию «Видео»)
+//   audioLayout? раскладка каналов проекта { kind: 'mono'|'5.1'|'7.1'|'multi', channels } (0.5.1; нет — стерео)
+//   videoRoute?  каналы проекта для звука видеоклипов; route дорожки — [L, R] или [моно] (номера с 0; нет — по умолчанию)
+//   channel      клип играет один канал потока файла (моно; «Разложить по каналам») — см. audioLayout.js
 //
 // Связь видео и звука: при добавлении видео его звук (каждый звуковой поток файла) ложится отдельными клипами
 // на аудиодорожки с тем же link, а у видеоклипа ставится noAudio. Связанный звук всегда синхронен видео
@@ -140,8 +144,17 @@ export function normalizeProject(p) {
       if (t.locked) t.locked = true; else delete t.locked;
       t.volume = isFinite(t.volume) ? Number(t.volume) : 1;
       t.clips = t.clips || []; t.clips.forEach(fix);
+      // 0.5.1: каналы проекта, куда идёт дорожка (audioLayout.js); по умолчанию — без поля
+      if (t.route !== undefined && isDefaultRoute(t.route, p)) delete t.route;
+      else if (t.route !== undefined) t.route = cleanRoute(t.route, p);
+      for (const c of t.clips) if (c.channel !== undefined && !(Number.isInteger(c.channel) && c.channel >= 0 && c.channel < 64)) delete c.channel;
     }
   };
+  // 0.5.1: раскладка каналов проекта и маршрут звука видео
+  const lay = cleanLayout(p.audioLayout);
+  if (lay) p.audioLayout = lay; else delete p.audioLayout;
+  if (p.videoRoute !== undefined && isDefaultRoute(p.videoRoute, p)) delete p.videoRoute;
+  else if (p.videoRoute !== undefined) p.videoRoute = cleanRoute(p.videoRoute, p);
   // Верхние видеодорожки; бывшая дорожка «Наложения» (0.3.x, overlayClips) становится верхней видеодорожкой
   const fixVTracks = (s) => {
     const list = Array.isArray(s.videoTracks) ? s.videoTracks : [];
@@ -1030,6 +1043,71 @@ class Store {
     this.mutate((p) => { const t = p.audioTracks.find((x) => x.id === trackId); if (t) t.solo = !t.solo; }, { history: false });
   }
   anySolo() { return this.project.audioTracks.some((t) => t.solo); }
+
+  // --- Многоканальный звук (0.5.1, audioLayout.js) ---
+  /** Раскладка проекта: { kind: 'stereo'|'mono'|'5.1'|'7.1'|'multi', channels? }; маршруты за пределами раскладки сбрасываются */
+  setAudioLayout(layout) {
+    this.mutate((p) => {
+      const lay = cleanLayout(layout);
+      if (lay) p.audioLayout = lay; else delete p.audioLayout;
+      const fixR = (o) => { if (o.route !== undefined) { if (isDefaultRoute(o.route, p)) delete o.route; else o.route = cleanRoute(o.route, p); } };
+      for (const tr of p.audioTracks) fixR(tr);
+      if (p.videoRoute !== undefined) { if (isDefaultRoute(p.videoRoute, p)) delete p.videoRoute; else p.videoRoute = cleanRoute(p.videoRoute, p); }
+      for (const e of p.episodes || []) for (const tr of e.audioTracks || []) fixR(tr);
+    });
+  }
+  /** Маршрут дорожки: trackId — id аудиодорожки или 'video' (звук видеоклипов); route — [k] | [k1, k2] (номера каналов с 0) */
+  setTrackRoute(trackId, route) {
+    this.mutate((p) => {
+      const r = cleanRoute(route, p);
+      const def = isDefaultRoute(r, p);
+      if (trackId === 'video') { if (def) delete p.videoRoute; else p.videoRoute = r; return; }
+      const tr = p.audioTracks.find((x) => x.id === trackId);
+      if (!tr) return;
+      if (def) delete tr.route; else tr.route = r;
+    });
+  }
+  /**
+   * Разложить многоканальный клип по каналам: каждый канал его потока — отдельным моно-клипом (clip.channel) на своей
+   * дорожке (новые дорожки по необходимости); дорожка k-го клипа получает маршрут в k-й канал проекта, если он есть.
+   * Возвращает id новых клипов. Связь с видео (link) сохраняется — каналы едут вместе с видео.
+   */
+  splitChannels(clipId) {
+    const f = this.findClip(clipId);
+    if (!f || f.kind !== 'audio') return [];
+    const m = this.media(f.clip.mediaId);
+    const n = streamChannels(m, f.clip.stream || 0);
+    if (n < 2 || f.clip.channel !== undefined) return [];
+    const ids = [];
+    this.mutate((p) => {
+      const src = p.audioTracks.flatMap((x) => x.clips).find((c) => c.id === clipId);
+      const home = p.audioTracks.find((x) => x.clips.includes(src));
+      if (!src || !home) return;
+      const nch = channelCount(p);
+      const s = src.start; const d = len(src);
+      const free = (tr) => tr.clips.every((c) => c === src || end(c) <= s + 1e-6 || c.start >= s + d - 1e-6);
+      let at = p.audioTracks.indexOf(home);
+      const used = new Set();
+      for (let k = 0; k < n; k++) {
+        const c = k === 0 ? src : { ...JSON.parse(JSON.stringify(src)), id: uid('clp') };
+        c.channel = k;
+        c.name = `${(m && m.name) || ''} · ${k + 1}`.trim();
+        let tr = k === 0 ? home : null;
+        if (!tr) {
+          tr = p.audioTracks.slice(at + 1).find((x) => !used.has(x) && !x.clips.length && free(x)) || null;
+          if (!tr) { tr = newTrack(); p.audioTracks.splice(at + 1, 0, tr); }
+          tr.clips.push(c);
+        }
+        at = p.audioTracks.indexOf(tr);
+        used.add(tr);
+        // Маршрут: k-й канал проекта (если каналов меньше — остаётся по умолчанию)
+        if (nch > 2 && k < nch && tr.clips.every((x) => x === c || x.channel === k)) tr.route = [k];
+        if (!tr.name) tr.name = t('Канал {n}', { n: k + 1 });
+        ids.push(c.id);
+      }
+    });
+    return ids;
+  }
 
   // name, volume, …; trackId 'video' или id верхней видеодорожки — видеодорожка (name, hidden, locked)
   setTrack(trackId, patch, opts) {

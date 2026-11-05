@@ -48,6 +48,10 @@ const TOOL_PERMS = {
   update_text: 'project:write',
   set_subtitles: 'project:write',
   update_subtitles: 'project:write',
+  // 0.5.1: каналы звука
+  set_audio_layout: 'project:write',
+  route_track: 'project:write',
+  split_channels: 'project:write',
   undo: 'project:write',
   redo: 'project:write',
   set_playhead: 'project:write',
@@ -232,6 +236,7 @@ function activate(rec) {
   reg('registerAudioEffect', c.audioEffects, 'audioEffect');
   reg('registerExportPreset', c.exportPresets, 'exportPreset');
   reg('registerTextStyle', c.textStyles, 'textStyle');
+  reg('registerLoudnessTarget', c.loudnessTargets, 'loudnessTarget');
   for (const a of list(c.actions)) {
     try { addAction(rec, a, null); } catch (e) { problem(`action ${a && a.id}`, e); }
   }
@@ -522,8 +527,9 @@ async function handle(fr, method, args) {
     case 'register.transition':
     case 'register.audioEffect':
     case 'register.exportPreset':
-    case 'register.textStyle': {
-      const fn = { 'register.effect': 'registerEffect', 'register.transition': 'registerTransition', 'register.audioEffect': 'registerAudioEffect', 'register.exportPreset': 'registerExportPreset', 'register.textStyle': 'registerTextStyle' }[method];
+    case 'register.textStyle':
+    case 'register.loudnessTarget': {
+      const fn = { 'register.effect': 'registerEffect', 'register.transition': 'registerTransition', 'register.audioEffect': 'registerAudioEffect', 'register.exportPreset': 'registerExportPreset', 'register.textStyle': 'registerTextStyle', 'register.loudnessTarget': 'registerLoudnessTarget' }[method];
       if (typeof registry[fn] !== 'function') throw new Error(`registry.${fn} is not available`);
       if (!isPlain(args)) throw new Error('Descriptor must be an object');
       return registry[fn](JSON.parse(JSON.stringify(args)), rec.owner);

@@ -4,7 +4,9 @@
 // Музыка — отдельные <audio>, громкость (можно > 100%) и затухания — через Web Audio.
 import { store, MAIN_LANE } from './store.js';
 import { cssTransform } from './transform.js';
-import { playUrl, audioUrl, playbackFailed } from './media.js';
+import { playUrl, audioUrl, channelUrl, playbackFailed } from './media.js';
+import { layoutOf, routeOf, routeMatrix, downmixMatrix, channelLabels, clipChannel } from './audioLayout.js';
+import { updateMeters, resetMeters, masterMeterEl } from './meters.js';
 import { h, $, icon, fmtTime } from './util.js';
 import { applyTransition, resetLayer } from './transitions.js';
 import { cssEffects } from './effects.js';
@@ -53,7 +55,8 @@ export class Preview {
     this.ctx = null;
     this.gains = new Map();      // element -> GainNode
     this.routes = new Map();     // element -> { g, nodes, sig, dest } — цепочка эффектов клипа
-    this.buses = new Map();      // trackId -> { input, nodes, sig } — эффекты дорожки
+    this.buses = new Map();      // trackId | '__video' -> шина дорожки (bus): эффекты, индикатор, маршрут по каналам
+    this.mix = null;             // общий микс в N каналов проекта → индикаторы каналов → даунмикс в стерео (buildMix)
     this.audio = new Map();      // clipId -> { el, url }
     // Аудиоплагины VST3 / CLAP (js/vst.js): цепочка с плагином играет WAV офлайн-рендера (эффекты уже в нём)
     this.trackAudio = new Map(); // trackId -> { el, url } — рендер всей дорожки (плагины в эффектах дорожки)
@@ -73,7 +76,7 @@ export class Preview {
     this.view(MAIN_LANE);
 
     store.on('time', (src) => { if (src !== 'preview') this.onExternalSeek(); });
-    store.on('project', () => { this.layoutStage(); if (!this.playing) this.seek(store.time); else this.syncAudio(store.time, true); this.cleanupAudio(); });
+    store.on('project', () => { this.layoutStage(); if (this.ctx) { this.buildMix(); this.rerouteBuses(); } if (!this.playing) this.seek(store.time); else this.syncAudio(store.time, true); this.cleanupAudio(); });
     store.on('media', () => { if (!this.playing) this.seek(store.time); });
     // Загрузились/добавились шрифты — перерисовать тексты
     onFontsChange(() => { if (!this.playing) this.present(store.time, true); });
@@ -107,6 +110,7 @@ export class Preview {
       this.out = this.ctx.createGain();
       this.out.gain.value = this.monitor();
       this.out.connect(this.ctx.destination);
+      this.buildMix();
       for (const v of this.allSlots()) this.attach(v);
     }
     if (this.ctx.state === 'suspended') this.ctx.resume();
@@ -126,9 +130,72 @@ export class Preview {
     if (!this.ctx || this.gains.has(el)) return;
     const src = this.ctx.createMediaElementSource(el);
     const g = this.ctx.createGain();
-    src.connect(g).connect(this.out);
+    // По умолчанию — шина звука видео (у <video> основной и верхних дорожек route() не вызывается)
+    const dest = this.trackBus(null);
+    src.connect(g).connect(dest);
     this.gains.set(el, g);
-    this.routes.set(el, { g, nodes: [], sig: '' });
+    this.routes.set(el, { g, nodes: [], sig: '', dest });
+  }
+
+  // --- Многоканальный микс (0.5.1) ---
+  // Шина дорожки: input → эффекты дорожки → post (стерео) → индикатор L/R и матрица маршрута → общий микс N каналов
+  // (ChannelMerger) → индикаторы каналов → даунмикс в стерео (audioLayout.downmixMatrix) → громкость предпросмотра.
+  // Стерео-проект — тот же граф с N = 2 и маршрутом L→1, R→2.
+  buildMix() {
+    const lay = layoutOf(store.project);
+    const sig = `${lay.kind}:${lay.channels}`;
+    if (this.mix && this.mix.sig === sig) return;
+    const ctx = this.ctx;
+    if (this.mix) for (const n of [this.mix.merger, this.mix.split, this.mix.dmMerger, ...this.mix.dm]) n.disconnect();
+    const n = lay.channels;
+    const merger = ctx.createChannelMerger(n);
+    const split = ctx.createChannelSplitter(n);
+    merger.connect(split);
+    const analysers = [];
+    for (let k = 0; k < n; k++) { const an = ctx.createAnalyser(); an.fftSize = 512; split.connect(an, k); analysers.push(an); }
+    const dmMerger = ctx.createChannelMerger(2);
+    const dm = [];
+    downmixMatrix(store.project).forEach((gs, k) => gs.forEach((v, side) => {
+      if (!v) return;
+      const g = ctx.createGain(); g.gain.value = v;
+      split.connect(g, k); g.connect(dmMerger, 0, side); dm.push(g);
+    }));
+    dmMerger.connect(this.out);
+    this.mix = { sig, n, merger, split, analysers, dm, dmMerger, labels: channelLabels(store.project) };
+    for (const b of this.buses.values()) b.routeSig = null;
+  }
+  rerouteBuses() {
+    for (const [id, b] of this.buses) {
+      const tr = id === '__video' ? null : store.project.audioTracks.find((x) => x.id === id);
+      if (tr || id === '__video') this.routeBus(b, tr);
+    }
+  }
+  routeBus(b, track) {
+    const r = routeOf(store.project, track || 'video');
+    const sig = `${this.mix.sig}|${r.join(',')}`;
+    if (b.routeSig === sig) return;
+    for (const g of b.rg) g.disconnect();
+    b.rg = [];
+    routeMatrix(r, this.mix.n).forEach((gs, k) => gs.forEach((v, side) => {
+      if (!v) return;
+      const g = this.ctx.createGain(); g.gain.value = v;
+      b.split.connect(g, side); g.connect(this.mix.merger, 0, k); b.rg.push(g);
+    }));
+    b.routeSig = sig;
+  }
+  /** Уровни для индикаторов: { tracks: { id: [L, R] }, master: [по каналам], labels } — пики, доли полной шкалы */
+  readMeters() {
+    if (!this.ctx || !this.mix) return null;
+    const buf = this.meterBuf || (this.meterBuf = new Float32Array(512));
+    const peak = (an) => {
+      an.getFloatTimeDomainData(buf);
+      let p = 0;
+      for (let i = 0; i < buf.length; i++) { const v = Math.abs(buf[i]); if (v > p) p = v; }
+      return p;
+    };
+    const tracks = {};
+    for (const [id, b] of this.buses) tracks[id] = b.an.map(peak);
+    return { tracks, master: this.mix.analysers.map(peak), labels: this.mix.labels };
   }
 
   // Эффекты в предпросмотре: элемент → громкость → эффекты клипа → шина дорожки (эффекты дорожки) → общий выход.
@@ -157,24 +224,41 @@ export class Preview {
     for (const n of nodes) { cur.connect(n); cur = n; }
     cur.connect(to);
   }
-  trackBus(track) {
-    if (!this.ctx || !track) return this.out;
-    let b = this.buses.get(track.id);
-    if (!b) { b = { input: this.ctx.createGain(), nodes: [], sig: null }; this.buses.set(track.id, b); }
-    const sig = JSON.stringify(activeFx(track.afx));
+  // Шина дорожки (track = null — звук видеоклипов); post — вход после эффектов дорожки (для её готового рендера)
+  bus(track) {
+    const id = track ? track.id : '__video';
+    let b = this.buses.get(id);
+    if (!b) {
+      const ctx = this.ctx;
+      const post = ctx.createGain();
+      // Моно-источник раскладывается в L = R (speakers), а не в «левый + тишина»
+      post.channelCount = 2; post.channelCountMode = 'explicit'; post.channelInterpretation = 'speakers';
+      const split = ctx.createChannelSplitter(2);
+      post.connect(split);
+      const an = [0, 1].map((k) => { const a = ctx.createAnalyser(); a.fftSize = 512; split.connect(a, k); return a; });
+      b = { input: ctx.createGain(), nodes: [], sig: null, post, split, an, rg: [], routeSig: null };
+      this.buses.set(id, b);
+    }
+    const sig = track ? JSON.stringify(activeFx(track.afx)) : '';
     if (b.sig !== sig) {
-      const nodes = this.fxNodes(track.afx);
-      this.rewire(b.input, b.nodes, nodes, this.out);
+      const nodes = track ? this.fxNodes(track.afx) : [];
+      this.rewire(b.input, b.nodes, nodes, b.post);
       b.nodes = nodes; b.sig = sig;
     }
-    return b.input;
+    this.routeBus(b, track);
+    return b;
   }
-  // bare — без узлов эффектов клипа (играет WAV рендера с плагинами: эффекты клипа уже в нём)
-  route(el, clip, track, bare = false) {
+  trackBus(track) {
+    return this.ctx ? this.bus(track).input : null;
+  }
+  // bare — без узлов эффектов клипа (играет WAV рендера с плагинами: эффекты клипа уже в нём);
+  // post — мимо эффектов дорожки (рендер всей дорожки: они уже в нём)
+  route(el, clip, track, bare = false, post = false) {
     const r = this.routes.get(el);
     if (!r) return;
-    const dest = this.trackBus(track);
-    const sig = `${bare ? 'bare' : JSON.stringify(activeFx(clip && clip.afx))}|${track ? track.id : ''}`;
+    const b = this.bus(track);
+    const dest = post ? b.post : b.input;
+    const sig = `${bare ? 'bare' : JSON.stringify(activeFx(clip && clip.afx))}|${track ? track.id : ''}|${post ? 'post' : ''}`;
     if (r.sig === sig && r.dest === dest) return;
     const nodes = bare ? [] : this.fxNodes(clip && clip.afx);
     this.rewire(r.g, r.nodes, nodes, dest);
@@ -593,6 +677,7 @@ export class Preview {
     for (const { el } of this.audio.values()) el.pause();
     for (const { el } of this.trackAudio.values()) el.pause();
     for (const { el } of this.vstVideo.values()) el.pause();
+    resetMeters();
     store.emit('playstate', false);
     this.seek(store.time);
   }
@@ -638,6 +723,7 @@ export class Preview {
     store.emit('time', 'preview');
     this.present(t);
     this.syncAudio(t, false);
+    updateMeters(this.readMeters());
     this.loop();
   }
 
@@ -683,25 +769,35 @@ export class Preview {
       const trWav = tr && tr.status === 'ready' ? tr : null;
       const trLive = !!tr && tr.status === 'live';
       this.syncTrackWav(track, trWav, tg, t, force);
-      for (const c of track.clips) {
-        const active = tg > 0 && at(c) && !trWav && !trLive;
-        let rec = this.audio.get(c.id);
-        if (!active) { if (rec && !rec.el.paused) rec.el.pause(); continue; }
-        // Плагины в эффектах клипа: WAV рендера (позиция — от начала клипа, скорость уже в нём);
+      // Общий источник на поток (0.5.0): клипы дорожки из одного файла (поток, канал) играют через один элемент
+      // и один узел Web Audio — после разрезов звук идёт без пересоздания и подгрузки, а на стыке «встык по файлу»
+      // элемент просто продолжает играть. Свой элемент — только у WAV рендера (он у каждого клипа свой).
+      const used = new Set();
+      const c = tg > 0 && !trWav && !trLive ? track.clips.find(at) : null;
+      if (c) {
+        // Плагины и шумоподавление в эффектах клипа: WAV рендера (позиция — от начала клипа, скорость уже в нём);
         // пока его нет — сухой звук (встроенные эффекты — Web Audio), открыто окно плагина — молчим
         const cr = vst.clipRender(c, true);
         note(cr);
-        if (cr && cr.status === 'live') { if (rec && !rec.el.paused) rec.el.pause(); continue; }
         const wav = cr && cr.status === 'ready' ? cr.url : null;
-        const url = wav || audioUrl(c.mediaId, c.stream || 0);
-        if (!url) continue;
-        if (!rec) { rec = { el: this.newAudio(), url: null }; this.audio.set(c.id, rec); }
-        if (this.ctx && !this.gains.has(rec.el)) this.attach(rec.el);
-        if (this.ctx) this.route(rec.el, c, track, !!wav);
-        if (rec.url !== url) { rec.url = url; rec.el.src = url; }
-        this.playEl(rec.el, wav ? Math.max(0, t - c.start) : srcAt(c, t), wav ? 1 : speedOf(c),
-          c.muted ? 0 : c.volume * tg * fadeFactor(c, t), force);
+        const ch = wav ? undefined : clipChannel(c, store.media(c.mediaId));
+        const url = cr && cr.status === 'live' ? null
+          : wav || (ch === undefined ? audioUrl(c.mediaId, c.stream || 0) : channelUrl(c.mediaId, c.stream || 0, ch));
+        if (url) {
+          const key = wav ? `w:${c.id}` : `s:${track.id}|${url}`;
+          used.add(key);
+          let rec = this.audio.get(key);
+          if (!rec) { rec = { el: this.newAudio(), url: null, track: track.id }; this.audio.set(key, rec); }
+          rec.clip = c.id;
+          rec.seq = (this.audioSeq = (this.audioSeq || 0) + 1);
+          if (this.ctx && !this.gains.has(rec.el)) this.attach(rec.el);
+          if (this.ctx) this.route(rec.el, c, track, !!wav);
+          if (rec.url !== url) { rec.url = url; rec.el.src = url; }
+          this.playEl(rec.el, wav ? Math.max(0, t - c.start) : srcAt(c, t), wav ? 1 : speedOf(c),
+            c.muted ? 0 : c.volume * tg * fadeFactor(c, t), force);
+        }
       }
+      for (const [key, rec] of this.audio) if (rec.track === track.id && !used.has(key) && !rec.el.paused) rec.el.pause();
     }
     this.syncVideoWav(t, force, note);
     // Открытое окно плагина: транспорт плеера → хост (он сам играет звук через плагин)
@@ -712,12 +808,19 @@ export class Preview {
   showVstBadge(badge) {
     const b = this.vstBadge;
     const text = badge.live ? t('Звук идёт через окно плагина')
-      : badge.error ? t('Аудиоплагины: ошибка обработки — слышно без них')
-        : badge.pending ? t('Аудиоплагины: обработка звука… пока слышно без них') : '';
+      : badge.error ? t('Обработка звука (плагины, шумоподавление): ошибка — слышно без неё')
+        : badge.pending ? t('Обработка звука (плагины, шумоподавление)… пока слышно без неё') : '';
     if (b.textContent !== text) b.textContent = text;
     b.classList.toggle('on', !!text);
     b.classList.toggle('live', !!badge.live);
     b.classList.toggle('error', !badge.live && !!badge.error);
+  }
+
+  /** Элемент звука, который последним играл клип clipId (общий на поток дорожки или WAV рендера клипа) — для тестов */
+  clipRec(clipId) {
+    let best = null;
+    for (const r of this.audio.values()) if (r.clip === clipId && (!best || r.seq > best.seq)) best = r;
+    return best;
   }
 
   // Рендер всей дорожки (граф её клипов + эффекты дорожки): время WAV = время таймлайна, громкость дорожки — здесь
@@ -727,7 +830,7 @@ export class Preview {
     if (!r || t >= dur - 0.02) { if (a && !a.el.paused) a.el.pause(); return; }
     if (!a) { a = { el: this.newAudio(), url: null }; this.trackAudio.set(track.id, a); }
     if (this.ctx && !this.gains.has(a.el)) this.attach(a.el);
-    if (this.ctx) this.route(a.el, null, null, true);
+    if (this.ctx) this.route(a.el, null, track, true, true);
     if (a.url !== r.url) { a.url = r.url; a.el.src = r.url; }
     this.playEl(a.el, Math.max(0, t), 1, tg, force);
   }
@@ -765,8 +868,16 @@ export class Preview {
         map.delete(id);
       }
     };
+    // Элементы звука клипов: ключ — поток дорожки или WAV клипа; лишние — дорожки нет или её клипы не из этого файла
     const ids = new Set();
-    for (const t of store.project.audioTracks) for (const c of t.clips) ids.add(`${c.id}`);
+    for (const tr of store.project.audioTracks) {
+      for (const c of tr.clips) {
+        ids.add(`w:${c.id}`);
+        const ch = clipChannel(c, store.media(c.mediaId));
+        const url = ch === undefined ? audioUrl(c.mediaId, c.stream || 0) : (((store.runtime[c.mediaId] || {}).channelUrl || {})[`${c.stream || 0}:${ch}`] || null);
+        if (url) ids.add(`s:${tr.id}|${url}`);
+      }
+    }
     drop(this.audio, ids);
     drop(this.trackAudio, new Set(store.project.audioTracks.map((x) => x.id)));
     drop(this.vstVideo, new Set(store.allVideo().map((c) => c.id)));
@@ -795,7 +906,7 @@ function monitorControl(preview) {
   slider.addEventListener('input', () => preview.setMonitor(Number(slider.value) / 100, false));
   store.on('monitor', upd);
   upd();
-  return h('div', { class: 'monitor' }, b, slider);
+  return h('div', { class: 'monitor' }, masterMeterEl(), b, slider);
 }
 
 // Панель управления под плеером

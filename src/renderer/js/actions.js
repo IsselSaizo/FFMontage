@@ -8,6 +8,17 @@ import { toggleReverse, freezeFrameAt, isReversed, isFreeze } from './fx.js';
 import { speedOf, tlLen, clipEnd } from './clipTime.js';
 import { isText, TEXT_MAX } from './textModel.js';
 import { openPausesDialog, markClipById } from './edit.js';
+import { streamChannels, isStereo } from './audioLayout.js';
+import { openRouting } from './routingDialog.js';
+
+/** Разложить клип по каналам (0.5.1); в стерео-проекте каналы лягут на дорожки, маршрут — по умолчанию */
+export function splitChannelsUi(id) {
+  const ids = store.splitChannels(id);
+  if (!ids.length) return;
+  toast(isStereo(store.project)
+    ? t('Каналов: {n} — каждый на своей дорожке. Чтобы развести их по каналам экспорта, выберите раскладку проекта (щелчок по «L·R» у дорожки).', { n: ids.length })
+    : t('Каналов: {n} — каждый на своей дорожке и в своём канале проекта.', { n: ids.length }), 'success', 5000);
+}
 const inside = (c, time) => time > c.start + MIN_CLIP && time < clipEnd(c) - MIN_CLIP;
 // Число как есть, но с десятичным разделителем языка (0.1 → «0,1» / «0.1»)
 const dec = (x) => (getLang() === 'ru' ? String(x).replace('.', ',') : String(x));
@@ -126,6 +137,10 @@ export function openClipMenu(id, x, y, clickTime = null) {
     'sep',
     hasSound ? { id: 'mute', label: c.muted ? t('Включить звук') : t('Выключить звук'), icon: c.muted ? 'speaker' : 'mute', onClick: () => toggleMute(id) } : null,
     hasSound && m.hasAudio ? { id: 'pauses', label: t('Удалить паузы…'), icon: 'silence', key: keyHint('clip.removePauses'), disabled: busy, onClick: () => openPausesDialog(id) } : null,
+    // 0.5.1: многоканальный клип аудиодорожки — каждый канал отдельным моно-клипом на своей дорожке
+    !video && streamChannels(m, c.stream || 0) > 1 && c.channel === undefined
+      ? { id: 'split-channels', label: t('Разложить по каналам ({n})', { n: streamChannels(m, c.stream || 0) }), icon: 'music', onClick: () => splitChannelsUi(id) } : null,
+    !video ? { id: 'routing', label: t('Каналы и маршруты…'), icon: 'speaker', onClick: () => openRouting() } : null,
     { id: 'mark-clip', label: t('Метки In / Out по клипу'), icon: 'markin', key: keyHint('mark.clip'), onClick: () => markClipById(id) },
     { id: 'fade', label: t('Затухание и появление…'), icon: 'fade', onClick: () => { store.select({ kind: f.kind, id }); focusInspector('fade'); } },
     { id: 'more', label: t('Дополнительные варианты'), icon: 'more', onClick: () => { store.select({ kind: f.kind, id }); focusInspector(); } },

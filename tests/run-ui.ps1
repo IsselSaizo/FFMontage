@@ -23,6 +23,11 @@ if ($Test -eq 'ui-selftest18') {
     if (Test-Path $p) { Copy-Item $p "$T\cache\tmp\engine-test\" -Force }
   }
 }
+# ui-selftest20 (звук 0.5): 5.1 WAV из node tests\audio-test.js --only layout
+if ($Test -eq 'ui-selftest20') {
+  $p = Join-Path $App '.test-cache\tmp\audio-test\six.wav'
+  if (Test-Path $p) { Copy-Item $p "$T\cache\tmp\engine-test\" -Force }
+}
 # ui-selftest19 (режим нарезания 2.0): видео 8 с, звук с паузами 2–3,5 и 5–6 с — для «Удалить паузы»
 if ($Test -eq 'ui-selftest19') {
   $ff = @((Get-Command ffmpeg -ErrorAction SilentlyContinue | ForEach-Object Source), (Join-Path $App 'ffmpeg\ffmpeg.exe')) +

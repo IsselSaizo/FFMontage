@@ -122,6 +122,27 @@ export function audioUrl(mediaId, stream = 0) {
   return rt.missing ? null : (rt.streamUrl || {})[stream] || null;
 }
 
+// Один канал потока (клип «разложен по каналам», 0.5.1): моно-файл в кэше делается по первому запросу.
+// null — ещё готовится (плеер пока молчит у этого клипа), по готовности — событие media (runtime).
+const chanJobs = new Set();
+export function channelUrl(mediaId, stream = 0, ch = 0) {
+  const rt = store.runtime[mediaId] || {};
+  if (rt.missing) return null;
+  const k = `${stream}:${ch}`;
+  const have = (rt.channelUrl || {})[k];
+  if (have) return have;
+  const m = store.media(mediaId);
+  const job = `${mediaId}|${k}`;
+  if (m && !chanJobs.has(job)) {
+    chanJobs.add(job);
+    api.audioStream(m, stream, ch).then((url) => {
+      const r = store.runtime[mediaId] || {};
+      store.setRuntime(mediaId, { channelUrl: { ...(r.channelUrl || {}), [k]: url } });
+    }).catch((e) => { console.warn('audio channel', k, e); setTimeout(() => chanJobs.delete(job), 10000); });
+  }
+  return null;
+}
+
 // Волна потока N: { rate, data, channels? }
 export function peaksOf(mediaId, stream = 0) {
   const rt = store.runtime[mediaId] || {};

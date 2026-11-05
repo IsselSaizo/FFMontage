@@ -6,11 +6,15 @@ use tauri::{AppHandle, Manager, Webview, WebviewUrl, WebviewWindowBuilder};
 
 static MAIN_SHOWN: AtomicBool = AtomicBool::new(false);
 
+/// Новый журнал окна; прошлый остаётся как <name>.prev.log (в нём следы падения прошлого запуска)
 fn start_log(name: &str) {
     let p = paths::get();
-    let _ = std::fs::create_dir_all(&p.logs);
+    crate::crashlog::rotate_log(name);
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-    let _ = std::fs::write(p.logs.join(format!("{name}.log")), format!("--- {now} (unix) ---\n"));
+    let _ = std::fs::write(
+        p.logs.join(format!("{name}.log")),
+        format!("--- {} · FF Montage {} ({}) ---\n", crate::crashlog::utc_text(now), env!("CARGO_PKG_VERSION"), std::env::consts::OS),
+    );
 }
 
 /// Язык интерфейса при запуске: (язык, выбран ли пользователем). Не выбран — язык системы
@@ -128,9 +132,11 @@ fn on_web_crash(reason: &str) -> bool {
     let msg = tr!("Окно FF Montage упало ({}).{}", "The FF Montage window crashed ({}).{}", reason, hint);
     eprintln!("{msg}");
     use std::io::Write;
-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(paths::get().logs.join("renderer.log")) {
+    let log = paths::get().logs.join("renderer.log");
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&log) {
         let _ = writeln!(f, "[crash] {msg}");
     }
+    crate::crashlog::report("window-crash", "WebView process crashed", reason, Some(&log));
     control::set_ready(false);
     control::fail_all(&tr!("{} Окно перезагружается — повторите команду.", "{} The window is reloading — repeat the command.", msg));
     let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());

@@ -7,7 +7,7 @@
 import { store } from './store.js';
 import { t } from './i18n.js';
 import { toast, errText, uid as newId } from './util.js';
-import { setVstPlugins, hasVst, isVst, normUid, vstName, vstKnown, cleanVstParams } from './audioFx.js';
+import { setVstPlugins, needsRender, isVst, normUid, vstName, vstKnown, cleanVstParams } from './audioFx.js';
 import { clipJob, trackJob, trackVstClips, jobKey, videoSoundOn } from './vstJobs.js';
 import { clipEnd } from './clipTime.js';
 
@@ -123,6 +123,8 @@ function startRec(rec) {
     return { path: r.path, url: r.url, key: r.key, cached: !!r.cached };
   }, (e) => {
     rec.status = 'error'; rec.error = errText(e);
+    // Отчёт об ошибке (logs/reports): задание целиком — по нему рендер можно повторить
+    try { if (api().crashReport) api().crashReport('render-failed', `audio render: ${rec.error}`, JSON.stringify(rec.job, null, 1)); } catch { /* ignore */ }
     throw e;
   }).finally(() => { memo.clear(); renderChanged(); });
   rec.promise.catch(() => {});
@@ -182,7 +184,8 @@ export function clipRender(clip, audio = true) {
   const k = `c:${clip.id}`;
   if (memo.has(k)) return memo.get(k);
   let r = null;
-  if (hasVst(clip.afx) && (audio || videoSoundOn(store.project, clip))) {
+  // Плагины VST3/CLAP или эффект без Web Audio (шумоподавление, 0.5.0) — звук клипа идёт через офлайн-рендер
+  if (needsRender(clip.afx) && (audio || videoSoundOn(store.project, clip))) {
     if (!ready) return WAIT;
     if (liveOwner(k)) r = LIVE;
     else { const job = clipJob(store.project, clip, { audio }); r = job ? ensure(job, k) : null; }
@@ -206,7 +209,7 @@ export function trackRender(track) {
   const k = `t:${track.id}`;
   if (memo.has(k)) return memo.get(k);
   let r = null;
-  if (hasVst(track.afx)) {
+  if (needsRender(track.afx)) {
     if (!ready) return WAIT;
     if (liveOwner(k)) r = LIVE;
     else {

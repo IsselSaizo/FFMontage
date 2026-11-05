@@ -333,11 +333,11 @@ pub async fn media_peaks(info: Value, stream: Option<usize>) -> R<Value> {
     ff::peaks(&info, stream.unwrap_or(0)).await
 }
 
-/// Звуковой поток N ≥ 1 отдельным файлом (для предпросмотра) → адрес
+/// Звуковой поток N ≥ 1 отдельным файлом (для предпросмотра) → адрес; channel — только этот канал потока (0.5.1)
 #[tauri::command]
-pub async fn media_audio_stream(info: Value, stream: usize) -> R<String> {
+pub async fn media_audio_stream(info: Value, stream: usize, channel: Option<usize>) -> R<String> {
     cache::touch(info["key"].as_str().unwrap_or_default());
-    let file = ff::audio_stream(&info, stream).await?;
+    let file = ff::audio_stream(&info, stream, channel).await?;
     Ok(protocol::url(&file))
 }
 
@@ -429,6 +429,7 @@ pub async fn export_pick(window: WebviewWindow, suggested: Option<String>, ext: 
         "m4a" => (tr!("Звук M4A (AAC)", "M4A audio (AAC)").into(), &["m4a"]),
         "wav" => (tr!("Звук WAV", "WAV audio").into(), &["wav"]),
         "ogg" => (tr!("Звук OGG (Vorbis)", "OGG audio (Vorbis)").into(), &["ogg"]),
+        "mxf" => (tr!("Видео MXF (OP1a)", "MXF video (OP1a)").into(), &["mxf"]),
         _ => (tr!("Видео MP4", "MP4 video").into(), &["mp4"]),
     };
     let d = window
@@ -451,7 +452,7 @@ pub async fn export_pick(window: WebviewWindow, suggested: Option<String>, ext: 
         })
 }
 
-/// Формат экспорта (0.4.1): mp4 (по умолчанию), mkv, mov, gif; только звук — mp3, m4a, wav, ogg
+/// Формат экспорта (0.4.1): mp4 (по умолчанию), mkv, mov, gif; только звук — mp3, m4a, wav, ogg; 0.5.2 — mxf
 pub fn export_ext(ext: Option<&str>) -> &'static str {
     match ext.map(|e| e.trim_start_matches('.').to_ascii_lowercase()).as_deref() {
         Some("mkv") => "mkv",
@@ -461,6 +462,7 @@ pub fn export_ext(ext: Option<&str>) -> &'static str {
         Some("m4a") => "m4a",
         Some("wav") => "wav",
         Some("ogg") => "ogg",
+        Some("mxf") => "mxf",
         _ => "mp4",
     }
 }
@@ -530,6 +532,25 @@ pub async fn export_start(app: AppHandle, plan: export::Plan) -> Value {
             v["ok"] = json!(true);
             v
         }
+        Err(e) => json!({ "ok": false, "cancelled": e["cancelled"], "error": e["message"] }),
+    }
+}
+
+/// Первый проход нормализации громкости (0.5.0): plan = { args, filter, duration } (выход @@OUT@@ — в никуда).
+/// Прогресс — событие export:progress с phase:'loudness'. Ответ { ok, result: { input_i, … } } | { ok:false, error, cancelled }
+#[tauri::command]
+pub async fn export_loudness(app: AppHandle, plan: Value) -> Value {
+    let args: Vec<String> = serde_json::from_value(plan["args"].clone()).unwrap_or_default();
+    let filter = plan["filter"].as_str().unwrap_or_default().to_string();
+    let duration = plan["duration"].as_f64().unwrap_or(0.0);
+    let a = app.clone();
+    let r = export::measure_loudness(args, filter, duration, crate::plancheck::Inputs::Window, move |mut p| {
+        p["phase"] = json!("loudness");
+        let _ = a.emit("export:progress", p);
+    })
+    .await;
+    match r {
+        Ok(v) => json!({ "ok": true, "result": v }),
         Err(e) => json!({ "ok": false, "cancelled": e["cancelled"], "error": e["message"] }),
     }
 }
@@ -804,6 +825,18 @@ pub async fn log_line(window: WebviewWindow, level: String, message: String) {
         }
     })
     .await;
+}
+
+/// Отчёт об ошибке из окна (необработанная ошибка JS, сбой рендера звука) — logs/reports, только локально
+#[tauri::command]
+pub async fn crash_report(kind: String, message: String, detail: String) -> Option<String> {
+    blocking(move || crate::crashlog::report_js(&kind, &message, &detail).map(|p| s(&p))).await.ok().flatten()
+}
+
+/// Отчёты об ошибках: { dir, total, fresh, last }; mark_seen — пользователь их увидел
+#[tauri::command]
+pub async fn crash_reports(mark_seen: bool) -> Value {
+    blocking(move || crate::crashlog::list(mark_seen)).await.unwrap_or(Value::Null)
 }
 
 /// Строки журнала из разных потоков не перемешиваются

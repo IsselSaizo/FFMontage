@@ -386,7 +386,9 @@ fn done(out: &Path, key: &str, cached: bool) -> Value {
 }
 
 pub async fn render(job: &Value, inputs: plancheck::Inputs, on_progress: impl Fn(f64) + Send + Sync) -> R<Value> {
-    if !SUPPORTED {
+    // 0.5.0: рендер без плагинов (только стадии FFmpeg — шумоподавление для плеера) работает везде
+    let has_plugins = job["stages"].as_array().is_some_and(|a| a.iter().any(|s| s["vst"].is_object()));
+    if !SUPPORTED && has_plugins {
         return Err(tr!("аудиоплагины поддерживаются только в Windows x64", "audio plugins are supported on Windows x64 only").into());
     }
     let dur = job["dur"].as_f64().unwrap_or(0.0);
@@ -460,6 +462,10 @@ pub async fn render(job: &Value, inputs: plancheck::Inputs, on_progress: impl Fn
             }
             let cdur = input["dur"].as_f64().unwrap_or(dur).max(0.001);
             let mut af = "aresample=48000,aformat=sample_fmts=flt:sample_rates=48000:channel_layouts=stereo".to_string();
+            // 0.5.1: клип одного канала многоканального потока — этот канал двойным моно (audioLayout.js channelPick)
+            if let Some(ch) = input["channel"].as_u64().filter(|c| *c < 64) {
+                af = format!("pan=stereo|c0=c{ch}|c1=c{ch},{af}");
+            }
             let t = atempo(speed);
             if !t.is_empty() {
                 af = format!("{af},{t}");

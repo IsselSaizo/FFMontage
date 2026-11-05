@@ -93,6 +93,13 @@ export const vstEntries = (list) => activeFx(list).filter(isVst);
 export const missingVst = (list) => vstEntries(list).filter((x) => !vstKnown(x)).map(vstName);
 /** В цепочке есть включённый найденный плагин — её звук идёт через офлайн-рендер */
 export const hasVst = (list) => vstEntries(list).some(vstKnown);
+/** В цепочке есть включённый эффект без Web Audio (previewOnlyExport — шумоподавление) */
+export const hasOfflineFx = (list) => builtinFx(list).some((x) => fxDef(x.type).previewOnlyExport);
+/**
+ * Плееру нужен офлайн-рендер цепочки (vst_render): плагин VST3/CLAP или эффект без Web Audio (0.5.0 —
+ * шумоподавление теперь слышно в плеере после короткой обработки; рендер без плагинов работает на любой ОС)
+ */
+export const needsRender = (list) => hasVst(list) || hasOfflineFx(list);
 
 /** params: { id: 0..1 } — только числа в границах, ключи по порядку (ключ рендера не зависит от порядка правок) */
 export function cleanVstParams(params) {

@@ -44,7 +44,7 @@
   "homepage": "https://github.com/…",
   "entry": "main.js",
   "contributes": {
-    "effects": [], "transitions": [], "audioEffects": [], "exportPresets": [], "textStyles": [],
+    "effects": [], "transitions": [], "audioEffects": [], "exportPresets": [], "textStyles": [], "loudnessTargets": [],
     "keymaps": [], "actions": [], "panels": []
   },
   "permissions": ["project:read", "storage"],
@@ -75,7 +75,7 @@
 
 Инструменты для `ffm.tools.call`: `get_project`, `add_clip`, `update_clip`, `split_clip`, `delete_clip`,
 `reverse_clip`, `freeze_frame`, `set_transition`, `close_gaps`, `add_video_track`, `update_video_track`, `set_transform`,
-`add_text`, `update_text`, `set_subtitles` (без `path`), `update_subtitles`, `undo`, `redo`, `set_playhead` (аргументы — как
+`add_text`, `update_text`, `set_subtitles` (без `path`), `update_subtitles`, `set_audio_layout`, `route_track`, `split_channels`, `undo`, `redo`, `set_playhead` (аргументы — как
 у ИИ-ассистента, см. описание MCP). Файловые инструменты и экспорт плагинам недоступны. `ffm.commands.execute`
 не выполняет действия меню «Файл» и действия других плагинов.
 
@@ -148,6 +148,17 @@
 - `kind` — `title`, `lower`, `caption`, `credits` или `other`; `duration` — 0,5…600 с; `transform` — как у `set_transform`.
 - Поля `text`: `content`, `font` (имя шрифта: встроенные `Inter`, `Open Sans` или свой шрифт пользователя — если его нет, будет запасной), `size` (высота шрифта в долях высоты кадра), `weight`, `italic`, `color`, `align` (`left`/`center`/`right`), `lineHeight`, `letterSpacing` (em), `wrap` (ширина строки в долях кадра, 0 — без переноса), `strokeWidth`/`strokeColor` (обводка в долях размера шрифта), `shadowOpacity`/`shadowColor`/`shadowBlur`/`shadowX`/`shadowY`, `box`/`boxColor`/`boxOpacity`/`boxPad`/`boxRadius` (подложка), `motion` (`none` или `roll` — титры снизу вверх). Неизвестные поля — ошибка регистрации.
 - Текст рисует сама программа (один и тот же код для плеера и для экспорта), поэтому плагин задаёт только оформление.
+
+## Цель громкости (0.5.0)
+
+```json
+"loudnessTargets": [ { "id": "atsc", "name": { "ru": "США: −24 LUFS (ATSC A/85)", "en": "US: −24 LUFS (ATSC A/85)" }, "i": -24, "tp": -2, "lra": 11, "hint": "…" } ]
+```
+- Цель появляется в списке «Громкость» окна экспорта и в MCP `export_video loudness` (id — `<плагин>.<id>`).
+- `i` — целевая громкость, −70…−5 LUFS; `tp` — предел истинного пика, −9…0 dBTP (по умолчанию −1);
+  `lra` — диапазон громкости, 1…20 LU (по умолчанию 11); `hint` — подсказка под списком.
+- Экспорт идёт в два прохода (замер `loudnorm`, затем запись по замеру) — плагин задаёт только числа.
+- Из логики плагина: `ffm.register.loudnessTarget({ id, name, i, tp, lra })`.
 
 ## Пресет экспорта, пресет клавиш, действие, панель
 

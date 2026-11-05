@@ -11,6 +11,8 @@ export const SAFE_FILTERS = [
   'alimiter', 'anullsrc', 'split', 'asplit', 'null', 'anull', 'loop', 'rotate', 'hflip', 'vflip', 'transpose',
   // 0.4.1: GIF (палитра) и «только звук» (картинка не нужна — в nullsink)
   'palettegen', 'paletteuse', 'nullsink', 'anullsink',
+  // 0.5.2: XDCAM HD422 — чересстрочный кадр (верхнее поле первым)
+  'setfield',
   // видеоэффекты
   'hue', 'colorchannelmixer', 'negate', 'eq', 'gblur', 'boxblur', 'avgblur', 'smartblur', 'dblur', 'unsharp',
   'vignette', 'colorbalance', 'colorlevels', 'colorcontrast', 'colorcorrect', 'colortemperature', 'colorize',

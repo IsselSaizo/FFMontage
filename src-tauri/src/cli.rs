@@ -4,6 +4,7 @@
 //          silence {file,threshold,min} | frame {file,t,width} | encoders {reset?} | queue | version | export {plan} | checkplan {plan} | paths
 //          info (AppImage, режим путей, откуда FFmpeg, плагины GStreamer, ассет обновления)
 //          vst-list | vst-scan {force?} | vst-info {uid,state?,ctrl?,params?} | vst-render {job}
+//          reports | crash-test (отчёты об ошибках, crashlog.rs)
 use crate::{commands, export, ff, paths, tr};
 use serde_json::{json, Value};
 use std::io::{Read, Write};
@@ -60,7 +61,9 @@ pub fn main(cmd: &str) {
             "thumbs" => ff::thumbs(&args["info"]).await,
             "peaks" => ff::peaks(&args["info"], args["stream"].as_u64().unwrap_or(0) as usize).await,
             "astream" => {
-                ff::audio_stream(&args["info"], args["stream"].as_u64().unwrap_or(1) as usize).await.map(|p| json!(p.to_string_lossy()))
+                ff::audio_stream(&args["info"], args["stream"].as_u64().unwrap_or(1) as usize, args["channel"].as_u64().map(|c| c as usize))
+                    .await
+                    .map(|p| json!(p.to_string_lossy()))
             }
             "proxy" => ff::proxy(&args["info"], &noop, &enc().await).await.map(|p| json!(p.to_string_lossy())),
             "reverse" => ff::reverse(&args["info"], f("a"), f("b"), &noop, &enc().await).await.map(|p| json!(p.to_string_lossy())),
@@ -82,6 +85,20 @@ pub fn main(cmd: &str) {
                 })
                 .map_err(|e| e["message"].as_str().unwrap_or("").to_string())
             }
+            // Замер громкости (первый проход loudnorm): {plan: {args, filter, duration}} → { input_i, … }
+            "loudness" => {
+                let p = &args["plan"];
+                let a: Vec<String> = serde_json::from_value(p["args"].clone()).map_err(|e| e.to_string())?;
+                export::measure_loudness(
+                    a,
+                    p["filter"].as_str().unwrap_or_default().to_string(),
+                    p["duration"].as_f64().unwrap_or(0.0),
+                    crate::plancheck::Inputs::Engine,
+                    |_| {},
+                )
+                .await
+                .map_err(|e| e["message"].as_str().unwrap_or("").to_string())
+            }
             // Только проверка плана (как перед экспортом), без запуска FFmpeg: {plan} → true или ошибка
             "checkplan" => {
                 let plan: export::Plan = serde_json::from_value(args["plan"].clone()).map_err(|e| e.to_string())?;
@@ -93,6 +110,15 @@ pub fn main(cmd: &str) {
             "vst-scan" => Ok(crate::vst::scan(args["force"].as_bool() == Some(true), |_, _, _| {}).await),
             "vst-info" => crate::vst::info(args["uid"].as_str().unwrap_or_default(), &args["state"], &args["ctrl"], &args["params"]).await,
             "vst-render" => crate::vst::render(&args["job"], crate::plancheck::Inputs::Engine, |_| {}).await,
+            // Отчёты об ошибках (crashlog.rs): список; crash-test — паника в потоке (проверка, что отчёт пишется)
+            "reports" => Ok(crate::crashlog::list(false)),
+            "crash-test" => {
+                let _ = std::thread::Builder::new()
+                    .name("crash-test".into())
+                    .spawn(|| panic!("crash-test: intentional panic"))
+                    .map(|h| h.join());
+                Ok(crate::crashlog::list(false))
+            }
             other => Err(tr!("неизвестная команда: {}", "unknown command: {}", other)),
         }
     });

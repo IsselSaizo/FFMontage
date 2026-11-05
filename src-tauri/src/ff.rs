@@ -775,13 +775,16 @@ pub async fn proxy(info: &Value, on_progress: &(dyn Fn(f64) + Send + Sync), enc:
     Ok(file)
 }
 
-/// Звуковой поток N (N ≥ 1) отдельным файлом для предпросмотра: окно играет только первый поток файла
-pub async fn audio_stream(info: &Value, stream: usize) -> Res<PathBuf> {
+/// Звуковой поток N (N ≥ 1) отдельным файлом для предпросмотра: окно играет только первый поток файла.
+/// channel (0.5.1) — один канал потока моно-файлом (клип «разложен по каналам»; прокси сведён в стерео)
+pub async fn audio_stream(info: &Value, stream: usize, channel: Option<usize>) -> Res<PathBuf> {
     let i = Info(info);
     let key = i.key()?;
-    let lock = key_lock(&format!("astream:{key}:{stream}"));
+    let channel = channel.filter(|c| (*c as f64) < stream_channels(&i, stream) && *c < 64);
+    let tag = channel.map(|c| format!("-c{c}")).unwrap_or_default();
+    let lock = key_lock(&format!("astream:{key}:{stream}{tag}"));
     let _g = lock.lock().await;
-    let file = media_cache_dir(&key).join(format!("audio-a{stream}.m4a"));
+    let file = media_cache_dir(&key).join(format!("audio-a{stream}{tag}.m4a"));
     if file.exists() {
         return Ok(file);
     }
@@ -792,7 +795,9 @@ pub async fn audio_stream(info: &Value, stream: usize) -> Res<PathBuf> {
     let mut args = sv(&["-hide_banner", "-loglevel", "error", "-y", "-i"]);
     args.push(s(&i.path()));
     args.extend(sv(&["-map", &format!("0:a:{stream}"), "-vn", "-sn", "-c:a", "aac", "-b:a", "192k", "-ar", "48000"]));
-    if stream_channels(&i, stream) > 2.0 {
+    if let Some(c) = channel {
+        args.extend(["-af".to_string(), format!("pan=mono|c0=c{c}"), "-ac".into(), "1".into()]);
+    } else if stream_channels(&i, stream) > 2.0 {
         args.extend(sv(&["-ac", "2"]));
     }
     args.extend(sv(&["-movflags", "+faststart", "-f", "mp4"]));

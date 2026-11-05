@@ -9,5 +9,6 @@ import fxcore from './en/fxcore.js';
 import text from './en/text.js';
 import vst from './en/vst.js';
 import edit from './en/edit.js';
+import audio from './en/audio.js';
 
-export const EN = Object.assign({}, core, timeline, clip, panels, mcp, plugins, fxcore, text, vst, edit);
+export const EN = Object.assign({}, core, timeline, clip, panels, mcp, plugins, fxcore, text, vst, edit, audio);

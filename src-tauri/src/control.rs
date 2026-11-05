@@ -51,7 +51,7 @@ pub fn grant_mcp_output(tool: &str, args: &Value) -> Option<PathBuf> {
     let p = args["path"].as_str().map(str::trim).filter(|p| !p.is_empty())?;
     let mut s = p.to_string();
     let low = s.to_lowercase();
-    if ![".mp4", ".mkv", ".mov", ".gif", ".mp3", ".m4a", ".wav", ".ogg"].iter().any(|e| low.ends_with(e)) {
+    if ![".mp4", ".mkv", ".mov", ".gif", ".mp3", ".m4a", ".wav", ".ogg", ".mxf"].iter().any(|e| low.ends_with(e)) {
         s.push_str(".mp4");
     }
     let path = PathBuf::from(s);

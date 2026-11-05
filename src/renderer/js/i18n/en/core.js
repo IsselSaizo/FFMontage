@@ -222,4 +222,13 @@ export default {
   'Видеокарта NVIDIA: {list} — быстрый экспорт.': 'NVIDIA GPU: {list} — fast export.',
   'Кодирование на видеокарте NVIDIA недоступно — экспорт будет идти на процессоре (медленнее).': 'NVIDIA GPU encoding is not available — export will run on the CPU (slower).',
   'Папка с ffmpeg и ffprobe.': 'Folder with ffmpeg and ffprobe.',
+
+  // --- отчёты об ошибках (crashlog.rs) ---
+  'В прошлый раз программа завершилась с ошибкой. Отчёт сохранён на этом компьютере — приложите его, когда будете сообщать об ошибке.': 'Last time the app ended with an error. A report was saved on this computer — attach it when you report the bug.',
+  'Сохранены отчёты об ошибках ({n}). Они лежат на этом компьютере — приложите их, когда будете сообщать об ошибке.': 'Error reports saved ({n}). They are kept on this computer — attach them when you report a bug.',
+  'Открыть папку': 'Open folder',
+  'Отчёты об ошибках': 'Error reports',
+  '{n} — последний: {name}': '{n} — latest: {name}',
+  'нет': 'none',
+  'Журналы и отчёты об ошибках хранятся только на этом компьютере и никуда не отправляются. Если сообщаете об ошибке — приложите файлы из папки reports.': 'Logs and error reports stay on this computer and are never sent anywhere. When reporting a bug, attach the files from the reports folder.',
 };

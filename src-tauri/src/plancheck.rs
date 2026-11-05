@@ -393,6 +393,17 @@ enum V {
     SubMeta,
     /// -vaapi_device /dev/dri/renderD<N>
     VaapiDevice,
+    /// -timecode ЧЧ:ММ:СС:КК (или ;КК — drop frame)
+    Timecode,
+}
+
+fn is_timecode(v: &str) -> bool {
+    let b = v.as_bytes();
+    b.len() == 11
+        && [0, 1, 3, 4, 6, 7, 9, 10].iter().all(|&i| b[i].is_ascii_digit())
+        && b[2] == b':'
+        && b[5] == b':'
+        && (b[8] == b':' || b[8] == b';')
 }
 
 /// «<prefix><N>», N — 1–3 цифры (номер потока субтитров)
@@ -427,6 +438,10 @@ const VCODECS: &[&str] = &[
     "av1_amf",
     "h264_vaapi",
     "hevc_vaapi",
+    // 0.5.2: вещательные пресеты (exportPlan.js BROADCAST) — ProRes, DNxHR, XDCAM HD422 (MPEG-2)
+    "prores_ks",
+    "dnxhd",
+    "mpeg2video",
 ];
 
 /// Видеокодек плана кодирует на видеокарте (export.rs занимает слот GPU в queue.rs)
@@ -457,7 +472,7 @@ fn spec(opt: &str) -> Option<V> {
         "-fps_mode" | "-vsync" => V::Enum(&["cfr", "vfr", "passthrough", "auto"]),
         "-movflags" => V::Enum(&["+faststart"]),
         // 0.4.1: GIF и «только звук» (mp3, m4a = mp4, wav, ogg)
-        "-f" => V::Enum(&["mp4", "mov", "webm", "matroska", "gif", "mp3", "wav", "ogg"]),
+        "-f" => V::Enum(&["mp4", "mov", "webm", "matroska", "gif", "mp3", "wav", "ogg", "mxf"]),
         "-progress" => V::Enum(&["pipe:1"]),
         "-deadline" => V::Enum(&["realtime", "good", "best"]),
         // M0.4: качество qsv (-global_quality), amf (-usage/-quality/-qp_*), vaapi (-rc_mode/-qp) — exportPlan.js encoderArgs
@@ -466,6 +481,12 @@ fn spec(opt: &str) -> Option<V> {
         "-quality" => V::Enum(&["speed", "balanced", "quality", "high_quality"]),
         "-rc_mode" => V::Enum(&["CQP", "ICQ", "VBR", "CBR", "QVBR", "AVBR", "auto"]),
         "-vaapi_device" => V::VaapiDevice,
+        // 0.5.2: ProRes (-vendor), XDCAM HD422 (MPEG-2: GOP, B-кадры, чересстрочное кодирование), таймкод
+        "-vendor" => V::Enum(&["apl0"]),
+        "-bf" | "-dc" | "-intra_vlc" | "-non_linear_quant" | "-qmin" | "-qmax" => V::Num,
+        "-minrate" | "-maxrate" | "-bufsize" => V::Bitrate,
+        "-flags" => V::Enum(&["+ildct+ilme"]),
+        "-timecode" => V::Timecode,
         // M5: мягкие субтитры
         "-c:s" => V::Enum(&["mov_text", "srt", "ass", "webvtt"]),
         _ if stream_opt(opt, "-metadata:s:s:") => V::SubMeta,
@@ -567,7 +588,7 @@ fn input_ok(v: &str, inputs: Inputs) -> Result<PathBuf, String> {
     }
 }
 
-const OUT_EXT: &[&str] = &["mp4", "mov", "mkv", "webm", "gif", "mp3", "m4a", "wav", "ogg"];
+const OUT_EXT: &[&str] = &["mp4", "mov", "mkv", "webm", "gif", "mp3", "m4a", "wav", "ogg", "mxf"];
 
 // ---------------------------------------------------------------------------
 // Выходные файлы, выданные программой (M0.2)
@@ -637,8 +658,8 @@ fn check_inner(args: &[String], filter: &str, duration: f64, output: &str, input
     let ext = crate::ff::ext_of(&out);
     if !out.is_absolute() || !OUT_EXT.contains(&ext.as_str()) || output.contains(['\n', '\r']) {
         return Err(tr!(
-            "выходной файл должен быть абсолютным путём .mp4/.mov/.mkv/.webm/.gif/.mp3/.m4a/.wav/.ogg: {}",
-            "the output must be an absolute .mp4/.mov/.mkv/.webm/.gif/.mp3/.m4a/.wav/.ogg path: {}",
+            "выходной файл должен быть абсолютным путём .mp4/.mov/.mkv/.webm/.gif/.mp3/.m4a/.wav/.ogg/.mxf: {}",
+            "the output must be an absolute .mp4/.mov/.mkv/.webm/.gif/.mp3/.m4a/.wav/.ogg/.mxf path: {}",
             output
         ));
     }
@@ -682,6 +703,7 @@ fn check_inner(args: &[String], filter: &str, duration: f64, output: &str, input
             V::Map => is_map(v),
             V::SubMeta => is_sub_meta(v),
             V::VaapiDevice => is_vaapi_device(v),
+            V::Timecode => is_timecode(v),
             V::Filter => {
                 n_filter += 1;
                 v == "@@FILTER@@"
@@ -1027,6 +1049,64 @@ mod tests {
             "@@OUT@@",
         ]);
         a.into_iter().map(String::from).collect()
+    }
+
+    /// 0.5.2: вещательные пресеты (exportPlan.js BROADCAST) — ProRes, DNxHR, XDCAM HD422 в MXF с таймкодом
+    #[test]
+    fn broadcast_plans() {
+        let inp = abs("a.mp4");
+        let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<String>>();
+        let head = s(&["-hide_banner", "-y", "-nostdin", "-i", &inp, "-/filter_complex", "@@FILTER@@", "-map", "[vout]", "-map", "[aout]"]);
+        let tail = s(&["-c:a", "pcm_s24le", "-ar", "48000", "-timecode", "10:00:00:00", "-t", "6.000000"]);
+        let xdcam = [
+            "-c:v",
+            "mpeg2video",
+            "-b:v",
+            "50M",
+            "-minrate",
+            "50M",
+            "-maxrate",
+            "50M",
+            "-bufsize",
+            "36408333",
+            "-g",
+            "12",
+            "-bf",
+            "2",
+            "-flags",
+            "+ildct+ilme",
+            "-dc",
+            "10",
+            "-intra_vlc",
+            "1",
+            "-non_linear_quant",
+            "1",
+            "-qmin",
+            "1",
+            "-qmax",
+            "12",
+            "-pix_fmt",
+            "yuv422p",
+        ];
+        let cases: Vec<(Vec<&str>, &str, &str)> = vec![
+            (vec!["-c:v", "prores_ks", "-profile:v", "3", "-vendor", "apl0", "-pix_fmt", "yuv422p10le"], "mov", "out.mov"),
+            (vec!["-c:v", "prores_ks", "-profile:v", "4", "-vendor", "apl0", "-pix_fmt", "yuv444p10le"], "mov", "out.mov"),
+            (vec!["-c:v", "dnxhd", "-profile:v", "dnxhr_hq", "-pix_fmt", "yuv422p"], "mxf", "out.mxf"),
+            (xdcam.to_vec(), "mxf", "out.mxf"),
+        ];
+        for (v, f, out) in cases {
+            let mut a = head.clone();
+            a.extend(s(&v));
+            a.extend(tail.clone());
+            a.extend(s(&["-f", f, "-progress", "pipe:1", "-nostats", "@@OUT@@"]));
+            check(&a, &real_graph(), 6.0, &abs(out), Inputs::Any).unwrap_or_else(|e| panic!("{f}: {e}"));
+        }
+        // Таймкод — только ЧЧ:ММ:СС:КК; -flags и -vendor — только известные значения
+        for (k, v) in [("-timecode", "10:00:00"), ("-timecode", "1;2;3;4"), ("-flags", "+global_header"), ("-vendor", "fake")] {
+            let mut a = head.clone();
+            a.extend(s(&[k, v, "-f", "mov", "@@OUT@@"]));
+            assert!(check(&a, &real_graph(), 6.0, &abs("out.mov"), Inputs::Any).is_err(), "{k} {v}");
+        }
     }
 
     #[test]

@@ -64,7 +64,7 @@
     rack().querySelector('[data-fx-on="0"]').click(); await sleep(60);
     store.setTime(1);
     preview.play(); await sleep(700); preview.pause();
-    const recA = preview.audio.get(ac.id);
+    const recA = preview.clipRec(ac.id);
     const route = recA && preview.routes.get(recA.el);
     ok(route && route.nodes.length === 3 && preview.buses.has(tr.id) && preview.buses.get(tr.id).nodes.length === 2, 'плеер: EQ (3 фильтра) у клипа и компрессор на шине дорожки');
 
@@ -74,9 +74,13 @@
     store.undo(); await sleep(50);
     ok(store.findClip(ac.id).clip.afx && store.findClip(ac.id).clip.afx.length === 1, 'отмена возвращает эффект');
 
-    // Шумоподавление: только в экспорте
+    // Шумоподавление (0.5.0): в плеере — через офлайн-рендер (WAV в audio-fx)
     rack().querySelector('[data-add-fx="denoise"]').click(); await sleep(80);
-    ok(/только в готовом видео/.test(rack().textContent), 'шумоподавление: пометка «только в готовом видео»');
+    ok(/после короткой обработки/.test(rack().textContent), 'шумоподавление: пометка «слышно после короткой обработки»');
+    store.setTime(1);
+    preview.play(); await sleep(400); preview.pause();
+    const dn = await (async () => { for (let i = 0; i < 150; i++) { store.setTime(1); await sleep(200); const r = preview.clipRec(ac.id); if (r && /audio-fx/.test(decodeURIComponent(r.el.src || ''))) return r; } return null; })();
+    ok(!!dn, `шумоподавление: плеер играет WAV рендера ${dn && dn.el.src}`);
     await window.api.testShot('audio-tab');
 
     // Обратно на «Видео»

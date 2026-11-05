@@ -1,7 +1,7 @@
 // Связь окна с программой (Tauri): window.api — все вызовы команд Rust и подписки на события.
 // Подключается первым модулем (index.html, setup.html), до остальных скриптов.
 // window.__TAURI__ в окне нет (withGlobalTauri: false) — вызовы идут через js/tauri.js.
-import { exportCommand } from './exportPlan.js';
+import { exportCommand, cleanLoudness, loudnessPlan, containerOf } from './exportPlan.js';
 import { invoke, listen, appWindow, webview } from './tauri.js';
 
 const on = (event, fn) => {
@@ -21,8 +21,31 @@ for (const level of ['log', 'info', 'warn', 'error']) {
   const orig = console[level].bind(console);
   console[level] = (...a) => { orig(...a); if (level !== 'log' && level !== 'info') log(level, a); };
 }
-window.addEventListener('error', (e) => log('error', [`${e.message} (${e.filename}:${e.lineno})`]));
-window.addEventListener('unhandledrejection', (e) => log('error', ['unhandled:', e.reason]));
+// Необработанная ошибка → ещё и отчёт <кэш>/app/logs/reports/*-js-error.txt (crashlog.rs, только локально).
+// Одинаковая ошибка — один отчёт за запуск; шум WebView (ResizeObserver) не считается.
+const reported = new Set();
+const NOISE = /ResizeObserver loop|^Script error\.?$/i;
+function crashReport(kind, message, detail = '') {
+  try {
+    const msg = String(message || '').slice(0, 2000);
+    if (!msg || NOISE.test(msg)) return;
+    const sig = `${kind}|${msg}|${String(detail).slice(0, 300)}`;
+    if (reported.has(sig)) return;
+    reported.add(sig);
+    const where = `url: ${location.pathname}\nuserAgent: ${navigator.userAgent}\nuptime: ${Math.round(performance.now() / 1000)} s\n`;
+    invoke('crash_report', { kind, message: msg, detail: `${where}\n${detail || ''}` }).catch(() => {});
+  } catch { /* ignore */ }
+}
+const stackOf = (x) => (x instanceof Error ? (x.stack || `${x.name}: ${x.message}`) : typeof x === 'object' ? (() => { try { return JSON.stringify(x); } catch { return String(x); } })() : String(x));
+window.addEventListener('error', (e) => {
+  log('error', [`${e.message} (${e.filename}:${e.lineno})`]);
+  crashReport('js-error', e.message, `${e.filename}:${e.lineno}:${e.colno}\n${e.error ? stackOf(e.error) : ''}`);
+});
+window.addEventListener('unhandledrejection', (e) => {
+  log('error', ['unhandled:', e.reason]);
+  const r = e.reason;
+  crashReport('js-error', `unhandled rejection: ${r instanceof Error ? r.message : String(r && r.message || r)}`, stackOf(r));
+});
 
 let infoCache = null;
 const info = async () => {
@@ -49,7 +72,7 @@ window.api = {
   probe: (file) => invoke('media_probe', { file }),
   thumbs: (info) => invoke('media_thumbs', { info }),
   peaks: (info, stream = 0) => invoke('media_peaks', { info, stream }),
-  audioStream: (info, stream) => invoke('media_audio_stream', { info, stream }),
+  audioStream: (info, stream, channel = null) => invoke('media_audio_stream', { info, stream, channel }),
   proxy: (info) => invoke('media_proxy', { info }),
   onProxyProgress: (fn) => on('media:proxy-progress', fn),
   encoders: () => invoke('enc_detect'),
@@ -73,9 +96,19 @@ window.api = {
       // Тексты (картинки PNG) и субтитры (.ass / .srt) — готовятся окном до сборки команды (exportAssets.js)
       const { prepareExportAssets } = await import('./exportAssets.js');
       const assets = await prepareExportAssets(project, settings, window.api);
-      plan = exportCommand(project, { ...settings, assets }, i.ffMajor);
+      const s = { ...settings, assets };
+      // Нормализация громкости (0.5.0): первый проход — замер loudnorm по тому же звуку, второй — сам экспорт
+      const L = cleanLoudness(settings.loudness);
+      if (L && !L.measured && containerOf(s) !== 'gif') {
+        const r = await invoke('export_loudness', { plan: loudnessPlan(project, s, i.ffMajor) });
+        if (!r || !r.ok) return { ok: false, error: (r && r.error) || 'loudness', cancelled: !!(r && r.cancelled) };
+        s.loudness = { ...L, measured: r.result };
+      }
+      plan = exportCommand(project, s, i.ffMajor);
+      const res = await invoke('export_start', { plan });
+      if (res && s.loudness) res.loudness = s.loudness;
+      return res;
     } catch (e) { return { ok: false, error: String(e?.message || e) }; }
-    return invoke('export_start', { plan });
   },
   // Готовый план FFmpeg (запекание анимаций): { args, filter, duration, output }
   runPlan: (plan) => invoke('export_start', { plan: { args: plan.args, filter: plan.filter, duration: plan.duration, output: plan.output } }),
@@ -90,6 +123,9 @@ window.api = {
   devtools: () => invoke('win_devtools'),
   setTitle: (title) => invoke('win_title', { title }),
   exists: (path) => invoke('fs_exists', { path }),
+  // Отчёты об ошибках (crashlog.rs): записать (kind 'js-error' | 'render-failed') и список { dir, total, fresh, last }
+  crashReport,
+  crashReports: (markSeen = false) => invoke('crash_reports', { markSeen }),
   // Файлы, брошенные на окно: fn({ type: 'enter'|'over'|'drop'|'leave', paths, x, y })
   onFileDrop: (fn) => { dropListeners.add(fn); return () => dropListeners.delete(fn); },
   // Кнопки окна (рамка своя)

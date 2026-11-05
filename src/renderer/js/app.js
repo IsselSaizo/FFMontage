@@ -429,10 +429,28 @@ async function main() {
   });
   document.body.classList.add('ready');
   maybeAskLanguage();
+  noticeCrashReports();
   const info = await api.info();
   if (info.ffmpegMissing || !info.ffmpegVersion) {
     toast(t('FFmpeg не найден — без него не будет миниатюр и экспорта. Укажите папку: меню ☰ → «Настройки» → «Папки».'), 'error', 15000);
   }
+}
+
+// С прошлого запуска появились отчёты об ошибках (crashlog.rs: падение, ошибка экспорта, ошибка в окне) —
+// сказать, где они лежат. Никуда не отправляются. В автотестах молчим: тесты закрывают программу как попало.
+async function noticeCrashReports() {
+  if (window.__FFM_BOOT && window.__FFM_BOOT.selftest) return;
+  try {
+    const r = await api.crashReports(true);
+    const fresh = (r && r.fresh) || [];
+    if (!fresh.length) return;
+    const crashed = fresh.some((x) => ['panic', 'native', 'unclean-exit', 'window-crash'].includes(x.kind));
+    const msg = crashed
+      ? t('В прошлый раз программа завершилась с ошибкой. Отчёт сохранён на этом компьютере — приложите его, когда будете сообщать об ошибке.')
+      : t('Сохранены отчёты об ошибках ({n}). Они лежат на этом компьютере — приложите их, когда будете сообщать об ошибке.', { n: fresh.length });
+    toast(h('span', { class: 'toast-crash' }, msg, ' ',
+      h('button', { class: 'btn ghost small', onclick: () => api.openPath(r.dir).catch(() => {}) }, t('Открыть папку'))), crashed ? 'error' : 'info', 15000);
+  } catch (e) { console.warn('crash reports', e); }
 }
 
 // Перетаскиваемая граница между плеером и таймлайном

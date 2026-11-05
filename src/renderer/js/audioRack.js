@@ -91,7 +91,7 @@ export function initAudioRack() {
           h('label', { class: 'check-row' }, on, h('b', {}, d.name)),
           h('button', { class: 'icon-btn tiny', title: t('Убрать эффект'), html: icon('trash', 14), dataset: { fxDel: String(i) }, onclick: () => store.removeAudioFx(target, i) })),
         ...d.params.map((pd) => slider(target, i, fx, pd)),
-        d.previewOnlyExport ? h('p', { class: 'muted small' }, t('В плеере не слышно — только в готовом видео.')) : null);
+        d.previewOnlyExport ? h('p', { class: 'muted small' }, t('В плеере слышно после короткой обработки (пара секунд).')) : null);
       root.append(card);
     });
 

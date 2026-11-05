@@ -19,6 +19,9 @@ import { isText, TEXT_MAX } from './textModel.js';
 import { fontFamilies } from './textRender.js';
 import { subtitleRows, importSubtitles } from './subtitlesUi.js';
 import { getPref, setPref } from './prefs.js';
+import { routeOf, channelLabels, isDefaultRoute } from './audioLayout.js';
+import { trackMeterEl } from './meters.js';
+import { openRouting } from './routingDialog.js';
 
 const HEAD_W = 168;
 const VIDEO_H = 76;
@@ -534,7 +537,15 @@ export class Timeline {
     });
     r.addEventListener('change', () => { store.commitFrom(before); before = null; });
     r.addEventListener('dblclick', () => store.setTrack(trk.id, { volume: 1 }));
-    return h('div', { class: 'th-row vol' }, r, val);
+    // 0.5.0: индикатор уровня под ползунком; 0.5.1: каналы проекта, куда идёт дорожка (щелчок — матрица маршрутов)
+    const route = routeOf(store.project, trk);
+    const labels = channelLabels(store.project);
+    const routeBtn = h('button', {
+      class: `th-route${isDefaultRoute(route, store.project) ? '' : ' custom'}`,
+      title: t('Каналы: {ch} — щелчок, чтобы изменить маршрут и раскладку каналов', { ch: route.map((k) => labels[k]).join(' + ') }),
+      onclick: (e) => { e.stopPropagation(); openRouting(); },
+    }, route.map((k) => labels[k]).join('·'));
+    return h('div', { class: 'th-row vol' }, h('div', { class: 'th-volbox' }, r, trackMeterEl(trk.id)), val, routeBtn);
   }
 
   // Метки In / Out (0.4.3): скобки на линейке и полупрозрачная полоса через все дорожки
@@ -743,7 +754,10 @@ export class Timeline {
       if (wave) el.append(wave);
     }
     const streams = streamCount(m);
-    el.append(this.clipLabel(c, m, streams > 1 ? h('span', { class: 'ci stream', title: t('Звуковой поток файла') }, `#${(c.stream || 0) + 1}`) : null));
+    const badge = Number.isInteger(c.channel)
+      ? h('span', { class: 'ci stream', title: t('Канал {n} файла (моно)', { n: c.channel + 1 }) }, `${streams > 1 ? `#${(c.stream || 0) + 1}·` : ''}${t('к{n}', { n: c.channel + 1 })}`)
+      : streams > 1 ? h('span', { class: 'ci stream', title: t('Звуковой поток файла') }, `#${(c.stream || 0) + 1}`) : null;
+    el.append(this.clipLabel(c, m, badge));
     this.decorate(el, c, width, el.classList.contains('selected'));
     return el;
   }

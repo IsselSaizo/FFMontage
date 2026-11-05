@@ -70,7 +70,7 @@
     ok(r && r.status === 'ready' && /audio-fx/.test(r.path || r.url || ''), `рендер клипа: ${JSON.stringify(r && { status: r.status, error: r.error, url: r.url })}`);
     store.setTime(1);
     preview.play(); await sleep(900); preview.pause();
-    const rec = preview.audio.get(ac.id);
+    const rec = preview.clipRec(ac.id);
     ok(rec && /audio-fx/.test(decodeURIComponent(rec.el.src || '')), `плеер играет WAV рендера: ${rec && rec.el.src}`);
     await window.api.testShot('vst-rack').catch(() => {});
 
