@@ -143,10 +143,12 @@
   const plan = await import('./js/exportPlan.js');
   const cmd = plan.buildExport(store.project, { width: 640, height: 360, fps: 30 });
   ok(/\[\d+:a:1\]/.test(cmd.filter) && /volume=0\.500000/.test(cmd.filter), 'экспорт: второй поток и громкость дорожки в команде');
+  // Громкость перерисовывает шкалу (не сразу): на медленной машине перерисовка после щелчка уносила поле ввода
+  await sleep(300);
   const nameEl = document.querySelector(`.tl-row.audio[data-track="${t0.id}"] .th-name`);
   nameEl.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
-  await sleep(50);
-  const inp = document.querySelector('.th-rename');
+  let inp = null;
+  for (let i = 0; i < 20 && !inp; i++) { await sleep(50); inp = document.querySelector('.th-rename'); }
   ok(!!inp, 'двойной щелчок по имени — поле ввода');
   inp.value = 'Игра'; inp.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
   await sleep(100);

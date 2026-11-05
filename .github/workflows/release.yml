@@ -104,7 +104,8 @@ jobs:
   # AppImage — по умолчанию в каждом релизе; FFM_APPIMAGE=0 — пропустить
   appimage:
     needs: version
-    if: vars.FFM_APPIMAGE != '0'
+    # format: незаданная переменная — null, а null != '0' в выражениях GitHub сравнивается как 0 == 0 → задача пропускалась
+    if: format('{0}', vars.FFM_APPIMAGE) != '0'
     uses: ./.github/workflows/appimage.yml
     with:
       ref: ${{ github.event.inputs.tag || github.ref_name }}
