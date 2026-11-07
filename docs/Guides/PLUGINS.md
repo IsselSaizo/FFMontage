@@ -4,9 +4,9 @@
 добавляются эффекты, переходы, звуковые эффекты, пресеты экспорта и горячих клавиш, действия и панели.
 Встроенные эффекты и переходы устроены так же: это плагин `core`, он пользуется тем же API.
 
-Готовые примеры: [`examples/plugins/vignette`](../examples/plugins/vignette) (эффект без единой строки кода) и
-[`examples/plugins/project-stats`](../examples/plugins/project-stats) (панель, действие с клавишей, хранилище),
-[`examples/plugins/layouts`](../examples/plugins/layouts) (раскладки кадра: картинка в картинке и сетки через `set_transform`).
+Готовые примеры: [`examples/plugins/vignette`](../../examples/plugins/vignette) (эффект без единой строки кода) и
+[`examples/plugins/project-stats`](../../examples/plugins/project-stats) (панель, действие с клавишей, хранилище),
+[`examples/plugins/layouts`](../../examples/plugins/layouts) (раскладки кадра: картинка в картинке и сетки через `set_transform`).
 
 ## Установка
 
@@ -27,7 +27,7 @@
   и только к хостам, перечисленным в правах `net:<хост>` (только https).
 - FFmpeg плагин не запускает. Эффект описывает фрагмент графа фильтров декларативно; программа подставляет
   числа, проверяет имена фильтров и опций, а Rust перед запуском ещё раз проверяет весь граф и аргументы.
-  Разрешены только фильтры из [`safeFilters.js`](../src/renderer/js/core/safeFilters.js), которые плагин
+  Разрешены только фильтры из [`safeFilters.js`](../../src/renderer/js/core/safeFilters.js), которые плагин
   перечислил в `ffmpeg.filters`. Фильтры, читающие файлы или сеть (`movie`, `subtitles`, `lut3d`, `sendcmd` …),
   и опции вроде `file`/`filename` запрещены.
 

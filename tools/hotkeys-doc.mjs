@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// Таблица горячих клавиш из реестра действий (src/renderer/js/keymap.js) и пресетов (keymapPresets.js) → docs/HOTKEYS.md.
-//   node tools/hotkeys-doc.mjs          — записать docs/HOTKEYS.md
+// Таблица горячих клавиш из реестра действий (src/renderer/js/keymap.js) и пресетов (keymapPresets.js) → docs/Guides/HOTKEYS.md.
+//   node tools/hotkeys-doc.mjs          — записать docs/Guides/HOTKEYS.md
 //   node tools/hotkeys-doc.mjs --check  — сравнить с закоммиченным файлом (для CI); код выхода 1, если файл устарел
 // Названия — на русском: в Node окна нет, i18n.js выбирает русский язык.
 import fs from 'node:fs';
@@ -9,7 +9,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const JS = path.join(ROOT, 'src', 'renderer', 'js');
-const OUT = path.join(ROOT, 'docs', 'HOTKEYS.md');
+const OUT = path.join(ROOT, 'docs', 'Guides', 'HOTKEYS.md');
 
 // Минимальное окружение на случай, если модули реестра когда-нибудь тронут браузерные объекты при загрузке.
 // Сейчас keymap.js и i18n.js сами проверяют typeof window/document; window не задаём — иначе i18n.js
@@ -70,10 +70,10 @@ const norm = (s) => s.replace(/\r\n/g, '\n');
 if (process.argv.includes('--check')) {
   const old = fs.existsSync(OUT) ? fs.readFileSync(OUT, 'utf8') : '';
   if (norm(old) !== text) {
-    console.error('docs/HOTKEYS.md устарел: выполните `node tools/hotkeys-doc.mjs` и закоммитьте результат');
+    console.error('docs/Guides/HOTKEYS.md устарел: выполните `node tools/hotkeys-doc.mjs` и закоммитьте результат');
     process.exit(1);
   }
-  console.log('docs/HOTKEYS.md актуален');
+  console.log('docs/Guides/HOTKEYS.md актуален');
 } else {
   fs.writeFileSync(OUT, text);
   console.log(`Записан ${path.relative(ROOT, OUT)}: действий ${ACTIONS.filter((a) => !a.plugin).length}`);

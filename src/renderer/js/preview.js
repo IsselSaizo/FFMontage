@@ -301,13 +301,8 @@ export class Preview {
       const el = h('video', { class: 'slot', preload: 'auto', playsinline: true, disablepictureinpicture: true, crossorigin: 'anonymous' });
       el.dataset.slot = i;
       el.clipId = null;
-      el.addEventListener('error', () => {
-        el.failed = true; this.updateMessage();
-        // Файл не декодируется (нет кодека в системе) — переключить этот файл на прокси
-        const f = el.clipId && store.findClip(el.clipId);
-        if (f && el.error && el.error.code >= 3) playbackFailed(f.clip.mediaId);
-      });
-      el.addEventListener('loadeddata', () => { el.failed = false; this.updateMessage(); });
+      el.addEventListener('error', () => this.slotError(el));
+      el.addEventListener('loadeddata', () => { el.failed = false; el.okUrl = el.dataset.url; this.updateMessage(); });
       return el;
     });
     const imgSlots = [0, 1].map(() => h('img', { class: 'slot img', draggable: 'false', alt: '' }));
@@ -388,6 +383,38 @@ export class Preview {
 
   mediaDur(clip) { const m = store.media(clip.mediaId); return m ? m.duration : clip.out; }
   clampMt(clip, mt) { return Math.max(0, Math.min(this.mediaDur(clip) - 0.001, mt)); }
+
+  // Ошибка <video>. После неё элемент «мёртв» (play() и перемотка не работают), пока его не перезагрузить.
+  // Декодер WebView изредка сбоит посреди файла, который до этого играл (сброс или занятость видеодекодера —
+  // например, во время экспорта на той же видеокарте, нехватка памяти, обрыв чтения): такой элемент
+  // перезапускаем с того же места. Файл, который в элементе ещё не открывался, сначала проверяем отдельным
+  // <video> (playbackFailed): не играет — уходит на прокси, играет — тоже перезапуск. Не больше 3 попыток за 30 с,
+  // дальше — сообщение «не воспроизводится».
+  slotError(el) {
+    const url = el.dataset.url;
+    const code = el.error ? el.error.code : 0;
+    if (!url || code === 1) return; // MEDIA_ERR_ABORTED — загрузку сменили мы сами
+    const now = performance.now();
+    const r = el.retry && el.retry.url === url && now - el.retry.at < 30000 ? el.retry : { url, n: 0, at: now };
+    el.retry = r;
+    el.failed = true; this.updateMessage();
+    if (r.n >= 3) { console.warn('preview: файл не играет после перезапусков', code, el.error && el.error.message); return; }
+    r.n++;
+    const f = el.clipId && store.findClip(el.clipId);
+    const mediaId = f && f.clip.mediaId;
+    const retry = () => setTimeout(() => this.reloadSlot(el, url), 200 * r.n);
+    console.warn('preview: ошибка плеера', code, el.error && el.error.message, el.okUrl === url ? '— перезапуск' : '— проверка файла');
+    if (el.okUrl === url || !mediaId) { retry(); return; }
+    playbackFailed(mediaId).then((playable) => { if (playable) retry(); });
+  }
+
+  // Перезагрузка элемента после ошибки; позицию и воспроизведение восстанавливает present()
+  reloadSlot(el, url) {
+    if (el.dataset.url !== url || !el.error) return; // элемент уже занят другим файлом или ожил сам
+    el.failed = false;
+    el.src = url; // присваивание адреса заново запускает загрузку (как load(), но и после подмены src)
+    if (this.playing) this.startAt(store.time); else this.seek(store.time);
+  }
 
   // Загружает в <video> нужный файл и позицию
   load(el, url, time) {

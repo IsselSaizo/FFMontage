@@ -363,14 +363,22 @@ export class Timeline {
     this.render();
   }
 
+  // Колесо: Ctrl — масштаб, Shift — дорожки вверх/вниз, без модификаторов — по времени (влево/вправо).
+  // Жест тачпада вбок (deltaX) и полоса прокрутки работают как обычно.
   onWheel(e) {
+    // deltaMode 1 — строки (Linux, некоторые мыши): примерно 40 px на строку
+    const k = e.deltaMode === 1 ? 40 : e.deltaMode === 2 ? this.scroll.clientHeight : 1;
     if (e.ctrlKey) {
       e.preventDefault();
-      this.setZoom(this.pps * Math.pow(1.0018, -e.deltaY), e.clientX, true);
-    } else if (!e.shiftKey && Math.abs(e.deltaY) > Math.abs(e.deltaX) && this.content.scrollHeight <= this.scroll.clientHeight + 2) {
-      // Нечего прокручивать по вертикали — крутим по горизонтали
+      this.setZoom(this.pps * Math.pow(1.0018, -e.deltaY * k), e.clientX, true);
+    } else if (e.shiftKey) {
+      // С Shift браузер сам отдаёт колесо в deltaX (горизонталь) — берём то, что крутили
+      const d = (Math.abs(e.deltaY) >= Math.abs(e.deltaX) ? e.deltaY : e.deltaX) * k;
       e.preventDefault();
-      this.scroll.scrollLeft += e.deltaY;
+      this.scroll.scrollTop += d;
+    } else if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
+      e.preventDefault();
+      this.scroll.scrollLeft += e.deltaY * k;
     }
   }
 
@@ -381,6 +389,10 @@ export class Timeline {
   }
 
   visibleRange() {
+    // Во время render() — значение, снятое до очистки содержимого: чтение scrollLeft заставляет браузер
+    // пересчитать раскладку, а у полупустого таймлайна высота меньше окна — и scrollTop сбрасывался в 0
+    // (прокрутка дорожек колесом и полосой «отпрыгивала» наверх)
+    if (this.renderRange) return this.renderRange;
     const s = this.scroll.scrollLeft;
     return [s - 200, s + this.viewW() + 200];
   }
@@ -389,6 +401,20 @@ export class Timeline {
   // Отрисовка
   // ------------------------------------------------------------------------
   render() {
+    // Прокрутка и видимый диапазон — до очистки (см. visibleRange); scrollTop возвращаем, если браузер его всё же урезал
+    this.renderRange = null;
+    const range = this.visibleRange();
+    const top = this.scroll.scrollTop;
+    this.renderRange = range;
+    try {
+      this.renderRows();
+    } finally {
+      this.renderRange = null;
+    }
+    if (this.scroll.scrollTop !== top) this.scroll.scrollTop = top;
+  }
+
+  renderRows() {
     const dur = store.duration();
     const contentSec = Math.max(dur + 30, (this.viewW()) / this.pps);
     const laneW = Math.ceil(contentSec * this.pps);

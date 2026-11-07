@@ -48,7 +48,7 @@ jobs:
         run: node tests/i18n-check.js
       - name: Правки таймлайна (edit-test, без FFmpeg и окна)
         run: node tests/edit-test.js
-      - name: Таблица горячих клавиш (docs/HOTKEYS.md) актуальна
+      - name: Таблица горячих клавиш (docs/Guides/HOTKEYS.md) актуальна
         run: node tools/hotkeys-doc.mjs --check
       - name: Версия одинакова в Cargo.toml, Cargo.lock, tauri.conf.json, package.json
         run: node tools/check-version.mjs
@@ -96,7 +96,7 @@ jobs:
       - name: Автотест интерфейса
         shell: pwsh
         run: |
-          foreach ($t in 'ui-selftest3', 'ui-selftest4', 'ui-selftest5', 'ui-selftest6', 'ui-selftest11', 'ui-selftest14', 'ui-selftest15', 'ui-selftest16', 'ui-selftest20') {
+          foreach ($t in 'ui-selftest3', 'ui-selftest4', 'ui-selftest5', 'ui-selftest6', 'ui-selftest11', 'ui-selftest14', 'ui-selftest15', 'ui-selftest16', 'ui-selftest20', 'ui-selftest21') {
             ./tests/run-ui.ps1 $t -TimeoutSec 300 | Tee-Object -Variable out
             if ($out -cmatch 'FAIL|ERROR|TIMEOUT') { exit 1 }
           }

@@ -141,6 +141,7 @@ export default {
   'Загрузить': 'Load',
   'Мышь и модификаторы': 'Mouse and modifiers',
   'Ctrl + колесо — масштаб таймлайна.': 'Ctrl + wheel — zoom the timeline.',
+  'Колесо — прокрутка таймлайна по времени, Shift + колесо — дорожки вверх и вниз.': 'Wheel scrolls the timeline in time, Shift + wheel scrolls the tracks up and down.',
   'Alt при перетаскивании — без магнита и без наложения.': 'Alt while dragging — no snapping and no overwrite.',
   'Правая кнопка мыши на клипе — меню действий.': 'Right-click a clip for its actions.',
   '«+» на стыке клипов — переход.': '“+” between clips adds a transition.',

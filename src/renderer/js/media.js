@@ -77,28 +77,33 @@ function probePlayable(url, ms = 8000) {
 
 // Плеер не смог открыть файл, который считался «играбельным» (например, HEVC 10 бит, который видеокарта
 // не декодирует) — переходим на прокси. Сначала переспрашиваем отдельным <video>: ошибка бывает и временной.
+// true — файл в отдельном <video> открылся (сбой был временным, плееру можно перезагрузить элемент),
+// false — файл ушёл на прокси или проверять нечего.
 const reprobing = new Set();
 export async function playbackFailed(mediaId) {
   const m = store.media(mediaId);
   const rt = store.runtime[mediaId] || {};
-  if (!m || reprobing.has(mediaId)) return;
+  if (!m || reprobing.has(mediaId)) return false;
   // Переложенный без перекодирования файл не заиграл — перекодировать
   if (rt.remuxed && rt.proxyUrl) {
     reprobing.add(mediaId);
     try {
-      if ((await probePlayable(rt.proxyUrl)) !== false) return;
+      if ((await probePlayable(rt.proxyUrl)) !== false) return true;
       console.warn('media: ремукс не играет', m.name, '— перекодирование');
       startProxy(mediaId, { noRemux: true });
     } finally { reprobing.delete(mediaId); }
-    return;
+    return false;
   }
-  if (!m.url || m.needsProxy || rt.forceProxy || rt.proxyUrl || m.isImage) return;
+  // Прокси (или файл, которому прокси уже назначен): перекодировать нечего — только перезагрузить элемент
+  if (m.isImage || !m.url) return false;
+  if (m.needsProxy || rt.forceProxy || rt.proxyUrl) return !!rt.proxyUrl;
   reprobing.add(mediaId);
   try {
-    if ((await probePlayable(m.url)) !== false) return;
+    if ((await probePlayable(m.url)) !== false) return true;
     console.warn('media: плеер не смог открыть', m.name, '— переход на прокси');
     startProxy(mediaId);
   } finally { reprobing.delete(mediaId); }
+  return false;
 }
 // remux (0.4.1, H3): кодек окно декодирует, мешает только контейнер (MKV, TS, AVI…) — Rust перекладывает поток в MP4
 // без перекодирования (секунды, качество исходника). Если и такой файл не заиграет — обычный прокси (noRemux).

@@ -1,103 +1,200 @@
-# FF Montage
+<p align="center">
+  <img src="src-tauri/icons/icon.png" alt="FF Montage" width="96" />
+</p>
 
-Видеоредактор с **FFmpeg** под капотом. Предпросмотр проигрывает исходники как есть, а готовое видео собирает FFmpeg —
-в исходном разрешении и частоте кадров (например, 1440p60), в AV1, HEVC или H.264, на видеокарте (NVIDIA NVENC,
-Intel QSV, AMD AMF, VAAPI на Linux), если она есть, иначе на процессоре.
+<h1 align="center">FF Montage</h1>
+<h3 align="center">A free, open-source video editor with FFmpeg under the hood.</h3>
 
-Сделан на [Tauri 2](https://tauri.app) (Rust + системный WebView): программа — один файл, FFmpeg лежит рядом.
-Версия 0.4.7, что нового — в [CHANGELOG.md](CHANGELOG.md).
+<div align="center">
 
-## Системные требования
+<img src="docs/media/demo.gif" alt="FF Montage: import, cut, transitions, titles and playback" width="100%" />
+
+<p align="center">
+  <a href="https://github.com/IsselSaizo/FFMontage/releases/latest"><img src="https://img.shields.io/github/v/release/IsselSaizo/FFMontage?style=flat&logo=semver&logoColor=F8F8F8&label=Version&labelColor=212123&color=7C5CFF" alt="Latest version" /></a>
+  <a href="https://github.com/IsselSaizo/FFMontage/releases"><img src="https://img.shields.io/github/downloads/IsselSaizo/FFMontage/total?style=flat&logo=github&logoColor=F8F8F8&label=Downloads&labelColor=212123&color=7C5CFF" alt="Total downloads" /></a>
+  <a href="https://github.com/IsselSaizo/FFMontage/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/IsselSaizo/FFMontage/ci.yml?branch=main&style=flat&logo=githubactions&logoColor=F8F8F8&label=Build&labelColor=000000" alt="Build status" /></a>
+  <a href="#download"><img src="https://img.shields.io/badge/Windows%20%C2%B7%20Linux%20%C2%B7%20Steam%20Deck-x64-7C5CFF?style=flat&logo=steamdeck&logoColor=F8F8F8&labelColor=212123" alt="Windows, Linux, Steam Deck" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-GPL%20v3-7C5CFF?style=flat&logo=gnu&logoColor=F8F8F8&labelColor=212123" alt="License: GPL-3.0" /></a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/IsselSaizo/FFMontage/releases/latest"><img src="docs/media/download-button.svg" alt="Download FF Montage" width="260" /></a>
+</p>
+
+**🇬🇧 English** · [🇷🇺 Русский](docs/ReadMEs/README.ru.md) · [🇩🇪 Deutsch](docs/ReadMEs/README.de.md) · [🇨🇳 简体中文](docs/ReadMEs/README.zh-Hans.md) · [🇯🇵 日本語](docs/ReadMEs/README.ja.md)
+
+</div>
+
+## About
+
+FF Montage is a free, open-source video editor for Windows, Linux and the Steam Deck. The preview plays your
+footage as it is, and the finished video is put together by **FFmpeg**: in the source resolution and frame rate
+(1440p60 stays 1440p60), in AV1, HEVC or H.264, on your graphics card (NVIDIA NVENC, Intel QSV, AMD AMF, VA-API on
+Linux) when there is one, on the CPU when there is not.
+
+No watermark, no account, no subscription, no upload. Everything runs on your machine: the program is a single
+file built on [Tauri 2](https://tauri.app) (Rust + the system WebView), and FFmpeg sits next to it.
+
+**Good for:** YouTube videos and game clips (NVIDIA / OBS recordings with several audio tracks open as they are),
+Shorts / Reels / TikTok in 9:16, tutorials and screen recordings, interviews and podcasts, subtitled videos,
+broadcast masters.
+
+**Also for machines:** a built-in MCP server lets Claude, Cursor and other AI assistants edit for you, and a
+sandboxed plugin API lets anyone add effects, transitions, panels and presets.
+
+Version 0.4.7. What's new: [CHANGELOG.md](CHANGELOG.md) (in Russian).
+
+## Highlights
+
+- 🚫 **No watermark. No account. No paywall.** Free software under GPL-3.0.
+- 🔒 **100% local.** Nothing is uploaded; works offline. The AI assistant only talks to the program on this computer.
+- ⚡ **FFmpeg export on the GPU.** NVENC, QSV, AMF, VA-API, or the CPU. AV1, HEVC, H.264, up to the source resolution and frame rate.
+- 🎞️ **Opens what you record.** H.264, HEVC and AV1 play without conversion; MKV, TS, AVI and the rest are remuxed or proxied automatically.
+- ✂️ **Real editing tools.** Blade, ripple / roll / slip / slide trims, In / Out marks, lift / extract, JKL shuttle, magnetic timeline.
+- 🧱 **Multi-track.** Video tracks as layers with transform and crop, any number of audio tracks, subtitle tracks, several timelines (episodes) in one project.
+- 📝 **Titles and subtitles.** Text that looks the same in the preview and the export; SRT / VTT / ASS import and export.
+- 🎚️ **Proper sound.** EQ, compressor, denoise, VST3 and CLAP plugins, level meters, two-pass loudness normalisation, 5.1 / 7.1 / N mono channels.
+- 📤 **Many formats.** MP4, MKV, MOV, GIF, MP3, M4A, WAV, OGG, plus ProRes / DNxHR / XDCAM masters with timecode.
+- 🧩 **Plugins.** Effects, transitions, text styles, export and hotkey presets, actions and panels, all in a sandbox.
+- 🤖 **AI assistant (MCP).** Ask Claude to cut out the pauses, put music under the video and export it in 1080p.
+- ⌨️ **Your hotkeys.** Presets for Premiere Pro, DaVinci Resolve and CapCut, plus your own shortcuts; gamepad and touch on the Steam Deck.
+- 🌍 **English and Russian interface**, switched without a restart.
+
+## Features
+
+### Media
+- Import with a button or drag-and-drop. **H.264, HEVC and AV1** open without conversion when the WebView can decode
+  them; the program asks the WebView itself instead of guessing.
+- **MKV, TS, M2TS, AVI** and other containers: if the codec plays, the stream is remuxed into MP4 without re-encoding
+  (seconds, source quality); otherwise a 720p proxy is made. **The export always uses the original file.**
+- Recordings with **several audio streams** (game + microphone from NVIDIA ShadowPlay / OBS): every stream lands on its
+  own linked audio clip.
+- Images (JPG, PNG, WebP, BMP) and animated GIFs.
+
+### Timeline
+- Move, trim by the edges, split (`S`, `Alt+S` splits everything under the playhead), blade (`B`, `Shift`+click cuts
+  all tracks), magnet, overwrite and insert (`Alt`), gaps and closing gaps, undo / redo, zoom.
+- **Trim tool (`T`)**: the edge of a clip is a **ripple**, the seam between two clips a **roll**, the lower half a
+  **slip**, the upper half a **slide**. The preview shows both frames around the edit.
+- **In / Out marks** (`I` / `O`), **lift** (`;`) and **extract** (`'`), trim to playhead (`Q` / `W`).
+- **JKL shuttle**: `L` plays forward ×1 → ×2 → ×4 → ×8, `J` backwards, `K` stops; `K` + `J` / `L` steps a frame.
+- **Remove pauses…**: silent parts (FFmpeg `silencedetect`) are cut out together with the video, everything else moves up.
+- **Episodes**: several timelines in one project.
+- Mouse: wheel scrolls in time, `Shift` + wheel scrolls the tracks, `Ctrl` + wheel zooms.
+
+### Video
+- **Several video tracks**: the order sets the layers; every track can be hidden or locked.
+- **Transform**: position, scale, rotation, opacity — with a gizmo right in the player (snaps to the centre and the
+  edges) or with fields in the inspector. **Crop** with a frame in the player.
+- **Speed** ×0.1–×16 (the pitch is kept), reverse, freeze frame.
+- **20 transitions** (0.1–3 s), **filters** (black & white, sepia, contrast, blur…), **frame formats** 16:9, 9:16, 1:1,
+  3:4 with a background, fit / fill / stretch.
+- **Animations** tab: the “Rain” preset with a live preview, baked into a WebM with transparency.
+- Picture-in-picture and grid layouts — the example plugin `examples/plugins/layouts`.
+
+### Text and subtitles
+- Title, lower third, caption, rolling credits, plain text. Font, colour, outline, shadow, background plate, alignment.
+- Inter and Open Sans are built in (with Cyrillic); your own `.ttf` / `.otf` fonts are added in the program.
+  **The text looks the same in the player and in the finished video.**
+- **Subtitle tracks**: import and save SRT / VTT / ASS (encoding from the BOM, else UTF-8, else cp1251), edit lines on
+  the timeline. Export: burned in (libass) or as a separate stream.
+
+### Sound
+- Video sound as separate linked clips, music and voice tracks, clip and track volume 0–200 %, solo, mute, lock, fades.
+- **Audio** tab: equaliser, compressor and denoise on a clip or a whole track. **VST3 and CLAP plugins** (Windows x64)
+  in the same rack; the plugin window opens separately, a crashing plugin does not take the program down.
+- **Level meters** on every track and for the whole mix (red above −1 dBFS).
+- **Loudness normalisation** in two passes: “Web −14 LUFS”, “Podcast −16 LUFS”, “Broadcast −23 LUFS (EBU R128)”.
+- **Multichannel projects**: stereo, mono, 5.1, 7.1 or up to 16 separate mono channels; routing matrix
+  “track → channels”, “Split into channels” for multichannel clips; the player listens to a stereo downmix.
+
+### Export
+- Video: **MP4, MKV, MOV, GIF**; audio only: **MP3, M4A, WAV, OGG**. Resolution from 480p up to the source,
+  progress and cancel, the full FFmpeg command in `<cache>/app/logs/last-export.log`.
+- **AV1, HEVC, H.264** on NVIDIA NVENC, Intel QSV, AMD AMF, VA-API, or on the CPU (SVT-AV1, x265, x264).
+- MKV and MOV can carry **every audio track as its own stream** (the mix first, then each track by name).
+- **Master file**: Apple ProRes 422 / HQ / 4444, Avid DNxHR SQ / HQ / HQX, Sony XDCAM HD422 (MXF), 24-bit PCM,
+  start **timecode** (drop-frame where needed).
+- Every FFmpeg command is checked in Rust before it runs: inputs only from the project, output only to the file you chose.
+
+### Plugins
+- A plugin is a folder with `plugin.json`: **effects, transitions, audio effects, text styles, export and hotkey
+  presets, loudness targets, actions and panels**. The built-in effects are a plugin (`core`) on the same API.
+- Plugins run in a sandbox (an iframe with no access to the program, the files or FFmpeg). Effects describe FFmpeg
+  filters declaratively; only whitelisted filters pass, and Rust checks the whole graph again.
+- Install from a folder, a zip or straight from GitHub (`owner/repo`, SHA-256 checked); permissions are shown before
+  installing. Guide: [docs/Guides/PLUGINS.md](docs/Guides/PLUGINS.md), examples: [`examples/plugins`](examples/plugins).
+
+### Everything else
+- **Hotkeys** with presets “Default / DaVinci Resolve / Premiere Pro / CapCut”, your own shortcuts on top, conflict
+  search, JSON export and import — full table in [docs/Guides/HOTKEYS.md](docs/Guides/HOTKEYS.md).
+- **Steam Deck**: gamepad controls (A — play, X — split, B — undo, LB / RB — frames, LT / RT — shuttle…), touch-friendly
+  handles, a 1280×800 layout.
+- Autosave, projects in a single `.ffproj` file, portable mode, signed updates from inside the program.
+- **Crash reports** stay on your disk (`logs/reports`), nothing is sent anywhere.
+
+## Download
 
 | | Windows | Linux |
 |---|---|---|
-| Система | Windows 10/11 x64 | x86_64, glibc 2.35+ (Ubuntu 22.04+, Arch, SteamOS) |
-| Окно | WebView2 (есть в Windows 11 и обновлённой 10) | WebKitGTK 4.1, GStreamer good (звук и видео в предпросмотре) |
-| FFmpeg | в архиве релиза | в архиве релиза |
-| Экран | от 1280×800 | от 1280×800 |
+| System | Windows 10 / 11 x64 | x86_64, glibc 2.35+ (Ubuntu 22.04+, Arch, SteamOS) |
+| Window | WebView2 (in Windows 11 and an updated 10) | WebKitGTK 4.1, GStreamer good (sound and video in the preview) |
+| FFmpeg | inside the release archive | inside the release archive / AppImage |
+| Screen | 1280×800 or more | 1280×800 or more |
 
-macOS и ARM пока не поддерживаются (в планах, см. [ROADMAP](docs/ROADMAP.md)).
+macOS and ARM are not supported yet (planned, see the [ROADMAP](docs/Works/ROADMAP.md)).
 
-## Возможности
+### Ready-made build
 
-- **Медиатека:** импорт кнопкой или перетаскиванием. H.264, HEVC и AV1 открываются без конвертации, если их умеет WebView.
-  Остальное (AVI, WMV…) программа сама готовит для предпросмотра (прокси), а в экспорт идёт оригинал.
-  Картинки (JPG, PNG, WebP, BMP) и GIF.
-- **Таймлайн:** перестановка, обрезка за края, разрезание (`S`, `Alt+S` — всё под курсором), лезвие (`B`), магнит,
-  наложение и раздвигание (`Alt`), пустоты и их удаление, отмена и повтор, масштаб.
-  **Эпизоды** — несколько таймлайнов в одном проекте.
-- **Несколько видеодорожек** (порядок задаёт слои, у каждой — «скрыть» и «заблокировать») и **трансформ** клипа: положение,
-  масштаб, поворот, прозрачность. Меняется гизмо прямо в плеере или полями в инспекторе. Кадрирование — рамкой в плеере.
-- **Текст:** заголовок, нижняя плашка, подпись, титры, простой текст. Шрифт, цвет, обводка, тень, подложка.
-  Встроены Inter и Open Sans, свои `.ttf/.otf` добавляются в программе. В плеере и в готовом видео текст выглядит одинаково.
-- **Субтитры:** дорожки субтитров, импорт и сохранение SRT / VTT / ASS, правка реплик на таймлайне. В экспорте — вшить
-  или отдельным потоком в MP4.
-- **Звук:** звук видео — отдельными связанными клипами (каждый звуковой поток на своей дорожке), музыка, громкость клипа
-  и дорожки 0–200 %, соло, затухания. Вкладка «Аудио»: эквалайзер, компрессор, шумодав на клип или дорожку.
-- **Скорость** клипа ×0.1–×16 (тон звука сохраняется), реверс, стоп-кадр.
-- **Переходы** (20 видов, 0,1–3 с), **фильтры** (ч/б, сепия, контраст, размытие…), **формат кадра** (16:9, 9:16, 1:1, 3:4)
-  и фон, вкладка **«Анимации»** (пресет «Дождь» с прозрачностью).
-- **Плагины:** эффекты, переходы, стили текста, пресеты экспорта и хоткеев, панели — в песочнице, через API.
-  Для авторов — [docs/PLUGINS.md](docs/PLUGINS.md), примеры — `examples/plugins`.
-- **Горячие клавиши** с пресетами «Родные / DaVinci Resolve / Premiere Pro / CapCut» и своими сочетаниями —
-  [docs/HOTKEYS.md](docs/HOTKEYS.md).
-- **Интерфейс на русском и английском**, переключается без перезапуска.
-- **ИИ-ассистент (MCP):** Claude, Cursor и другие MCP-клиенты могут монтировать по вашей просьбе — см. ниже.
-- Экспорт с прогрессом и отменой, автосохранение, проект в файле `.ffproj`.
+1. Open **[Releases](https://github.com/IsselSaizo/FFMontage/releases/latest)** and download
+   `FF-Montage-<version>-windows-x64.zip` (Windows) or `FF-Montage-<version>-linux-x86_64.tar.gz` (Linux; on the
+   Steam Deck and other distributions the AppImage below is easier).
+2. Unpack it into any folder you can write to (for example `D:\FF Montage`).
+3. Run **`FF Montage.exe`** (Linux: `./ff-montage`). FFmpeg is already in the archive.
 
-## Установка
-
-### Готовая сборка
-
-1. Откройте **[Releases](https://github.com/IsselSaizo/FFMontage/releases/latest)** и скачайте
-   `FF-Montage-<версия>-windows-x64.zip` (Windows) или `FF-Montage-<версия>-linux-x86_64.tar.gz` (Linux;
-   для Steam Deck и других дистрибутивов проще AppImage — см. ниже).
-2. Распакуйте в любую папку, где можно писать (например, `D:\FF Montage`).
-3. Запустите **`FF Montage.exe`** (Linux: `./ff-montage`). FFmpeg уже внутри архива.
-
-Windows может написать «Система Windows защитила ваш компьютер» — нажмите «Подробнее» → «Выполнить в любом случае»
-(у программы нет сертификата подписи кода).
+Windows may say “Windows protected your PC”: click **More info** › **Run anyway** (the program has no code-signing
+certificate).
 Linux: `sudo apt install libwebkit2gtk-4.1-0 gstreamer1.0-plugins-good` (Ubuntu 22.04+),
 Arch: `sudo pacman -S webkit2gtk-4.1 gst-plugins-good`.
 
-**Где хранятся данные.** Zip-сборка Windows в папке с правом записи работает в **portable-режиме**: настройки, свои шрифты,
-плагины и кэш лежат рядом с программой, папку можно переносить целиком. В остальных случаях (Linux, папка только для чтения,
-Program Files) используются системные папки: Windows — `%APPDATA%\FF Montage` и `%LOCALAPPDATA%\FF Montage`,
+**Where the data lives.** The Windows zip build in a writable folder runs in **portable mode**: settings, your fonts,
+plugins and the cache sit next to the program, and the folder can be moved as a whole. Otherwise (Linux, a read-only
+folder, Program Files) system folders are used: Windows — `%APPDATA%\FF Montage` and `%LOCALAPPDATA%\FF Montage`,
 Linux — `~/.config/ff-montage`, `~/.local/share/ff-montage`, `~/.cache/ff-montage`.
-Portable-режим включается и вручную: файл `portable.txt` рядом с программой или переменная `FFM_PORTABLE=1`
-(`FFM_PORTABLE=0` — выключить). Текущие пути показаны в «Настройки» → «О программе».
+Portable mode can also be forced: a `portable.txt` file next to the program or `FFM_PORTABLE=1`
+(`FFM_PORTABLE=0` turns it off). The current paths are in **Settings → About**.
 
-**Обновление:** меню ☰ → «Проверить обновления…». Программа скачивает архив своей системы из последнего релиза и ставит его,
-только если подпись `SHA256SUMS` верна и SHA-256 архива совпадает. Настройки и проекты не затрагиваются.
-Проверить файлы вручную: `sha256sum -c SHA256SUMS --ignore-missing`.
+**Updates:** menu ☰ → **Check for updates…**. The program downloads the archive for your system from the latest
+release and installs it only if the `SHA256SUMS` signature is valid and the archive's SHA-256 matches. Settings and
+projects are not touched. To check files by hand: `sha256sum -c SHA256SUMS --ignore-missing`.
 
-### Linux и Steam Deck: AppImage
+### Linux and Steam Deck: AppImage
 
-`FF-Montage-<версия>-linux-x86_64.AppImage` — один файл, внутри всё нужное: окно (WebKitGTK), GStreamer для видео
-и звука в плеере, FFmpeg. Ничего ставить не нужно, `sudo` не нужен.
+`FF-Montage-<version>-linux-x86_64.AppImage` is one file with everything inside: the window (WebKitGTK), GStreamer
+for video and sound in the player, and FFmpeg. Nothing to install, no `sudo`.
 
-1. Скачайте AppImage из [Releases](https://github.com/IsselSaizo/FFMontage/releases/latest), например в `~/Applications`.
-2. Сделайте файл исполняемым: `chmod +x FF-Montage-*.AppImage` (или в Dolphin: правый щелчок → «Свойства» →
-   «Права» → «Является исполняемым»).
-3. Запустите двойным щелчком или `./FF-Montage-<версия>-linux-x86_64.AppImage`.
+1. Download the AppImage from [Releases](https://github.com/IsselSaizo/FFMontage/releases/latest), e.g. into `~/Applications`.
+2. Make it executable: `chmod +x FF-Montage-*.AppImage` (or in Dolphin: right-click → Properties → Permissions →
+   Is executable).
+3. Run it with a double-click or `./FF-Montage-<version>-linux-x86_64.AppImage`.
 
-**Steam Deck.** Удобнее всего в **режиме рабочего стола** (кнопка питания → «Переключиться на рабочий стол»): там есть
-клавиатура и мышь/тачпад, файлы видно в Dolphin. Чтобы запускать из игрового режима: Steam (на рабочем столе) →
-«Игры» → «Добавить стороннюю игру в мою библиотеку…» → «Обзор…» → выбрать AppImage (фильтр «Все файлы») →
-«Добавить выбранные программы». Окно рассчитано на 1280×800; в игровом режиме для текста и горячих клавиш нужна
-экранная клавиатура (Steam + X) или подключённая клавиатура.
+**Steam Deck.** **Desktop mode** is the most comfortable (power button → Switch to Desktop): there is a keyboard,
+mouse / touchpad, and files are visible in Dolphin. To start it from Game mode: Steam (on the desktop) → Games →
+Add a Non-Steam Game to My Library… → Browse… → pick the AppImage (filter “All files”) → Add Selected Programs.
+The window is designed for 1280×800; in Game mode use the on-screen keyboard (Steam + X) or a connected keyboard for
+text and hotkeys.
 
-- Данные — в папках XDG (`~/.config/ff-montage`, `~/.local/share/ff-montage`, `~/.cache/ff-montage`): сам AppImage
-  только для чтения. Папки кэша, экспорта и проектов выбираются при первом запуске (на Deck удобно — на SD-карте).
-- **Обновление** («Проверить обновления…») скачивает новый AppImage, проверяет подпись и SHA-256 и подменяет
-  **тот же файл** (имя не меняется, ярлык в Steam продолжает работать). Папка с AppImage должна быть доступна на запись.
-- Если AppImage не запускается с ошибкой про FUSE (на SteamOS FUSE есть; на некоторых системах — нет):
-  `./FF-Montage-….AppImage --appimage-extract-and-run` или установите `libfuse2`.
-- Диагностика: `./FF-Montage-….AppImage --engine info </dev/null` — покажет, откуда взят FFmpeg, какие плагины GStreamer
-  найдены и куда пишутся данные.
-- Аппаратный экспорт на Deck — VA-API (`h264_vaapi`, `hevc_vaapi`); AV1 видеокарта Deck не кодирует — будет процессор.
+- Data lives in the XDG folders (`~/.config/ff-montage`, `~/.local/share/ff-montage`, `~/.cache/ff-montage`): the
+  AppImage itself is read-only. Cache, export and project folders are chosen on first launch (an SD card works well on the Deck).
+- **Updating** (Check for updates…) downloads the new AppImage, checks the signature and SHA-256 and replaces
+  **the same file** (the name stays, so the Steam shortcut keeps working). The AppImage folder must be writable.
+- If the AppImage does not start because of FUSE (SteamOS has it, some systems do not):
+  `./FF-Montage-….AppImage --appimage-extract-and-run`, or install `libfuse2`.
+- Diagnostics: `./FF-Montage-….AppImage --engine info </dev/null` shows where FFmpeg comes from, which GStreamer
+  plugins were found and where the data is written.
+- Hardware export on the Deck is VA-API (`h264_vaapi`, `hevc_vaapi`); the Deck's GPU cannot encode AV1, so AV1 goes to the CPU.
 
-### Из исходников
+### From source
 
 ```powershell
 git clone https://github.com/IsselSaizo/FFMontage.git
@@ -105,129 +202,167 @@ cd FFMontage
 .\setup.cmd          # Linux: ./setup.sh
 ```
 
-`setup` скачивает FFmpeg в папку `ffmpeg\` (закреплённая сборка, проверка SHA-256), ставит Rust (на Windows при
-необходимости — Visual Studio Build Tools через winget), собирает программу в **`FF Montage.exe`** и кладёт ярлык на рабочий стол.
-Первая сборка занимает 3–6 минут. В git-клоне «Проверить обновления…» делает `git pull` и пересобирает программу.
+`setup` downloads FFmpeg into `ffmpeg\` (a pinned build, SHA-256 checked), installs Rust (on Windows, if needed,
+Visual Studio Build Tools via winget), builds the program into **`FF Montage.exe`** and puts a shortcut on the
+desktop. The first build takes 3–6 minutes. In a git clone, Check for updates… runs `git pull` and rebuilds.
 
-- Если FFmpeg уже есть: `.\setup.cmd -SkipFFmpeg`. Папку с ним можно указать при первом запуске.
-- Без видеокарты экспорт идёт на процессоре (libsvtav1 / libx265 / libx264): медленнее, результат тот же.
+- FFmpeg already installed: `.\setup.cmd -SkipFFmpeg`. Its folder can be chosen on first launch.
+- Without a graphics card the export runs on the CPU (libsvtav1 / libx265 / libx264): slower, same result.
 
-## Первый запуск
+## First launch
 
-Программа покажет окно выбора папок:
+The program asks for its folders:
 
-| Папка | Что там |
+| Folder | What goes there |
 |---|---|
-| **Кэш** | миниатюры, волны звука, прокси, данные окна, автосохранение, журналы |
-| **Экспорт** | готовые видео |
-| **Проекты** | файлы `.ffproj` |
-| **FFmpeg** | можно оставить пустым: программа найдёт его сама (папка `ffmpeg` рядом с программой, соседние `ffmpeg-*`, `PATH`) |
+| **Cache** | thumbnails, waveforms, proxies, window data, autosave, logs |
+| **Export** | finished videos |
+| **Projects** | `.ffproj` files |
+| **FFmpeg** | can stay empty: the program finds it itself (an `ffmpeg` folder next to the program, neighbouring `ffmpeg-*` folders, `PATH`) |
 
-Папки сохраняются в `config.json`, настройки интерфейса — в `settings.json` (оба лежат в папке настроек, см. «Где хранятся данные»).
-Поменять папки можно в «Настройки» → «Папки». Если удалить `config.json`, окно первого запуска появится снова.
+The folders are stored in `config.json`, interface settings in `settings.json` (both in the settings folder, see
+“Where the data lives”). Change the folders in **Settings → Folders**; deleting `config.json` brings the first-launch
+window back.
 
-## Настройки
+## Settings
 
-Меню ☰ → **«Настройки…»** (`Ctrl+,`):
+Menu ☰ → **Settings…** (`Ctrl+,`):
 
-- **Общие** — язык (русский / English), открывать ли последний проект при запуске.
-- **Горячие клавиши** — пресет, свои сочетания, поиск, конфликты, экспорт и импорт JSON. Таблица — [docs/HOTKEYS.md](docs/HOTKEYS.md).
-- **Плагины** — установка из папки, zip или GitHub, включение, права, удаление.
-- **Папки**, **Кэш** (размеры, очистка по категориям, лимит), **ИИ-ассистент**, **О программе** (версии, пути, обновления).
+- **General** — language (English / Russian), whether to reopen the last project on start.
+- **Keyboard shortcuts** — preset, your own shortcuts, search, conflicts, JSON export and import.
+- **Plugins** — install from a folder, a zip or GitHub; enable, permissions, remove.
+- **Audio plugins (VST3, CLAP)** — folders, scan, add a plugin.
+- **Folders**, **Cache** (sizes, clearing by category, a size limit), **AI assistant**, **About** (versions, paths,
+  updates, crash reports).
 
-## ИИ-ассистент (MCP)
+## AI assistant (MCP)
 
-FF Montage подключается к ИИ-ассистенту по протоколу MCP (Model Context Protocol). Claude Desktop, Cursor, VS Code
-или Claude Code могут импортировать файлы, резать и переставлять клипы, добавлять дорожки, текст и субтитры, менять трансформ,
-ставить переходы, «смотреть» кадры, искать паузы, сохранять проект и экспортировать видео.
+FF Montage connects to AI assistants over MCP (Model Context Protocol). Claude Desktop, Cursor, VS Code or Claude
+Code can import files, cut and rearrange clips, add tracks, text and subtitles, change the transform, set transitions,
+“look” at frames, find pauses, set up audio channels, save the project and export the video.
 
-**Подключение.** Меню ☰ → «ИИ-ассистент (MCP)…» — там готовый JSON с кнопкой «Скопировать».
+**Connecting.** Menu ☰ → **AI assistant (MCP)…** has ready-made JSON with a Copy button.
 
-- Claude Desktop: Settings → Developer → Edit Config, вставьте блок в `claude_desktop_config.json`
-  (если там уже есть `"mcpServers"`, добавьте только `"ff-montage"`), перезапустите Claude.
-- Cursor: тот же блок в `~/.cursor/mcp.json` (или `.cursor/mcp.json` в папке проекта).
-- VS Code: блок для `.vscode/mcp.json` (ключ `"servers"`) — во втором поле окна.
-- Claude Code: готовая команда `claude mcp add …` — в третьем поле.
+- Claude Desktop: Settings → Developer → Edit Config, paste the block into `claude_desktop_config.json` (if it already
+  has `"mcpServers"`, add only `"ff-montage"`), restart Claude.
+- Cursor: the same block in `~/.cursor/mcp.json` (or `.cursor/mcp.json` in the project folder).
+- VS Code: the block for `.vscode/mcp.json` (key `"servers"`) is in the second field of the window.
+- Claude Code: a ready `claude mcp add …` command is in the third field.
 
-Сервер — сама программа с ключом `--mcp` (`"FF Montage.exe" --mcp`). Если FF Montage закрыт, ассистент запустит его сам
-(папки должны быть уже выбраны при первом запуске).
+The server is the program itself with the `--mcp` switch (`"FF Montage.exe" --mcp`). If FF Montage is closed, the
+assistant starts it (the folders must already be chosen on first launch).
 
-**Примеры просьб:**
+**Things to ask:**
 
-- «Импортируй видео из D:\Записи\Отпуск и собери ролик по порядку, между клипами — растворение».
-- «Найди в интервью паузы длиннее секунды и вырежи их».
-- «Положи музыку C:\Music\track.mp3 на весь ролик, громкость 40 %, затухание в конце 3 с».
-- «Добавь заголовок „Отпуск 2026“ на первые 4 секунды».
-- «Сохрани проект и экспортируй в 1080p H.264».
+- “Import the videos from D:\Recordings\Holiday and put them in order, with a dissolve between clips.”
+- “Find pauses longer than a second in the interview and cut them out.”
+- “Put C:\Music\track.mp3 under the whole video at 40 % volume with a 3-second fade at the end.”
+- “Add the title ‘Holiday 2026’ for the first 4 seconds.”
+- “Save the project and export it in 1080p H.264.”
 
-**Безопасность.** Ассистент меняет открытый проект: каждое действие видно на таймлайне и отмечается уведомлением «ИИ: …»,
-любую правку можно отменить `Ctrl+Z`. Несохранённый проект он без явного разрешения не закроет. Команды принимаются только
-с этого компьютера (именованный канал / unix-сокет, без сети) и только с секретным ключом из `<кэш>/app/mcp-endpoint.json`.
-Ключ создаётся заново при каждом запуске и удаляется при выходе.
+**Safety.** The assistant changes the open project: every action shows on the timeline with an “AI: …” notice, and
+any edit can be undone with `Ctrl+Z`. It will not close an unsaved project without explicit permission. Commands are
+accepted only from this computer (a named pipe / unix socket, no network) and only with the secret key from
+`<cache>/app/mcp-endpoint.json`; the key is created anew on every start and deleted on exit.
 
-## Горячие клавиши
+## Hotkeys
 
-Основные клавиши по умолчанию: пробел — пуск/пауза, `S` — разрезать, `Alt+S` — разрезать всё под курсором, `B` / `A` — лезвие /
-выделение, `Delete` / `Shift+Delete` — удалить / удалить со сдвигом, `Ctrl+Z` / `Ctrl+Y` — отменить / повторить,
-`←` `→` — на кадр (с `Shift` — на 1 с). Полная таблица по пресетам — [docs/HOTKEYS.md](docs/HOTKEYS.md).
+Defaults: Space — play / pause, `S` — split, `Alt+S` — split everything under the playhead, `B` / `A` — blade /
+select, `T` — trim, `Delete` / `Shift+Delete` — delete / ripple delete, `Ctrl+Z` / `Ctrl+Y` — undo / redo,
+`←` `→` — one frame (with `Shift` — one second), `J` `K` `L` — shuttle, `I` / `O` — marks.
+The full table for every preset: [docs/Guides/HOTKEYS.md](docs/Guides/HOTKEYS.md).
 
-## Разработка
+## How to support FF Montage
+
+> [!IMPORTANT]
+> **The best support is simply to use FF Montage — the way *you* want.** Cut your videos with it, bend it to your
+> workflow: change the hotkeys, pick a preset, add your fonts, plug in your VST3 / CLAP effects, hand the routine
+> work to an AI assistant.
+>
+> **Make it yours with plugins.** Missing an effect, a transition, a text style, an export preset or a whole panel?
+> Write a plugin — [docs/Guides/PLUGINS.md](docs/Guides/PLUGINS.md) and [`examples/plugins`](examples/plugins) show how, and a plugin
+> can be installed straight from a GitHub repository. Share it, and FF Montage gets better for everyone.
+>
+> Found where it breaks or where it could be better? [Open an issue](https://github.com/IsselSaizo/FFMontage/issues) —
+> a short description and the report from `logs/reports` are enough. A ⭐ on GitHub helps others find the project.
+
+## Development
 
 ```text
-src-tauri/      программа на Rust: окна, пути и настройки, FFmpeg (анализ, миниатюры, волна, прокси, реверс, стоп-кадр),
-                проверка и запуск экспорта, протоколы media:// и plugin://, плагины, шрифты, MCP-сервер (--mcp), обновления
-src/renderer/   интерфейс: медиатека, плеер, таймлайн, инспектор, экспорт, настройки; js/exportPlan.js — сборка команды FFmpeg,
-                js/keymap.js — реестр действий и клавиш, js/plugins/ — хост плагинов
-mcp/tools.json  описание инструментов ИИ-ассистента
-examples/       примеры плагинов
-tests/          тест движка, MCP, субтитров, реестра, автотесты интерфейса
-tools/          setup, скачивание FFmpeg, подпись релиза, таблица хоткеев, проверка версии
-docs/           ROADMAP, аудит, PLUGINS.md, HOTKEYS.md
-.github/        CI на каждый push, релиз по тегу v*, сборка AppImage
+src-tauri/      the Rust program: windows, paths and settings, FFmpeg (probe, thumbnails, waveform, proxy, reverse,
+                freeze frame), export check and run, media:// and plugin:// protocols, plugins, fonts,
+                audio plugin host (src/vst), MCP server (--mcp), updates, crash reports
+src/renderer/   the interface: media, player, timeline, inspector, export, settings; js/exportPlan.js builds the
+                FFmpeg command, js/keymap.js — actions and keys, js/plugins/ — the plugin host
+mcp/tools.json  the AI assistant's tools
+examples/       example plugins
+tests/          engine, MCP, audio, subtitles, registry tests and UI self-tests
+tools/          setup, FFmpeg download, release signing, hotkey table, version check
+docs/           Guides (PLUGINS.md, HOTKEYS.md), Works (ROADMAP, audits, checklists),
+                ReadMEs (translated READMEs), media (README images)
+.github/        CI on every push, release on a v* tag, AppImage build
 ```
 
-**Сборка:** `cd src-tauri && cargo build --release` → `src-tauri/target/release/ff-montage(.exe)`.
-Интерфейс встраивается в exe при сборке: после правок в `src/renderer` нужно пересобрать.
-Нужны Rust stable; на Linux — `libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev`.
+**Build:** `cd src-tauri && cargo build --release` → `src-tauri/target/release/ff-montage(.exe)`.
+The interface is embedded into the exe at build time: rebuild after changing `src/renderer`.
+You need stable Rust; on Linux also `libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev`.
 
-**Тесты:**
+**Tests:**
 
-| Команда | Что проверяет |
+| Command | What it checks |
 |---|---|
-| `cd src-tauri && cargo test` | проверка плана экспорта, плагины, пути, обновления (SHA256SUMS, подпись, выбор архива, версии) |
-| `node tests/engine-test.js` | экспорт во все кодеки, по цвету пикселей: пустоты, переходы, затухания, дорожки, текст, субтитры |
-| `node tests/mcp-test.js` | ИИ-ассистент (нужны файлы от engine-test; отдельный кэш) |
-| `node tests/subtitles-test.js`, `registry-test.js`, `ffescape-test.js`, `layouts-test.js` | субтитры, реестр, экранирование, пример-плагин |
-| `node tests/i18n-check.js` | все строки интерфейса переведены |
-| `powershell -ExecutionPolicy Bypass -File tests\run-ui.ps1 ui-selftest3` | автотест интерфейса (Windows, отдельный кэш) |
-| `bash tools/appimage-smoke.sh <файл.AppImage>` | AppImage: FFmpeg и GStreamer внутри, FFmpeg берётся из образа, пути XDG, `$APPIMAGE` |
-| `bash tools/appimage-window.sh <файл.AppImage или ff-montage>` | окно под xvfb: `<video>` через GStreamer (H.264/VP9 напрямую, HEVC через прокси) |
+| `cd src-tauri && cargo test` | export plan check, plugins, paths, updates (SHA256SUMS, signature, archive choice, versions) |
+| `node tests/engine-test.js` | export to every codec, checked by pixel colour: gaps, transitions, fades, tracks, text, subtitles |
+| `node tests/audio-test.js` | loudness, channel layouts, routing, broadcast masters |
+| `node tests/mcp-test.js` | the AI assistant (needs the files from engine-test; separate cache) |
+| `node tests/subtitles-test.js`, `registry-test.js`, `ffescape-test.js`, `layouts-test.js` | subtitles, registry, escaping, the example plugin |
+| `node tests/i18n-check.js` | every interface string is translated |
+| `node tools/syntax-check.mjs` | syntax of every window module without running it |
+| `powershell -ExecutionPolicy Bypass -File tests\run-ui.ps1 ui-selftest3` | an interface self-test (Windows, separate cache) |
+| `bash tools/appimage-smoke.sh <file.AppImage>` | AppImage: FFmpeg and GStreamer inside, FFmpeg taken from the image, XDG paths, `$APPIMAGE` |
+| `bash tools/appimage-window.sh <file.AppImage or ff-montage>` | the window under xvfb: `<video>` through GStreamer |
 
-С `FFM_NO_GPU=1` программа ведёт себя как компьютер без видеокарты (так тесты идут в CI).
-CI также проверяет `cargo fmt --check`, `cargo clippy`, актуальность `docs/HOTKEYS.md` (`node tools/hotkeys-doc.mjs`)
-и одинаковую версию в `Cargo.toml`, `tauri.conf.json`, `package.json` (`node tools/check-version.mjs`).
+With `FFM_NO_GPU=1` the program behaves like a computer without a graphics card (that is how CI runs the tests).
+CI also checks `cargo fmt --check`, `cargo clippy`, that `docs/Guides/HOTKEYS.md` is up to date
+(`node tools/hotkeys-doc.mjs`) and that the version matches in `Cargo.toml`, `tauri.conf.json` and `package.json`
+(`node tools/check-version.mjs`).
 
-**Перевод:** исходный язык — русский, строка в коде и есть ключ (`t('Новый проект')`), английские переводы —
-`src/renderer/js/i18n/en/*.js`, в Rust — `tr!("…", "…")`.
+**Translation:** the source language is Russian; the string in the code is the key (`t('Новый проект')`), English
+translations live in `src/renderer/js/i18n/en/*.js`, in Rust — `tr!("…", "…")`. The translated READMEs are in
+[`docs/ReadMEs`](docs/ReadMEs).
 
-**Выпуск релиза:** поднять версию в `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json`, `package.json` (и `Cargo.lock`),
-дополнить `CHANGELOG.md`, затем `git tag v0.4.7 && git push origin v0.4.7`. Workflow проверит, что тег совпадает с версией,
-соберёт архивы, посчитает `SHA256SUMS` и подпишет его ключом из секрета `FFM_SIGNING_KEY` (`tools/sign-release.mjs`).
-Без верной подписи программа обновление не установит.
+**Releasing:** bump the version in `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json`, `package.json` (and
+`Cargo.lock`), extend `CHANGELOG.md`, then `git tag v0.4.7 && git push origin v0.4.7`. The workflow checks that the
+tag matches the version, builds the archives, computes `SHA256SUMS` and signs it with the key from the
+`FFM_SIGNING_KEY` secret (`tools/sign-release.mjs`). Without a valid signature the program will not install an update.
 
-**AppImage** (`.github/workflows/appimage.yml`) собирается на каждый push в `main` и в каждом релизе: tauri-cli с
-дополнительным конфигом `.github/appimage.conf.json` (`bundleMediaFramework` — GStreamer внутри, FFmpeg BtbN по SHA-256
-в `usr/bin/ffmpeg/bin`), затем дымовой тест и окно под xvfb. Готовый файл — артефакт `release-appimage` прогона.
-Если сборка AppImage сломалась из-за внешних инструментов (linuxdeploy), выпустить релиз без него можно
-переменной репозитория `FFM_APPIMAGE=0`. На Linux `<video>`/`<audio>` получают файлы по HTTP с 127.0.0.1
-(случайный порт и токен, `protocol.rs`): GStreamer в WebKitGTK не открывает свои схемы вроде `media://`.
+**AppImage** (`.github/workflows/appimage.yml`) is built on every push to `main` and in every release: tauri-cli with
+the extra config `.github/appimage.conf.json` (`bundleMediaFramework` — GStreamer inside, BtbN FFmpeg pinned by SHA-256
+in `usr/bin/ffmpeg/bin`), then a smoke test and the window under xvfb. If the AppImage build breaks because of
+external tools (linuxdeploy), a release can go out without it with the repository variable `FFM_APPIMAGE=0`. On Linux,
+`<video>` / `<audio>` get files over HTTP from 127.0.0.1 (random port and token, `protocol.rs`): GStreamer in
+WebKitGTK does not open custom schemes such as `media://`.
 
-Журнал последнего экспорта с полной командой FFmpeg — `<кэш>/app/logs/last-export.log`.
+## License
 
-## Лицензии
+FF Montage is free software under the [GPL-3.0](LICENSE). FFmpeg — GPL ([BtbN](https://github.com/BtbN/FFmpeg-Builds)
+`gpl` builds), Tauri — MIT / Apache-2.0. The Inter and Open Sans fonts (`fonts/`) — SIL OFL 1.1.
+Audio plugins: the [vst3](https://github.com/coupler-rs/vst3-rs) bindings (MIT / Apache-2.0, based on the VST 3 SDK — MIT)
+and [clap-sys](https://github.com/micahrj/clap-sys) (MIT / Apache-2.0, CLAP — MIT). VST is a trademark of Steinberg
+Media Technologies GmbH; the program does not use the VST logo. Plugins are installed by the user separately, under
+their own licences; the program does not distribute them.
 
-FF Montage — GPL-3.0. FFmpeg — GPL (сборки [BtbN](https://github.com/BtbN/FFmpeg-Builds) `gpl`), Tauri — MIT/Apache-2.0.
-Шрифты Inter и Open Sans (папка `fonts/`) — SIL OFL 1.1.
-Аудиоплагины: привязки [vst3](https://github.com/coupler-rs/vst3-rs) (MIT/Apache-2.0, по VST 3 SDK — MIT) и
-[clap-sys](https://github.com/micahrj/clap-sys) (MIT/Apache-2.0, CLAP — MIT). VST — товарный знак Steinberg Media Technologies GmbH;
-логотип VST программа не использует. Сами плагины пользователь ставит отдельно, со своими лицензиями; программа их не распространяет.
+FF Montage is an independent project and is not affiliated with or endorsed by the FFmpeg project. FFmpeg is a
+trademark of Fabrice Bellard.
+
+## DMCA
+
+The code, the interface and the documentation of FF Montage were written for this project; third-party components
+are listed above with their licences. If you still believe that something in this repository or its releases
+infringes your copyright, open an [issue](https://github.com/IsselSaizo/FFMontage/issues/new?title=Copyright%20notice)
+titled “Copyright notice” — no personal details are needed in the issue, we will reply with a private contact — or
+send a notice to GitHub under its [DMCA Takedown Policy](https://docs.github.com/en/site-policy/content-removal-policies/dmca-takedown-policy).
+A notice should name the work you own, link to the material here, give your contact details and include a statement
+that you believe in good faith the use is not authorised, and that the notice is accurate and you are the owner or
+are authorised to act for the owner. Valid notices are acted on promptly; the author of removed material may send a
+counter-notice the same way.
