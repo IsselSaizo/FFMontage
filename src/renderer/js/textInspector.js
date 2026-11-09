@@ -3,6 +3,10 @@
 import { store, MAX_FADE, MIN_CUE } from './store.js';
 import { h, icon, iconEl, fmtTime, t, toast, errText } from './util.js';
 import { cleanText, TEXT_DEFAULT } from './textModel.js';
+import { cleanShape, shapeName, SHAPE_TYPES, CHAMFER_DEFAULT } from './shapes.js';
+import { borderOf, cleanBorder, BORDER_DEFAULT } from './border.js';
+import { cleanTimer, fmtClock, RING_DUR } from './timer.js';
+import { parseDuration } from './util.js';
 import { fontList, addFonts } from './fonts.js';
 import { listTextStyles, textStyleById } from './registry.js';
 import { getLang } from './i18n.js';
@@ -24,7 +28,7 @@ function textArea(ui, value, onLive, { rows = 3, id = null } = {}) {
   return ta;
 }
 
-function colorInput(value, onSet, title) {
+export function colorInput(value, onSet, title) {
   const inp = h('input', { type: 'color', class: 'color-in', value, title });
   inp.addEventListener('change', () => onSet(inp.value));
   return inp;
@@ -139,6 +143,160 @@ export function renderTextClip(ui, sel) {
   // --- Трансформ: тот же, что у видео (рамка в плеере тоже) ---
   if (tx.motion !== 'roll') root.append(ui.transformSection(clip, sel));
   else root.append(h('p', { class: 'muted small' }, t('Титры едут снизу вверх за время клипа: чем длиннее клип, тем медленнее. Положение по горизонтали и масштаб — в «Трансформе» (снимите «Движение», чтобы его открыть).')));
+}
+
+// ---------------- Фигура (0.5.0) ----------------
+export function renderShapeClip(ui, sel) {
+  const { root } = ui;
+  const clip = sel.clip;
+  const sh = cleanShape(clip.shape);
+  const locked = !!(sel.lane && sel.lane.locked);
+  const setS = (patch) => store.setShape([clip.id], patch);
+  const liveS = (patch) => { const f = store.findClip(clip.id); if (f) f.clip.shape = cleanShape(patch, f.clip.shape); };
+  const pct = (v) => `${Math.round(v * 1000) / 10}%`;
+
+  root.append(h('div', { class: 'panel-head' }, h('h2', {}, t('Фигура'))));
+  root.append(h('div', { class: 'insp-file' }, iconEl('transform', 18), h('span', {}, store.clipName(clip))));
+
+  // --- Тип и размер ---
+  const sec = h('div', { class: 'insp-section', dataset: { section: 'shape' } }, h('h3', {}, t('Фигура')));
+  sec.append(h('div', { class: 'presets shape-types' }, ...SHAPE_TYPES.map((ty) => h('button', {
+    class: `chip${sh.type === ty ? ' on' : ''}`, dataset: { shapeType: ty }, disabled: locked, title: shapeName(ty),
+    onclick: () => setS(ty === 'chamfer' && sh.corner < 0.01 ? { type: ty, corner: CHAMFER_DEFAULT } : { type: ty }),
+  }, h('span', { html: shapeIcon(ty, 16) }), shapeName(ty)))));
+  const wS = styleSlider(ui, sh.w, { min: 0.01, max: 1.5, step: 0.005, fmt: pct, live: (v) => liveS({ w: v }), commit: (v) => setS({ w: v }) });
+  const hS = styleSlider(ui, sh.h, { min: 0.01, max: 1.5, step: 0.005, fmt: pct, live: (v) => liveS({ h: v }), commit: (v) => setS({ h: v }) });
+  wS.slider.dataset.shape = 'w'; hS.slider.dataset.shape = 'h';
+  sec.append(
+    h('div', { class: 'row between' }, h('label', {}, t('Ширина (от ширины кадра)')), wS.val), wS.slider,
+    h('div', { class: 'row between' }, h('label', {}, t('Высота (от высоты кадра)')), hS.val), hS.slider);
+  if (sh.type === 'rect' || sh.type === 'chamfer') {
+    const cS = styleSlider(ui, sh.corner, { min: 0, max: 0.5, step: 0.005, fmt: (v) => (v ? pct(v) : t('нет')), live: (v) => liveS({ corner: v }), commit: (v) => setS({ corner: v }) });
+    cS.slider.dataset.shape = 'corner';
+    sec.append(h('div', { class: 'row between' }, h('label', {}, sh.type === 'rect' ? t('Скругление углов') : t('Срез углов')), cS.val), cS.slider);
+  }
+  root.append(sec);
+
+  // --- Заливка и контур ---
+  const look = h('div', { class: 'insp-section', dataset: { section: 'shape-look' } }, h('h3', {}, t('Оформление')));
+  const fS = styleSlider(ui, sh.fillOpacity, { min: 0, max: 1, step: 0.01, fmt: (v) => (v ? `${Math.round(v * 100)}%` : t('нет')), live: (v) => liveS({ fillOpacity: v }), commit: (v) => setS({ fillOpacity: v }) });
+  const sS = styleSlider(ui, sh.strokeWidth, { min: 0, max: 0.05, step: 0.0005, fmt: (v) => (v ? pct(v) : t('нет')), live: (v) => liveS({ strokeWidth: v }), commit: (v) => setS({ strokeWidth: v }) });
+  fS.slider.dataset.shape = 'fillOpacity'; sS.slider.dataset.shape = 'strokeWidth';
+  look.append(
+    h('div', { class: 'row between' }, h('label', {}, t('Заливка')), h('span', { class: 'row gap' }, fS.val, colorInput(sh.fill, (v) => setS({ fill: v, fillOpacity: sh.fillOpacity || 1 }), t('Цвет заливки')))), fS.slider,
+    h('div', { class: 'row between' }, h('label', {}, t('Контур')), h('span', { class: 'row gap' }, sS.val, colorInput(sh.stroke, (v) => setS({ stroke: v, strokeWidth: sh.strokeWidth || 0.004 }), t('Цвет контура')))), sS.slider,
+    h('p', { class: 'muted small' }, t('Толщина контура — от высоты кадра; контур идёт внутри фигуры. Заливка «нет» — останется только контур.')));
+  root.append(look);
+
+  // --- Появление и длительность ---
+  const dur = tlLen(clip);
+  const maxFade = Math.min(MAX_FADE, dur);
+  const fade = h('div', { class: 'insp-section', dataset: { section: 'fade' } }, h('h3', {}, t('Появление и длительность')));
+  const fadeRow = (lbl, key, other) => {
+    const lim = () => Math.max(0, Math.min(maxFade, dur - (clip[other] || 0)));
+    const { slider } = ui.liveSlider({
+      min: 0, max: Math.round(maxFade * 10) / 10, step: 0.1, value: clip[key] || 0, format: (v) => ui.num(v),
+      onLive: (v) => { store.findClip(clip.id).clip[key] = Math.min(v, lim()); },
+      onCommit: (v) => store.setClip(clip.id, { [key]: Math.min(v, lim()) }),
+    });
+    return [h('div', { class: 'row between' }, h('label', {}, lbl), ui.secInput(clip[key] || 0, maxFade, (v) => store.setClip(clip.id, { [key]: Math.min(v, lim()) }))), slider];
+  };
+  fade.append(...fadeRow(t('Постепенное возникновение'), 'fadeIn', 'fadeOut'), ...fadeRow(t('Постепенное исчезание'), 'fadeOut', 'fadeIn'),
+    h('dl', { class: 'kv' }, h('dt', {}, t('Длительность')), h('dd', {}, fmtTime(dur)), h('dt', {}, t('На таймлайне')), h('dd', {}, `${fmtTime(clip.start)} – ${fmtTime(clip.start + dur)}`)),
+    h('button', { class: 'btn ghost small', onclick: () => changeDuration(clip.id) }, h('span', { html: icon('clock', 15) }), t('Длительность…')));
+  root.append(fade);
+
+  // --- Трансформ: положение, масштаб, поворот, прозрачность ---
+  root.append(ui.transformSection(clip, sel));
+}
+
+// ---------------- Таймер (0.5.0) ----------------
+export function renderTimerClip(ui, sel) {
+  const { root } = ui;
+  const clip = sel.clip;
+  const tm = cleanTimer(clip.timer);
+  const locked = !!(sel.lane && sel.lane.locked);
+  const setTm = (patch) => store.setTimer([clip.id], patch);
+  const liveTm = (patch) => { const f = store.findClip(clip.id); if (f) f.clip.timer = cleanTimer(patch, f.clip.timer); };
+
+  root.append(h('div', { class: 'panel-head' }, h('h2', {}, t('Таймер'))));
+  root.append(h('div', { class: 'insp-file' }, iconEl('timer', 18), h('span', {}, store.clipName(clip))));
+
+  const sec = h('div', { class: 'insp-section', dataset: { section: 'timer' } }, h('h3', {}, t('Отсчёт')));
+  // Время: «10», «1:30», «0:45»
+  const durIn = h('input', { class: 'input', type: 'text', value: fmtClock(tm.duration), id: 'timer-duration', disabled: locked, title: t('Секунды или мин:сек') });
+  const applyDur = () => {
+    const d = parseDuration(String(durIn.value));
+    if (Number.isFinite(d) && d >= 1) setTm({ duration: d }); else durIn.value = fmtClock(tm.duration);
+  };
+  durIn.addEventListener('change', applyDur);
+  durIn.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); durIn.blur(); } e.stopPropagation(); });
+  const quick = [5, 10, 15, 30, 60, 90, 120, 300];
+  sec.append(
+    h('div', { class: 'row between' }, h('label', { for: 'timer-duration' }, t('Время')), durIn),
+    h('div', { class: 'presets' }, ...quick.map((s) => h('button', { class: `chip${Math.abs(tm.duration - s) < 0.01 ? ' on' : ''}`, disabled: locked, onclick: () => setTm({ duration: s }) }, fmtClock(s)))),
+    h('div', { class: 'row between' }, h('label', {}, t('Направление')),
+      select([['down', t('Обратный отсчёт')], ['up', t('Прямой отсчёт')]], tm.mode, (v) => setTm({ mode: v }))),
+    h('label', { class: 'check-row' },
+      h('input', { type: 'checkbox', checked: tm.digits, disabled: locked, onchange: (e) => setTm({ digits: e.target.checked }) }),
+      h('span', {}, t('Цифры под секундомером'))),
+    h('p', { class: 'muted small' }, t('Клип длится время отсчёта и ещё {s} с — звонок (секундомер трясётся, без звука). Обрежьте клип, если звонок не нужен.', { s: ui.num(RING_DUR) })));
+  root.append(sec);
+
+  const look = h('div', { class: 'insp-section', dataset: { section: 'timer-look' } }, h('h3', {}, t('Оформление')));
+  const sz = styleSlider(ui, tm.size, { min: 0.1, max: 1, step: 0.01, fmt: (v) => `${Math.round(v * 100)}%`, live: (v) => liveTm({ size: v }), commit: (v) => setTm({ size: v }) });
+  look.append(
+    h('div', { class: 'row between' }, h('label', {}, t('Размер (от высоты кадра)')), sz.val), sz.slider,
+    h('div', { class: 'row between' }, h('label', {}, t('Цвета')), h('span', { class: 'row gap' },
+      colorInput(tm.caseColor, (v) => setTm({ caseColor: v }), t('Корпус')),
+      colorInput(tm.faceColor, (v) => setTm({ faceColor: v }), t('Циферблат')),
+      colorInput(tm.fillColor, (v) => setTm({ fillColor: v }), t('Прошедшее время')),
+      colorInput(tm.inkColor, (v) => setTm({ inkColor: v }), t('Контур и стрелки')))));
+  root.append(look);
+
+  const dur = tlLen(clip);
+  root.append(h('div', { class: 'insp-section', dataset: { section: 'fade' } }, h('h3', {}, t('На таймлайне')),
+    h('dl', { class: 'kv' }, h('dt', {}, t('Длительность')), h('dd', {}, fmtTime(dur)), h('dt', {}, t('На таймлайне')), h('dd', {}, `${fmtTime(clip.start)} – ${fmtTime(clip.start + dur)}`))));
+  root.append(ui.transformSection(clip, sel));
+}
+
+// Значок типа фигуры (SVG)
+export function shapeIcon(type, size = 16) {
+  const p = type === 'ellipse' ? '<ellipse cx="12" cy="12" rx="9" ry="7"/>'
+    : type === 'triangle' ? '<path d="M12 4 L21 20 L3 20 Z"/>'
+      : type === 'chamfer' ? '<path d="M8 5 H16 L21 10 V14 L16 19 H8 L3 14 V10 Z"/>'
+        : '<rect x="3" y="6" width="18" height="12" rx="1.5"/>';
+  return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round">${p}</svg>`;
+}
+
+// ---------------- Обводка видео / картинки (0.5.0) ----------------
+export function borderSection(ui, clip, locked = false) {
+  const b = borderOf(clip);
+  const cur = b || { ...BORDER_DEFAULT, width: 0 };
+  const setB = (patch) => store.setBorder([clip.id], patch);
+  const liveB = (patch) => { const f = store.findClip(clip.id); if (!f) return; const x = cleanBorder(patch, f.clip.border || { ...BORDER_DEFAULT, width: 0 }); if (x) f.clip.border = x; else delete f.clip.border; };
+  const pct = (v) => `${Math.round(v * 1000) / 10}%`;
+  const sec = h('div', { class: 'insp-section', dataset: { section: 'border' } }, h('h3', {}, t('Обводка и углы')));
+  const wS = styleSlider(ui, cur.width, { min: 0, max: 0.03, step: 0.0005, fmt: (v) => (v ? pct(v) : t('нет')), live: (v) => liveB({ width: v }), commit: (v) => setB({ ...(b || { width: 0 }), width: v }) });
+  const rS = styleSlider(ui, cur.radius, { min: 0, max: 0.2, step: 0.002, fmt: (v) => (v ? pct(v) : t('нет')), live: (v) => liveB({ radius: v }), commit: (v) => setB({ ...(b || { width: 0 }), radius: v }) });
+  wS.slider.dataset.border = 'width'; rS.slider.dataset.border = 'radius';
+  wS.slider.disabled = locked; rS.slider.disabled = locked;
+  const presets = [
+    [t('Нет'), null],
+    [t('Тонкая'), { width: 0.002 }],
+    [t('Средняя'), { width: 0.004 }],
+    [t('Толстая'), { width: 0.01 }],
+    [t('Карточка'), { width: 0.002, radius: 0.03 }],
+  ];
+  sec.append(
+    h('div', { class: 'row between' }, h('label', {}, t('Толщина обводки')), h('span', { class: 'row gap' }, wS.val,
+      colorInput(cur.color, (v) => setB({ ...(b || {}), color: v, width: cur.width || BORDER_DEFAULT.width }), t('Цвет обводки')))), wS.slider,
+    h('div', { class: 'row between' }, h('label', {}, t('Скругление углов')), rS.val), rS.slider,
+    h('div', { class: 'presets' }, ...presets.map(([name, p]) => h('button', {
+      class: 'chip', disabled: locked, onclick: () => setB(p ? { color: cur.color, radius: 0, ...p } : null),
+    }, name))),
+    h('p', { class: 'muted small' }, t('Цветная рамка по краю картинки (внутри неё) и скруглённые углы. Толщина и радиус — от высоты кадра и не меняются при масштабе клипа.')));
+  return sec;
 }
 
 // ---------------- Реплика субтитров ----------------

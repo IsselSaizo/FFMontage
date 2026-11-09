@@ -6,7 +6,7 @@ import { keyHint } from './keymap.js';
 import { openMenu } from './contextMenu.js';
 import { toggleReverse, freezeFrameAt, isReversed, isFreeze } from './fx.js';
 import { speedOf, tlLen, clipEnd } from './clipTime.js';
-import { isText, TEXT_MAX } from './textModel.js';
+import { isText, isGraphic, TEXT_MAX } from './textModel.js';
 import { openPausesDialog, markClipById } from './edit.js';
 import { streamChannels, channelCount } from './audioLayout.js';
 import { openRouting } from './routingDialog.js';
@@ -75,7 +75,7 @@ export async function changeDuration(id) {
   const f = store.findClip(id);
   if (!f) return;
   const m = store.media(f.clip.mediaId);
-  const max = isText(f.clip) ? TEXT_MAX : (m ? m.duration - f.clip.in : f.clip.out - f.clip.in) / speedOf(f.clip);
+  const max = isGraphic(f.clip) ? TEXT_MAX : (m ? m.duration - f.clip.in : f.clip.out - f.clip.in) / speedOf(f.clip);
   const cur = tlLen(f.clip);
   const v = await promptDialog(t('Изменить длительность'), t('Длительность в секундах (или мин:сек)'), dec(Math.round(cur * 100) / 100), {
     okText: t('Применить'),
@@ -114,9 +114,13 @@ export function openClipMenu(id, x, y, clickTime = null) {
   const rev = isReversed(c);
   const busy = !!store.busy[id];
   const hasSound = video ? m.hasAudio : true;
-  if (isText(c)) {
+  if (isGraphic(c)) {
     openMenu(x, y, [
-      { id: 'edit-text', label: t('Изменить текст'), icon: 'rename', onClick: () => { store.select({ kind: 'video', id }); focusInspector('text'); } },
+      isText(c)
+        ? { id: 'edit-text', label: t('Изменить текст'), icon: 'rename', onClick: () => { store.select({ kind: 'video', id }); focusInspector('text'); } }
+        : c.kind === 'timer'
+          ? { id: 'edit-timer', label: t('Настроить таймер'), icon: 'timer', onClick: () => { store.select({ kind: 'video', id }); focusInspector('timer'); } }
+          : { id: 'edit-shape', label: t('Изменить фигуру'), icon: 'rename', onClick: () => { store.select({ kind: 'video', id }); focusInspector('shape'); } },
       { id: 'duplicate', label: t('Дублировать'), icon: 'duplicate', key: keyHint('clip.duplicate'), onClick: () => store.duplicateClip(id) },
       { id: 'copy', label: t('Копировать'), icon: 'copy', key: keyHint('clip.copy'), onClick: () => copyClip(id) },
       { id: 'delete', label: t('Удалить'), icon: 'trash', key: keyHint('clip.delete'), onClick: () => deleteClip(id) },

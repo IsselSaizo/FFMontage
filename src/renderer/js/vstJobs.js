@@ -12,7 +12,7 @@ import { trackGraph } from './exportPlan.js';
 import { clipChannel } from './audioLayout.js';
 
 const r6 = (x) => Number(Number(x).toFixed(6));
-const isTextClip = (c) => c && c.kind === 'text';
+const isTextClip = (c) => c && (c.kind === 'text' || c.kind === 'shape' || c.kind === 'timer');
 
 /** Все видеоклипы проекта (основная и верхние дорожки, старые overlayClips) */
 export const allVideoClips = (p) => [

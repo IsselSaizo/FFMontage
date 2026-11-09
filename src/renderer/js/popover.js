@@ -22,7 +22,8 @@ export function attachPopover(btn, build, { hover = true, align = 'center', clas
     const r = btn.getBoundingClientRect();
     const pw = pop.offsetWidth;
     let x = align === 'left' ? r.left : align === 'right' ? r.right - pw : r.left + r.width / 2 - pw / 2;
-    x = Math.max(8, Math.min(window.innerWidth - pw - 8, x));
+    const win = btn.ownerDocument.defaultView || window;
+    x = Math.max(8, Math.min(win.innerWidth - pw - 8, x));
     pop.style.left = `${Math.round(x)}px`;
     pop.style.top = `${Math.round(r.bottom + 6)}px`;
   };
@@ -37,7 +38,8 @@ export function attachPopover(btn, build, { hover = true, align = 'center', clas
     if (current && current !== api) current.close();
     pinned = pinned || pin;
     if (!pop.isConnected) {
-      document.body.append(pop);
+      // Кнопка может быть в отдельном окне панели (popout.js) — панель открывается рядом с ней
+      btn.ownerDocument.body.append(pop);
       current = api;
       btn.classList.add('open');
       refresh();

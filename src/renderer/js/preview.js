@@ -3,7 +3,10 @@
 // на переходе играют оба, а картинку смешивает CSS (см. transitions.js).
 // Музыка — отдельные <audio>, громкость (можно > 100%) и затухания — через Web Audio.
 import { store, MAIN_LANE } from './store.js';
-import { cssTransform } from './transform.js';
+import { cssTransform, contentAspect, tfOf } from './transform.js';
+import { isShape, drawShape } from './shapes.js';
+import { isTimer, drawTimer } from './timer.js';
+import { borderOf, borderPx } from './border.js';
 import { playUrl, audioUrl, channelUrl, channelState, playbackFailed } from './media.js';
 import { layoutOf, routeOf, routeMatrix, downmixMatrix, channelLabels, clipChannel } from './audioLayout.js';
 import { updateMeters, resetMeters, masterMeterEl } from './meters.js';
@@ -14,7 +17,7 @@ import { speedOf, tlLen, clipEnd, srcAt, tlAt } from './clipTime.js';
 import { activeFx, webAudioChain } from './audioFx.js';
 import { onRegistryChange } from './registry.js';
 import { t } from './i18n.js';
-import { isText } from './textModel.js';
+import { isGraphic } from './textModel.js';
 import { drawText } from './textRender.js';
 import { fontsVersion, onFontsChange } from './fonts.js';
 import { getPref, setPref } from './prefs.js';
@@ -469,13 +472,13 @@ export class Preview {
       for (const role of ['A', 'B']) {
         const x = L[role];
         if (!x) continue;
-        const url = isText(x.clip) ? 'text:' : playUrl(x.clip.mediaId);
+        const url = isGraphic(x.clip) ? 'text:' : playUrl(x.clip.mediaId);
         if (url) layers.push({ ...x, role, url });
       }
     }
-    // Тексты — на холсте, картинки — в <img>, видео — в <video>
-    const tLayers = layers.filter((x) => isText(x.clip));
-    const vLayers = layers.filter((x) => !isStill(x.clip) && !isText(x.clip));
+    // Тексты и фигуры — на холсте, картинки — в <img>, видео — в <video>
+    const tLayers = layers.filter((x) => isGraphic(x.clip));
+    const vLayers = layers.filter((x) => !isStill(x.clip) && !isGraphic(x.clip));
     const iLayers = layers.filter((x) => isStill(x.clip));
     tLayers.forEach((x, i) => {
       const el = v.textSlots[i];
@@ -564,7 +567,11 @@ export class Preview {
       const ov = this.effectOverride && this.effectOverride.clipId === x.clip.id ? { ...x.clip, effects: this.effectOverride.effects } : x.clip;
       const tf = x.el.style.filter;
       x.el.style.filter = cssEffects(ov, shownW, tf ? [tf] : []);
+      this.applyBorder(x.el, editing ? null : x.clip, true);
     }
+    // Рамки обводки у элементов, которые сейчас ничего не показывают
+    const shown = new Set(layers.map((x) => x.el));
+    for (const el of [...v.slots, ...v.imgSlots]) if (!shown.has(el)) this.applyBorder(el, null, false);
     if (!this.override) this.preload(v, lane, t);
   }
 
@@ -573,9 +580,15 @@ export class Preview {
     const dpr = window.devicePixelRatio || 1;
     const W = Math.max(2, Math.round(this.stage.clientWidth * dpr));
     const H = Math.max(2, Math.round(this.stage.clientHeight * dpr));
-    const roll = clip.text && clip.text.motion === 'roll';
-    const local = roll ? Math.round((t - clip.start) * 120) / 120 : 0;
-    const sig = `${W}x${H}|${local}|${fontsVersion()}|${clip.out}|${JSON.stringify(clip.text)}|${JSON.stringify(clip.transform || null)}`;
+    const shape = isShape(clip);
+    const timer = isTimer(clip);
+    const roll = !shape && !timer && clip.text && clip.text.motion === 'roll';
+    // Титры и таймер зависят от времени (таймер — до 1/60 с)
+    const local = roll ? Math.round((t - clip.start) * 120) / 120 : timer ? Math.round((t - clip.start) * 60) / 60 : 0;
+    const sig = shape
+      ? `${W}x${H}|shape|${JSON.stringify(clip.shape)}|${JSON.stringify(clip.transform || null)}`
+      : timer ? `${W}x${H}|timer|${local}|${fontsVersion()}|${JSON.stringify(clip.timer)}|${JSON.stringify(clip.transform || null)}`
+        : `${W}x${H}|${local}|${fontsVersion()}|${clip.out}|${JSON.stringify(clip.text)}|${JSON.stringify(clip.transform || null)}`;
     if (el.dataset.sig === sig) return;
     el.dataset.sig = sig;
     if (el.width !== W) el.width = W;
@@ -583,7 +596,53 @@ export class Preview {
     const ctx = el.getContext('2d');
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, W, H);
-    drawText(ctx, clip, W, H, { local });
+    if (shape) drawShape(ctx, clip, W, H);
+    else if (timer) drawTimer(ctx, clip, W, H, local);
+    else drawText(ctx, clip, W, H, { local });
+  }
+
+  // Обводка и скругление углов клипа (border.js): скругление — clip-path самого слоя, обводка — рамка-div
+  // во весь «экран» рядом со слоем, с тем же трансформом (рамка внутри — по картинке после подгонки, до масштаба).
+  // Во время перехода с собственной маской (clip-path шторок) скругление не рисуется — его делает экспорт.
+  applyBorder(el, clip, on) {
+    let ring = el.ring;
+    const b = on && clip ? borderOf(clip) : null;
+    if (!b) {
+      if (ring) ring.style.display = 'none';
+      if (el.dataset.bclip) { el.style.clipPath = ''; delete el.dataset.bclip; }
+      return;
+    }
+    if (!ring) {
+      ring = h('div', { class: 'slot-ring' }, h('div', { class: 'slot-ring-box' }));
+      el.ring = ring;
+      el.after(ring);
+    }
+    const Sw = this.stage.clientWidth; const Sh = this.stage.clientHeight;
+    const s = tfOf(clip).scale || 1;
+    // Картинка в «экране» до трансформа: «вписать» — по пропорциям файла (с кадрированием), иначе — весь экран
+    let w = Sw; let hh = Sh;
+    if (!clip.fit || clip.fit === 'contain') {
+      const ar = contentAspect(clip, store.media(clip.mediaId));
+      if (Sw / Sh > ar) { hh = Sh; w = Sh * ar; } else { w = Sw; hh = Sw / ar; }
+    }
+    // Толщина и радиус — в пикселях кадра (не зависят от масштаба клипа): делим на масштаб слоя
+    const px = borderPx(b, w * s, hh * s, Sh);
+    const bw = px.bw / s; const r = px.r / s;
+    const own = !el.style.clipPath || el.dataset.bclip === el.style.clipPath;
+    if (own) {
+      const cp = r > 0.01 ? `inset(${((Sh - hh) / 2).toFixed(2)}px ${((Sw - w) / 2).toFixed(2)}px round ${r.toFixed(2)}px)` : '';
+      el.style.clipPath = cp;
+      if (cp) el.dataset.bclip = el.style.clipPath; else delete el.dataset.bclip;
+    }
+    Object.assign(ring.style, {
+      display: bw > 0 ? 'block' : 'none',
+      transform: el.style.transform, opacity: el.style.opacity, zIndex: el.style.zIndex,
+      clipPath: own ? '' : el.style.clipPath, maskImage: el.style.maskImage,
+    });
+    Object.assign(ring.firstChild.style, {
+      left: `${(Sw - w) / 2}px`, top: `${(Sh - hh) / 2}px`, width: `${w}px`, height: `${hh}px`,
+      borderWidth: `${bw.toFixed(2)}px`, borderColor: b.color, borderRadius: `${r.toFixed(2)}px`,
+    });
   }
 
   // --- показ перехода/эффекта при наведении (проект не меняется) ---
@@ -669,7 +728,7 @@ export class Preview {
     } else if (L || this.master) {
       const c = L ? L[L.master].clip : this.master.clip;
       const rt = store.runtime[c.mediaId] || {};
-      if (isText(c)) text = '';
+      if (isGraphic(c)) text = '';
       else if (rt.missing) text = t('Файл не найден');
       else if (!playUrl(c.mediaId)) text = rt.status === 'rebuild' ? t('Восстановление эффекта…') : t('Подготовка файла… {p}%', { p: Math.round((rt.progress || 0) * 100) });
       else if (this.master && this.master.el.failed) text = t('Этот файл не воспроизводится в предпросмотре');

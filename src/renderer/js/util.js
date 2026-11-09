@@ -1,10 +1,12 @@
 // Мелкие помощники для интерфейса
 import { t, num } from './i18n.js';
 import { withKey } from './keymap.js';
+import { uiDoc, popQuery } from './uidoc.js';
 
 export { t };
 
-export const $ = (sel, root = document) => root.querySelector(sel);
+// Панель может быть вынесена в отдельное окно (popout.js) — тогда её элементы ищутся и там
+export const $ = (sel, root = document) => root.querySelector(sel) ?? (root === document ? popQuery(sel) : null);
 export const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 
 export function h(tag, attrs = {}, ...children) {
@@ -85,8 +87,10 @@ export function snapFps(fps) {
 // Уведомления
 // ---------------------------------------------------------------------------
 export function toast(msg, kind = 'info', ms = 3500) {
-  let box = document.getElementById('toasts');
-  if (!box) { box = h('div', { id: 'toasts' }); document.body.append(box); }
+  // Уведомление — в том окне, где сейчас работает пользователь (главное или отдельное окно панели)
+  const doc = uiDoc();
+  let box = doc.getElementById('toasts');
+  if (!box) { box = h('div', { id: 'toasts' }); doc.body.append(box); }
   const t = h('div', { class: `toast ${kind}` }, msg);
   box.append(t);
   requestAnimationFrame(() => t.classList.add('show'));
@@ -105,7 +109,7 @@ export function confirmDialog(title, text, okText = 'OK', cancelText = t('Отм
           h('button', { class: 'btn ghost', onclick: () => close(false) }, cancelText),
           h('button', { class: `btn ${danger ? 'danger' : 'primary'}`, onclick: () => close(true) }, okText))));
     overlay.addEventListener('mousedown', (e) => { if (e.target === overlay) close(false); });
-    document.body.append(overlay);
+    uiDoc().body.append(overlay);
     overlay.querySelector('.btn.primary, .btn.danger').focus();
   });
 }
@@ -135,7 +139,7 @@ export function promptDialog(title, label, value = '', { okText = t('Готов�
           h('button', { class: 'btn ghost', onclick: () => close(null) }, t('Отмена')),
           h('button', { class: 'btn primary', onclick: ok }, okText))));
     overlay.addEventListener('mousedown', (e) => { if (e.target === overlay) close(null); });
-    document.body.append(overlay);
+    uiDoc().body.append(overlay);
     input.focus();
     input.select();
   });
@@ -227,6 +231,10 @@ const P = {
   trim: '<path d="M9 4v16M15 4v16" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M6 9l-3 3 3 3M18 9l3 3-3 3" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>',
   markin: '<path d="M10 4H7v16h3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M13 12h7M17 9l3 3-3 3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>',
   markout: '<path d="M14 4h3v16h-3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 12h7M7 9l-3 3 3 3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>',
+  // 0.5.0: панель в отдельное окно / вернуть в главное
+  popout: '<rect x="3" y="7" width="12" height="12" rx="1.8" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M11 3h10v10M21 3l-9 9" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>',
+  dock: '<rect x="3" y="4" width="18" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M15 9l-5 5M10 9.5V14h4.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>',
+  timer: '<circle cx="12" cy="13.5" r="7.5" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M12 13.5V9.5M10 3h4M12 3v2.5M18.5 6.5l1.5-1.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>',
   silence: '<path d="M3 12h3l2-5 3 10 2-5h1M17 12h4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><path d="M15 9.5v5" stroke="currentColor" stroke-width="1.5" stroke-dasharray="1.5 1.5"/>',
 };
 export function icon(name, size = 20) {

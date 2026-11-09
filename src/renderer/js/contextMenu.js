@@ -1,16 +1,18 @@
 // Контекстное меню (правая кнопка мыши) в стиле программы.
 // items: [{ label, icon, key, onClick, disabled, danger }] | 'sep' | { header: 'Текст' }
 import { h, icon } from './util.js';
+import { uiDoc } from './uidoc.js';
 
 let current = null;
 
 export function closeMenu() {
   if (!current) return;
   current.el.remove();
-  document.removeEventListener('pointerdown', current.onDown, true);
-  document.removeEventListener('keydown', current.onKey, true);
-  window.removeEventListener('blur', closeMenu);
-  window.removeEventListener('resize', closeMenu);
+  const { doc, win } = current;
+  doc.removeEventListener('pointerdown', current.onDown, true);
+  doc.removeEventListener('keydown', current.onKey, true);
+  win.removeEventListener('blur', closeMenu);
+  win.removeEventListener('resize', closeMenu);
   current = null;
 }
 
@@ -33,26 +35,29 @@ export function openMenu(x, y, items) {
     buttons.push(b);
     el.append(b);
   }
-  document.body.append(el);
+  // Меню — в окне, где щёлкнули (главное или отдельное окно панели, 0.5.0)
+  const doc = uiDoc();
+  const win = doc.defaultView || window;
+  doc.body.append(el);
   // Не даём меню вылезти за край окна
   const r = el.getBoundingClientRect();
-  const left = Math.min(x, window.innerWidth - r.width - 6);
-  const top = y + r.height > window.innerHeight - 6 ? Math.max(6, y - r.height) : y;
+  const left = Math.min(x, win.innerWidth - r.width - 6);
+  const top = y + r.height > win.innerHeight - 6 ? Math.max(6, y - r.height) : y;
   Object.assign(el.style, { left: `${Math.max(6, left)}px`, top: `${top}px` });
 
   const onDown = (e) => { if (!el.contains(e.target)) closeMenu(); };
   const onKey = (e) => {
     const enabled = buttons.filter((b) => !b.disabled);
-    const i = enabled.indexOf(document.activeElement);
+    const i = enabled.indexOf(doc.activeElement);
     if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeMenu(); }
     else if (e.key === 'ArrowDown') { e.preventDefault(); e.stopPropagation(); (enabled[i + 1] || enabled[0])?.focus(); }
     else if (e.key === 'ArrowUp') { e.preventDefault(); e.stopPropagation(); (enabled[i - 1] || enabled[enabled.length - 1])?.focus(); }
   };
-  document.addEventListener('pointerdown', onDown, true);
-  document.addEventListener('keydown', onKey, true);
-  window.addEventListener('blur', closeMenu);
-  window.addEventListener('resize', closeMenu);
-  current = { el, onDown, onKey };
+  doc.addEventListener('pointerdown', onDown, true);
+  doc.addEventListener('keydown', onKey, true);
+  win.addEventListener('blur', closeMenu);
+  win.addEventListener('resize', closeMenu);
+  current = { el, onDown, onKey, doc, win };
   return el;
 }
 

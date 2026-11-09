@@ -95,7 +95,8 @@ fn cleanup(dir: &Path) {
 /// Байты файла по типу (с проверками) → путь, без записи на диск
 fn asset_bytes(kind: &str, data: &str) -> R<Vec<u8>> {
     match kind {
-        "png" => {
+        // apng (0.5.0) — анимированный PNG таймера: тот же формат файла, расширение .apng — FFmpeg читает все кадры
+        "png" | "apng" => {
             // допускаем data:-адрес из canvas.toDataURL()
             let b64 = data.strip_prefix("data:image/png;base64,").unwrap_or(data);
             if b64.len() / 4 * 3 > MAX_PNG + 3 {
@@ -300,6 +301,8 @@ mod tests {
         assert_eq!(base64_decode("Z"), None);
         assert!(asset_bytes("png", &crate::commands::base64(b"GIF89a")).is_err());
         assert!(asset_bytes("png", &format!("data:image/png;base64,{}", crate::commands::base64(b"\x89PNG\r\n\x1a\nxx"))).is_ok());
+        assert!(asset_bytes("apng", &crate::commands::base64(b"\x89PNG\r\n\x1a\nacTL")).is_ok());
+        assert!(asset_bytes("apng", &crate::commands::base64(b"GIF89a")).is_err());
         assert!(asset_bytes("exe", "x").is_err());
         assert!(asset_bytes("ass", "[Script Info]").is_ok());
     }

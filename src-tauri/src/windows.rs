@@ -50,7 +50,8 @@ pub fn open_main(app: &AppHandle) {
         .decorations(false)
         .visible(false)
         .background_color(tauri::window::Color(18, 18, 22, 255))
-        .data_directory(paths::get().webview.clone());
+        .data_directory(paths::get().webview.clone())
+        .on_new_window(panel_window(app.clone()));
     match b.build() {
         Ok(w) => watch_crash(&w),
         Err(e) => eprintln!("main window: {e}"),
@@ -59,6 +60,37 @@ pub fn open_main(app: &AppHandle) {
         use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
         app.dialog().message(tr!("Не установлен GStreamer good (autoaudiosink). Без него окно падает, как только в предпросмотре появляется звук.\n\n{}", "GStreamer good (autoaudiosink) is not installed. Without it the window crashes as soon as sound appears in the preview.\n\n{}", gst_hint()))
             .title(tr!("FF Montage — не хватает пакета", "FF Montage — missing package")).kind(MessageDialogKind::Warning).show(|_| {});
+    }
+}
+
+/// Окна панелей (0.5.0, js/popout.js): главное окно делает window.open('about:blank') — создаём для него обычное окно
+/// Tauri с той же средой WebView (window_features), чтобы окно-открыватель могло перенести туда свою панель.
+/// Любые другие адреса (ссылки, плагины) не открываются.
+fn panel_window(
+    app: AppHandle,
+) -> impl Fn(tauri::Url, tauri::webview::NewWindowFeatures) -> tauri::webview::NewWindowResponse<tauri::Wry> + Send + 'static {
+    use std::sync::atomic::AtomicUsize;
+    static N: AtomicUsize = AtomicUsize::new(0);
+    move |url, features| {
+        if url.as_str() != "about:blank" {
+            return tauri::webview::NewWindowResponse::Deny;
+        }
+        let label = format!("panel-{}", N.fetch_add(1, Ordering::SeqCst));
+        let b = WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(url))
+            .window_features(features)
+            .title("FF Montage")
+            .min_inner_size(280.0, 180.0)
+            .background_color(tauri::window::Color(18, 18, 22, 255))
+            .on_document_title_changed(|w, title| {
+                let _ = w.set_title(&title);
+            });
+        match b.build() {
+            Ok(window) => tauri::webview::NewWindowResponse::Create { window },
+            Err(e) => {
+                eprintln!("panel window: {e}");
+                tauri::webview::NewWindowResponse::Deny
+            }
+        }
     }
 }
 

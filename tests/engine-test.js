@@ -476,6 +476,128 @@ async function textTest(enc) {
   assert(bright(f4, 28, 36, isYellow) === 0, 'мягкие субтитры не вшиты в кадр');
 }
 
+// 0.5.0: обводка и скругление видео (PNG обводки и маски — как их рисует окно), фигуры (PNG кадра, как текст)
+async function borderTest(enc) {
+  console.log('Обводка, углы и фигуры:');
+  const { pathToFileURL } = require('url');
+  const js = (f) => import(pathToFileURL(path.join(__dirname, '..', 'src', 'renderer', 'js', f)).href);
+  const plan = await js('exportPlan.js');
+  const border = await js('border.js');
+  const shapes = await js('shapes.js');
+  const codec = enc.h264_nvenc ? 'h264_nvenc' : 'libx264';
+  const W = 640; const H = 360;
+  const col = (n, c) => make(`bd_${n}.mp4`, ['-f', 'lavfi', '-i', `color=c=${c}:s=320x180:r=30`, '-t', '6', '-c:v', 'libx264', '-pix_fmt', 'yuv420p']);
+  const [ib, ir, ig] = await Promise.all([col('blue', 'blue'), col('red', 'red'), col('green', 'green')].map(async (p) => ff.probe(await p)));
+  const clip = (mediaId, start, len, extra = {}) => ({ id: `c_${mediaId}_${start}`, mediaId, in: 0, out: len, start, volume: 1, muted: true, fadeIn: 0, fadeOut: 0, ...extra });
+
+  // Модель: пустая обводка — null, пределы, у текста и фигур обводки клипа нет
+  assert(border.cleanBorder({ width: 0, radius: 0 }) === null && border.cleanBorder({ width: 1, color: 'red' }).width === 0.05
+    && border.cleanBorder({ width: 0.01, color: '#ABCDEF' }).color === '#abcdef', 'cleanBorder: пустая → null, пределы, цвет');
+  assert(border.borderOf({ kind: 'shape', border: { width: 0.01 } }) === null && border.borderOf({ mediaId: 'x', border: { radius: 0.02 } }).radius === 0.02, 'borderOf: только у клипов с файлом');
+  const sh = shapes.cleanShape({ type: 'star', w: 5, fill: 'zzz', strokeWidth: -1 });
+  assert(sh.type === 'rect' && sh.w === 2 && sh.fill === '#3b82f6' && sh.strokeWidth === 0, `cleanShape: ${JSON.stringify(sh)}`);
+  assert(shapes.newShape('chamfer').corner > 0 && shapes.newShape('ellipse').type === 'ellipse', 'newShape: у скошенной фигуры срез углов виден сразу');
+  const r = shapes.shapeRect({ shape: { w: 0.5, h: 0.5 }, transform: { scale: 2, x: 0.1 } }, W, H);
+  assert(r.w === 640 && r.h === 360 && r.cx === 384, `shapeRect: ${JSON.stringify(r)}`);
+
+  // Размер слоя (по нему рисуются PNG): PiP ½ — 320×180, весь кадр — 640×360, «вписать» 4:3 — по высоте
+  const pip = clip('r', 0, 2, { transform: { x: 0.25, scale: 0.5 }, border: { width: 24 / H, color: '#ffffff' } });
+  const ls = plan.layerSize(pip, ir, W, H);
+  assert(ls.w === 320 && ls.h === 180, `layerSize PiP ${ls.w}×${ls.h}`);
+  const ls43 = plan.layerSize({ mediaId: 'q' }, { width: 400, height: 300 }, W, H);
+  assert(ls43.w === 480 && ls43.h === 360, `layerSize 4:3 ${ls43.w}×${ls43.h}`);
+
+  // PNG: обводка 24 px (белая рамка), маска — прозрачные углы 40×40
+  const ring = (w, h) => make(`bd_ring_${w}x${h}.png`, ['-f', 'lavfi', '-i', `color=c=black@0:s=${w}x${h},format=rgba,drawbox=x=0:y=0:w=${w}:h=${h}:t=24:color=white@1:replace=1`, '-frames:v', '1']);
+  const mask = await make('bd_mask.png', ['-f', 'lavfi', '-i', 'color=c=white@1:s=320x180,format=rgba,geq=r=255:g=255:b=255:a=if((lt(X\\,40)+gt(X\\,279))*(lt(Y\\,40)+gt(Y\\,139))\\,0\\,255)', '-frames:v', '1']);
+  const shapePng = await make('bd_shape.png', ['-f', 'lavfi', '-i', `color=c=black@0:s=${W}x${H},format=rgba,drawbox=x=20:y=280:w=60:h=60:color=yellow@1:t=fill:replace=1`, '-frames:v', '1']);
+  const rounded = clip('r', 2, 2, { transform: { x: 0.25, scale: 0.5 }, border: { width: 0, radius: 0.1 } });
+  const shapeClip = { id: 'shp', kind: 'shape', in: 0, out: 6, start: 0, volume: 1, muted: true, fadeIn: 0, fadeOut: 0, shape: { type: 'rect' } };
+  const pr = {
+    media: { b: ib, r: ir, g: ig }, background: '#000000',
+    // Основная дорожка: синий 0–4, зелёный с обводкой 4–6 (без трансформа — тоже слоем)
+    videoClips: [clip('b', 0, 4), clip('g', 4, 2, { border: { width: 24 / H, color: '#ffffff' } })],
+    videoTracks: [{ id: 'vtk_p', clips: [pip, rounded] }, { id: 'vtk_s', clips: [shapeClip] }],
+    audioTracks: [],
+  };
+  // Без подготовленных файлов: обводки и фигура пропускаются с предупреждениями, экспорт не ломается
+  const b0 = plan.buildExport(pr, { width: W, height: H, fps: 30, assets: { texts: {}, borders: {} } });
+  // (два красных клипа — одно предупреждение: имя файла то же)
+  assert(b0.warnings.length === 3 && !/blend/.test(b0.filter), `без PNG — предупреждения: ${b0.warnings.join(' | ')}`);
+  const assets = {
+    texts: { shp: { path: shapePng, w: W, h: H, roll: false } },
+    borders: {
+      [pip.id]: { w: 320, h: 180, ring: await ring(320, 180) },
+      [rounded.id]: { w: 320, h: 180, mask },
+      [pr.videoClips[1].id]: { w: 640, h: 360, ring: await ring(640, 360) },
+    },
+  };
+  const b1 = plan.buildExport(pr, { width: W, height: H, fps: 30, assets });
+  assert(b1.warnings.length === 0 && /blend=c3_mode=multiply/.test(b1.filter) && (b1.filter.match(/\[bdr\d+\]overlay/g) || []).length === 2, 'план: маска через blend, две обводки через overlay');
+  const out = path.join(DIR, 'out_border.mp4');
+  await startExport(pr, { width: W, height: H, fps: 30, codec, quality: 'high', output: out, assets });
+  const io = await ff.probe(out);
+  assert(Math.abs(io.duration - 6) < 0.15, `длительность ${io.duration}`);
+  const isYellow = ([r2, g, b]) => r2 > 180 && g > 180 && b < 90;
+  // rgb(): кадр 64×36, PiP — x 32…64, y 9…27 (обводка 24 px = 2,4 точки)
+  let f = await rgb(out, 1);
+  assert(isWhite(f.px(33, 18)) && isWhite(f.px(48, 10)) && isRed(f.px(48, 18)) && isBlue(f.px(16, 18)), `обводка PiP: край ${f.px(33, 18)}, верх ${f.px(48, 10)}, центр ${f.px(48, 18)}`);
+  assert(isYellow(f.px(5, 31)), `фигура на верхней дорожке ${f.px(5, 31)}`);
+  f = await rgb(out, 3);
+  assert(isBlue(f.px(33, 10)) && isBlue(f.px(63, 26)) && isRed(f.px(33, 18)) && isRed(f.px(48, 10)), `скруглённые углы: угол ${f.px(33, 10)} / ${f.px(63, 26)}, край ${f.px(33, 18)}`);
+  f = await rgb(out, 5);
+  // (green у lavfi — 0x008000)
+  const g0 = f.px(32, 18);
+  assert(isWhite(f.px(1, 18)) && isWhite(f.px(32, 1)) && g0[1] > 100 && g0[0] < 60 && g0[2] < 60, `обводка на основной дорожке: край ${f.px(1, 18)}, центр ${f.px(32, 18)}`);
+}
+
+// 0.5.0: таймер — модель, моменты кадров, сборка APNG (makeApng) и его наложение в экспорте (кадры меняются по времени)
+async function timerTest(enc) {
+  console.log('Таймер:');
+  const { pathToFileURL } = require('url');
+  const js = (f) => import(pathToFileURL(path.join(__dirname, '..', 'src', 'renderer', 'js', f)).href);
+  const timer = await js('timer.js');
+  const plan = await js('exportPlan.js');
+  const codec = enc.h264_nvenc ? 'h264_nvenc' : 'libx264';
+  const tm = timer.cleanTimer({ duration: 0.2, mode: 'sideways', size: 9, caseColor: 'x' });
+  assert(tm.duration === 1 && tm.mode === 'down' && tm.size === 1.5 && tm.caseColor === '#f06b93', `cleanTimer: ${JSON.stringify(tm)}`);
+  const s = (d, mode, l) => timer.timerState(timer.cleanTimer({ duration: d, mode }), l);
+  assert(s(10, 'down', 0).text === '0:10' && s(10, 'down', 0.5).text === '0:10' && s(10, 'down', 9.5).text === '0:01' && s(10, 'down', 10).text === '0:00' && s(10, 'down', 10).ringing,
+    'обратный отсчёт 10 → 1 → 0, в конце — звонок');
+  assert(s(90, 'up', 0).text === '0:00' && s(90, 'up', 65.4).text === '1:05' && s(90, 'up', 95).text === '1:30' && !s(90, 'up', 89).ringing, 'прямой отсчёт 0:00 → 1:30');
+  const ft = timer.timerFrameTimes(timer.cleanTimer({ duration: 10 }), 10 + timer.RING_DUR, 30);
+  const sum = ft.reduce((a, x) => a + x.d, 0);
+  assert(Math.abs(sum - 11.6) < 1e-6 && ft.length <= 900 + 60 && ft[0].t === 0, `кадры экспорта: ${ft.length}, сумма ${sum}`);
+  const ftLong = timer.timerFrameTimes(timer.cleanTimer({ duration: 3600 }), 3600 + timer.RING_DUR, 60);
+  assert(ftLong.length < 3600 + 60 && ftLong.length > 3600, `длинный таймер — кадр в секунду: ${ftLong.length}`);
+
+  // APNG из трёх кадров: красный 1 с, зелёный 1 с, синий 0,6 с (как кадры таймера в рамке 160×160)
+  const W = 640; const H = 360;
+  const fr = async (c) => fs.readFileSync(await make(`tm_${c}.png`, ['-f', 'lavfi', '-i', `color=c=${c}:s=160x160,format=rgba`, '-frames:v', '1']));
+  const apng = timer.makeApng([await fr('red'), await fr('green'), await fr('blue')], [1, 1, 0.6]);
+  const apngFile = path.join(DIR, 'tm_anim.apng');
+  fs.writeFileSync(apngFile, apng);
+  const pa = await ff.probe(apngFile);
+  assert(pa && pa.hasVideo && pa.width === 160, `APNG читается FFmpeg: ${pa && pa.width}×${pa && pa.height}, ${pa && pa.duration} с`);
+  const bg = await make('tm_bg.mp4', ['-f', 'lavfi', '-i', `color=c=white:s=${W}x${H}:r=30`, '-t', '4', '-c:v', 'libx264', '-pix_fmt', 'yuv420p']);
+  const ib = await ff.probe(bg);
+  const tclip = { id: 'tmr', kind: 'timer', in: 0, out: 2.6, start: 0.5, volume: 1, muted: true, fadeIn: 0, fadeOut: 0, timer: { duration: 1 } };
+  const pr = { media: { w: ib }, videoClips: [{ id: 'v', mediaId: 'w', in: 0, out: 4, start: 0, volume: 1, muted: true }], videoTracks: [{ id: 'vtk_t', clips: [tclip] }], audioTracks: [] };
+  const b0 = plan.buildExport(pr, { width: W, height: H, fps: 30, assets: { texts: {} } });
+  assert(b0.warnings.length === 1, `без APNG — предупреждение: ${b0.warnings[0]}`);
+  const assets = { texts: { tmr: { path: apngFile, w: 160, h: 160, x: 400, y: 100, roll: false, anim: true } } };
+  const b1 = plan.buildExport(pr, { width: W, height: H, fps: 30, assets });
+  assert(!b1.inputs.includes('-loop') && /overlay=x=400:y=100/.test(b1.filter), 'план: APNG — видео (без -loop), в своей рамке');
+  const out = path.join(DIR, 'out_timer.mp4');
+  await startExport(pr, { width: W, height: H, fps: 30, codec, quality: 'high', output: out, assets });
+  // Рамка 400…560 × 100…260 → в кадре 64×36: x 40…56, y 10…26; центр (48, 18)
+  const at = async (t) => (await rgb(out, t)).px(48, 18);
+  const p0 = await at(0.3); const p1 = await at(1.0); const p2 = await at(2.0); const p3 = await at(2.8); const p4 = await at(3.5);
+  const g = ([r2, g2, b2]) => g2 > 90 && r2 < 80 && b2 < 80;
+  assert(isWhite(p0) && isRed(p1) && g(p2) && isBlue(p3) && isWhite(p4), `кадры APNG по времени: ${p0} / ${p1} / ${p2} / ${p3} / ${p4}`);
+  assert(isWhite((await rgb(out, 1.0)).px(10, 18)), 'вне рамки таймера — видео под ним');
+}
+
 (async () => {
   await ff.ready;
   DIR = path.join(ff.paths().temp, 'engine-test');
@@ -489,7 +611,7 @@ async function textTest(enc) {
   // node tests/engine-test.js --only tracks — только одна группа проверок (для отладки)
   const only = process.argv.includes('--only') ? process.argv[process.argv.indexOf('--only') + 1] : null;
   if (only) {
-    await ({ tracks: tracksTest, effects: effectsTest, speed: speedTest, plugin: pluginTest, text: textTest, encoders: encodersTest })[only](enc);
+    await ({ tracks: tracksTest, effects: effectsTest, speed: speedTest, plugin: pluginTest, text: textTest, border: borderTest, timer: timerTest, encoders: encodersTest })[only](enc);
     console.log('\nВСЁ ОК');
     return;
   }
@@ -603,6 +725,8 @@ async function textTest(enc) {
   await pluginTest(enc);
   await tracksTest(enc);
   await textTest(enc);
+  await borderTest(enc);
+  await timerTest(enc);
   await encodersTest(enc);
   console.log('\nВСЁ ОК');
 })().catch((e) => { console.error(e); process.exit(1); });

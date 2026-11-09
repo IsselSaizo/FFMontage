@@ -10,7 +10,9 @@ import { TRANSITIONS, MIN_DURATION as TR_MIN, MAX_DURATION as TR_MAX } from './t
 import { h, icon, toast, uid, errText } from './util.js';
 import { speedOf, tlLen, clipEnd, srcAt, tlAt, MIN_SPEED, MAX_SPEED } from './clipTime.js';
 import { t } from './i18n.js';
-import { isText, textDiff, cleanText, TEXT_KEYS, TEXT_MAX } from './textModel.js';
+import { isText, isGraphic, textDiff, cleanText, TEXT_KEYS, TEXT_MAX } from './textModel.js';
+import { isShape, cleanShape, shapeDiff } from './shapes.js';
+import { cleanTimer } from './timer.js';
 import { listTextStyles, textStyleById, listLoudnessTargets, loudnessTargetById } from './registry.js';
 import './core/textStyles.js';
 import './core/loudness.js';
@@ -140,6 +142,14 @@ function describeText(c) {
   if (c.transition) o.transition_in = { type: c.transition.type, duration: r3(c.transition.duration) };
   return o;
 }
+function describeShape(c) {
+  const o = { id: c.id, kind: 'shape', start: r3(c.start), end: r3(end(c)), duration: r3(len(c)), fade_in: r3(c.fadeIn || 0), fade_out: r3(c.fadeOut || 0), shape: { type: cleanShape(c.shape).type, ...shapeDiff(c.shape) } };
+  const vf = store.findClip(c.id);
+  if (vf && vf.lane) o.video_track_id = vf.lane.id;
+  if (!isIdentity(tfOf(c))) { const tf = tfOf(c); o.transform = { x: tf.x, y: tf.y, scale: tf.scale, rotate: tf.rotate, opacity: tf.opacity }; }
+  if (c.transition) o.transition_in = { type: c.transition.type, duration: r3(c.transition.duration) };
+  return o;
+}
 const describeCue = (c) => ({ id: c.id, start: r3(c.start), end: r3(c.end), text: c.text });
 function describeSubTrack(tr, withCues = true) {
   const o = { id: tr.id, name: store.subtitleTrackName(tr.id), hidden: !!tr.hidden, locked: !!tr.locked, style: tr.style, cues_count: tr.cues.length };
@@ -151,6 +161,8 @@ function describeSubTrack(tr, withCues = true) {
 
 function describeClip(c, kind, track = null) {
   if (isText(c)) return describeText(c);
+  if (isShape(c)) return describeShape(c);
+  if (c.kind === 'timer') return { ...describeShape({ ...c, shape: {} }), kind: 'timer', shape: undefined, timer: cleanTimer(c.timer) };
   const m = store.media(c.mediaId);
   const src = m && m.derived ? store.media(m.derived.from) : m;
   const o = {
@@ -462,6 +474,7 @@ const TOOLS = {
     const f = clipArg(args.clip_id);
     const c = f.clip;
     if (isText(c)) fail('This is a text clip: use update_text (text, styling, start, duration, fades) and set_transform (position).');
+    if (isShape(c) || c.kind === 'timer') fail('This is a shape/timer clip: change it in the editor (Properties panel) and use set_transform (position).');
     const m = store.media(c.mediaId);
     if (!m) fail('The clip media is missing.');
     if (store.busy[c.id]) fail('The clip is being processed (reverse/freeze), try again later.');
@@ -1057,7 +1070,7 @@ const TOOLS = {
     const margin = numArg(args, 'margin', { min: 0, max: 2, def: 0.15 });
     const f = clipArg(args.clip_id);
     const m = store.media(f.clip.mediaId);
-    if (!m || !m.hasAudio || isText(f.clip)) fail('This clip has no sound.');
+    if (!m || !m.hasAudio || isGraphic(f.clip)) fail('This clip has no sound.');
     if ((f.lane && f.lane.locked) || (f.track && f.track.locked)) fail('The track of this clip is locked.');
     const before = r3(store.duration());
     let ranges;

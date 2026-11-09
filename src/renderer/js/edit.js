@@ -6,7 +6,7 @@ import { h, toast, errText, fmtTime, icon } from './util.js';
 import { t, getLang } from './i18n.js';
 import { keyHint } from './keymap.js';
 import { clipEnd } from './clipTime.js';
-import { isText } from './textModel.js';
+import { isGraphic } from './textModel.js';
 
 const dec = (x) => (getLang() === 'ru' ? String(x).replace('.', ',') : String(x));
 
@@ -137,7 +137,7 @@ export async function findPauses(id, { threshold = -35, minPause = 0.5, margin =
   if (!f) throw new Error(t('Клип не найден'));
   const c = f.clip;
   const m = store.media(c.mediaId);
-  if (!m || !m.hasAudio || isText(c)) throw new Error(t('У клипа нет звука'));
+  if (!m || !m.hasAudio || isGraphic(c)) throw new Error(t('У клипа нет звука'));
   const list = await detect(m, threshold, minPause);
   return op.silenceRanges(c, list, { margin, fps: store.fps(), mediaDur: m.duration, minLen: Math.max(0.05, 2 / store.fps()) });
 }
@@ -157,7 +157,7 @@ export function openPausesDialog(id) {
   const f = store.findClip(id);
   if (!f) return;
   const m = store.media(f.clip.mediaId);
-  if (!m || !m.hasAudio || isText(f.clip)) { toast(t('У клипа нет звука'), 'info', 2000); return; }
+  if (!m || !m.hasAudio || isGraphic(f.clip)) { toast(t('У клипа нет звука'), 'info', 2000); return; }
   const st = { threshold: -35, minPause: 0.5, margin: 0.15 };
   const info = h('p', { class: 'muted', id: 'pauses-info' }, t('Поиск пауз…'));
   const okBtn = h('button', { class: 'btn primary', id: 'pauses-ok', disabled: true }, t('Удалить паузы'));

@@ -6,6 +6,10 @@
 // повторный экспорт того же текста не пишет файл заново.
 import { isText } from './textModel.js';
 import { renderTextImage, ensureFonts } from './textRender.js';
+import { isShape, renderShapeImage } from './shapes.js';
+import { borderOf, renderBorderImages } from './border.js';
+import { layerSize } from './exportPlan.js';
+import { isTimer, cleanTimer, drawTimer, timerBox, timerFrameTimes, makeApng } from './timer.js';
 import { toAss, toSrt } from './subtitles.js';
 import { fontFile } from './fonts.js';
 import { hasVst } from './audioFx.js';
@@ -58,13 +62,27 @@ const visibleLanes = (p) => [
   ...(p.videoTracks || []).map((tr) => ({ clips: tr.clips || [], hidden: !!tr.hidden })),
 ];
 
-async function pngBase64(canvas) {
+async function pngBytes(canvas) {
   const blob = canvas.convertToBlob ? await canvas.convertToBlob({ type: 'image/png' })
     : await new Promise((res) => canvas.toBlob(res, 'image/png'));
-  const buf = new Uint8Array(await blob.arrayBuffer());
+  return new Uint8Array(await blob.arrayBuffer());
+}
+function bytesBase64(buf) {
   let s = '';
   for (let i = 0; i < buf.length; i += 0x8000) s += String.fromCharCode.apply(null, buf.subarray(i, i + 0x8000));
   return btoa(s);
+}
+async function pngBase64(canvas) {
+  return bytesBase64(await pngBytes(canvas));
+}
+async function digest(buf) {
+  const h = new Uint8Array(await crypto.subtle.digest('SHA-1', buf));
+  return Array.from(h, (b) => b.toString(16).padStart(2, '0')).join('');
+}
+// Цифры таймера — шрифтом Inter (иначе первый кадр нарисуется запасным)
+async function ensureTimerFont() {
+  if (typeof document === 'undefined' || !document.fonts) return;
+  await document.fonts.load('700 40px "Inter"', '0123456789:').catch(() => null);
 }
 
 /** Видимые дорожки субтитров с репликами */
@@ -77,10 +95,11 @@ export const exportableSubs = (p) => (p.subtitleTracks || []).filter((tr) => !tr
 export async function prepareExportAssets(project, settings, api) {
   const W = Math.max(2, Math.round(settings.width / 2) * 2);
   const H = Math.max(2, Math.round(settings.height / 2) * 2);
-  const assets = { texts: {}, subtitles: null, vst: await prepareVstAssets(project, api) };
+  const assets = { texts: {}, borders: {}, subtitles: null, vst: await prepareVstAssets(project, api) };
   // «Только звук» (0.4.1): картинки текстов и субтитры не нужны
   if (/^(mp3|m4a|wav|ogg)$/.test(String(settings.container || ''))) return assets;
-  const texts = visibleLanes(project).filter((l) => !l.hidden).flatMap((l) => l.clips.filter(isText));
+  const shown = visibleLanes(project).filter((l) => !l.hidden).flatMap((l) => l.clips);
+  const texts = shown.filter(isText);
   if (texts.length) {
     await ensureFonts(texts);
     for (const c of texts) {
@@ -88,6 +107,46 @@ export async function prepareExportAssets(project, settings, api) {
       const path = await api.exportAssetSave('png', await pngBase64(img.canvas));
       assets.texts[c.id] = { path, w: img.w, h: img.h, roll: img.roll };
     }
+  }
+  // Фигуры (0.5.0) — так же, как текст: кадр W×H с фигурой на своём месте
+  for (const c of shown.filter(isShape)) {
+    const img = renderShapeImage(c, W, H);
+    const path = await api.exportAssetSave('png', await pngBase64(img.canvas));
+    assets.texts[c.id] = { path, w: img.w, h: img.h, roll: false };
+  }
+  // Таймеры (0.5.0): кадры в рамке вокруг таймера → анимированный PNG (одинаковые подряд кадры склеиваются)
+  const timers = shown.filter(isTimer);
+  if (timers.length) await ensureTimerFont();
+  for (const c of timers) {
+    const box = timerBox(c, W, H);
+    const cv = typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(box.w, box.h) : Object.assign(document.createElement('canvas'), { width: box.w, height: box.h });
+    const ctx = cv.getContext('2d');
+    const len = Math.max(0.05, (c.out - c.in));
+    const frames = []; const delays = []; let prev = '';
+    for (const f of timerFrameTimes(cleanTimer(c.timer), len, settings.fps || 30)) {
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.clearRect(0, 0, box.w, box.h);
+      ctx.translate(-box.x, -box.y);
+      drawTimer(ctx, c, W, H, f.t);
+      const png = await pngBytes(cv);
+      const key = await digest(png);
+      if (key === prev) { delays[delays.length - 1] += f.d; continue; }
+      prev = key; frames.push(png); delays.push(f.d);
+    }
+    const path = await api.exportAssetSave('apng', bytesBase64(makeApng(frames, delays)));
+    assets.texts[c.id] = { path, w: box.w, h: box.h, x: box.x, y: box.y, roll: false, anim: true };
+  }
+  // Обводка и скруглённые углы видео / картинок (0.5.0): PNG точно размера слоя (exportPlan.layerSize)
+  for (const c of shown) {
+    const b = borderOf(c);
+    const m = b && (project.media || {})[c.mediaId];
+    if (!m || m.hasVideo === false) continue;
+    const { w, h } = layerSize(c, m, W, H);
+    const imgs = renderBorderImages(b, w, h, H);
+    const a = { w, h };
+    if (imgs.ring) a.ring = await api.exportAssetSave('png', await pngBase64(imgs.ring));
+    if (imgs.mask) a.mask = await api.exportAssetSave('png', await pngBase64(imgs.mask));
+    if (a.ring || a.mask) assets.borders[c.id] = a;
   }
   const subs = exportableSubs(project);
   const mode = settings.subtitles || 'burn';

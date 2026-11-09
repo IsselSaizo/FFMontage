@@ -141,6 +141,7 @@ window.api = {
   // Обновления
   updateCheck: () => invoke('update_check'),
   updateApply: () => invoke('update_apply'),
+  updateOpenDrive: () => invoke('update_open_drive'),
   onUpdateLog: (fn) => on('update:log', fn),
   // окно настроек папок / первого запуска
   setupInfo: () => invoke('setup_info'),

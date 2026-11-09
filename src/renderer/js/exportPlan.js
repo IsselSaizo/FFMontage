@@ -16,8 +16,9 @@ import { speedOf, atempoChain } from './clipTime.js';
 import { ffAudioFx, unknownFx, hasVst, missingVst } from './audioFx.js';
 import { TRANSITIONS } from './transitions.js';
 import { t } from './i18n.js';
-import { tfOf, isIdentity } from './transform.js';
+import { tfOf, isIdentity, contentAspect } from './transform.js';
 import { ffPath } from './core/ffEscape.js';
+import { borderOf } from './border.js';
 import { layoutOf, ffLayout, routeOf, routePan, downmixPan, clipChannel, channelPick, channelLabels, outputMode } from './audioLayout.js';
 
 export const QUALITY = {
@@ -57,6 +58,16 @@ export function cropChain(c) {
   const f = (x) => Math.max(0, Math.min(0.95, Number(x) || 0));
   const w = Math.max(0.05, 1 - f(cr.l) - f(cr.r)).toFixed(6); const hh = Math.max(0.05, 1 - f(cr.t) - f(cr.b)).toFixed(6);
   return `crop=w=trunc(iw*${w}/2)*2:h=trunc(ih*${hh}/2)*2:x=iw*${f(cr.l).toFixed(6)}:y=ih*${f(cr.t).toFixed(6)},`;
+}
+
+// Размер слоя клипа в экспорте (как layerChain: рамка W·scale × H·scale, «вписать» — по пропорциям картинки),
+// чётные числа. По нему exportAssets.js рисует обводку и маску углов, а layerChain приводит слой точно к нему.
+export function layerSize(c, m, W, H) {
+  const tf = tfOf(c);
+  const bw = even(even(W) * tf.scale); const bh = even(even(H) * tf.scale);
+  if (c.fit === 'cover' || c.fit === 'stretch') return { w: bw, h: bh };
+  const ar = contentAspect(c, m);
+  return bw / bh > ar ? { w: Math.min(bw, even(bh * ar)), h: bh } : { w: bw, h: Math.min(bh, even(bw / ar)) };
 }
 
 // Длина клипа на таймлайне (с учётом скорости)
@@ -241,12 +252,18 @@ export function buildExport(project, settings) {
     return null;
   };
   const addWav = (p) => { inputs.push('-i', p); return nInputs(inputs) - 1; };
-  const warnText = (c) => { if (assets) warnings.add(t('Текст «{name}» не подготовлен к экспорту — пропущен', { name: String((c.text && c.text.content) || '').split('\n')[0].slice(0, 30) })); };
-  // Текстовый клип → картинка PNG W×H (или полоса титров W×h) с альфой; трансформ уже нарисован в ней
+  const warnText = (c) => {
+    if (!assets) return;
+    if (c.kind === 'shape') warnings.add(t('Фигура не подготовлена к экспорту — пропущена'));
+    else if (c.kind === 'timer') warnings.add(t('Таймер не подготовлен к экспорту — пропущен'));
+    else warnings.add(t('Текст «{name}» не подготовлен к экспорту — пропущен', { name: String((c.text && c.text.content) || '').split('\n')[0].slice(0, 30) }));
+  };
+  // Текстовый клип или фигура → картинка PNG W×H (или полоса титров W×h) с альфой; трансформ уже нарисован в ней
   const asMedia = (c) => {
-    if (c.kind !== 'text') return media[c.mediaId];
+    if (c.kind !== 'text' && c.kind !== 'shape' && c.kind !== 'timer') return media[c.mediaId];
     const a = textImg[c.id];
-    return a && a.path ? { path: a.path, isImage: true, hasVideo: true, hasAudio: false, width: a.w, height: a.h, _text: a } : null;
+    // Таймер (0.5.0): анимированный PNG (apng) в рамке a.x, a.y — читается как видео
+    return a && a.path ? { path: a.path, isImage: true, isAnimation: !!a.anim, hasVideo: true, hasAudio: false, width: a.w, height: a.h, _text: a } : null;
   };
   const still = (m) => m.isImage && !m.isAnimation;
   // alpha — видео с прозрачностью (WebM VP9 alpha читает только libvpx-vp9 — он ставится перед -i)
@@ -270,7 +287,32 @@ export function buildExport(project, settings) {
         `pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2:color=0x${bg},setsar=1,format=${PF}`);
   // Слой клипа с трансформом (transform.js): кадрирование → подгонка в рамку W·scale × H·scale → прозрачность → поворот.
   // На выходе — картинка с альфой своего размера; где она стоит в кадре — решает overlay (центр + сдвиг).
-  const layerChain = (c) => {
+  // Обводка и скругление (0.5.0, border.js): PNG обводки и маски размера слоя (exportAssets.js) →
+  // слой приводится точно к этому размеру, альфа × маска (blend), сверху — обводка (overlay); до прозрачности и поворота
+  const bordersA = (assets && assets.borders) || {};
+  let bdN = 0;
+  const borderAsset = (c) => {
+    if (!borderOf(c)) return null;
+    const a = bordersA[c.id];
+    if (a && (a.ring || a.mask) && a.w > 0 && a.h > 0) return a;
+    if (assets) warnings.add(t('Обводка клипа «{name}» не подготовлена к экспорту — пропущена', { name: String(c.name || (media[c.mediaId] && media[c.mediaId].name) || c.id).slice(0, 40) }));
+    return null;
+  };
+  const borderChain = (a, dur) => {
+    const n = bdN++;
+    let s = `,scale=${a.w}:${a.h}:flags=lanczos,setsar=1,format=yuva420p`;
+    const png = (path) => addInput({ path, isImage: true }, 0, dur);
+    if (a.mask) {
+      const k = png(a.mask);
+      s += `[bdl${n}];[${k}:v]fps=${FX},format=yuva420p,setsar=1[bdm${n}];[bdl${n}][bdm${n}]blend=c3_mode=multiply,format=yuva420p`;
+    }
+    if (a.ring) {
+      const k = png(a.ring);
+      s += `[bdo${n}];[${k}:v]fps=${FX},format=yuva420p,setsar=1[bdr${n}];[bdo${n}][bdr${n}]overlay=0:0:format=auto,format=yuva420p`;
+    }
+    return s;
+  };
+  const layerChain = (c, dur = 0) => {
     const tf = tfOf(c);
     const bw = even(W * tf.scale); const bh = even(H * tf.scale);
     const fit = c.fit === 'cover'
@@ -279,7 +321,9 @@ export function buildExport(project, settings) {
         ? `scale=${bw}:${bh}:flags=lanczos`
         : `scale=${bw}:${bh}:force_original_aspect_ratio=decrease:force_divisible_by=2:flags=lanczos`;
     const rad = (tf.rotate * Math.PI) / 180;
+    const bd = borderAsset(c);
     return cropChain(c) + `fps=${FX},${fit},setsar=1,format=yuva420p` +
+      (bd ? borderChain(bd, dur + 1) : '') +
       (tf.opacity < 1 ? `,colorchannelmixer=aa=${n6(tf.opacity)}` : '') +
       (Math.abs(rad) > 1e-6 ? `,rotate=a=${n6(rad)}:c=none:ow=rotw(${n6(rad)}):oh=roth(${n6(rad)})` : '');
   };
@@ -316,7 +360,7 @@ export function buildExport(project, settings) {
     // Метки основной дорожки — без префикса (как в 0.3), у верхних — свой префикс
     const P = li ? `l${li}_` : '';
     const alpha = !L.main;
-    for (const c of L.clips) if (c.kind === 'text' && !L.hidden && clipDuration(c) > 0.001 && !asMedia(c)) warnText(c);
+    for (const c of L.clips) if ((c.kind === 'text' || c.kind === 'shape' || c.kind === 'timer') && !L.hidden && clipDuration(c) > 0.001 && !asMedia(c)) warnText(c);
     const vclips = L.clips
       .filter((c) => clipDuration(c) > 0.001 && asMedia(c))
       .map((c, i) => ({ ...c, start: Number.isFinite(c.start) ? c.start : NaN, _i: i }));
@@ -370,12 +414,12 @@ export function buildExport(project, settings) {
       // (y — выражение overlay по времени: у одиночного клипа верхней дорожки t — время ролика, иначе — время клипа)
       const tx = m._text;
       const rollY = (t0) => `y=${H}-(t-${n6(t0)})/${n6(len)}*${H + tx.h}`;
-      const chainOf = (cc) => (tx ? `fps=${FX},setsar=1,format=yuva420p` : layerChain(cc));
-      const posOf = (cc, local) => (tx ? (tx.roll ? `x=0:${rollY(local ? h : cc.start)}` : 'x=0:y=0') : layerPos(cc));
+      const chainOf = (cc) => (tx ? `fps=${FX},setsar=1,format=yuva420p` : layerChain(cc, S));
+      const posOf = (cc, local) => (tx ? (tx.roll ? `x=0:${rollY(local ? h : cc.start)}` : `x=${Math.round(tx.x || 0)}:y=${Math.round(tx.y || 0)}`) : layerPos(cc));
       if (showVideo) {
         warnFx(c);
         const src = `[${k}:v]${vSpeed(sp)},${tx ? '' : ffEffects(c, m.width)}`;
-        if (!alpha && !tx && isIdentity(tfOf(c))) {
+        if (!alpha && !tx && isIdentity(tfOf(c)) && !borderAsset(c)) {
           filters.push(`${src}${scaleChain(c)}${tail}`);
         } else if (direct) {
           filters.push(`${src}${chainOf(c)}${tail}`);

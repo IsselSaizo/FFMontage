@@ -9,7 +9,7 @@
 // Время — секунды таймлайна. mediaDur(c) — длина файла клипа (текст — TEXT_MAX).
 import { vlanes, carve, splitLink, ADJ, MIN_CLIP, MIN_CUE } from './store.js';
 import { speedOf, tlLen, clipEnd, srcAt, tlAt } from './clipTime.js';
-import { isText, TEXT_MAX } from './textModel.js';
+import { isGraphic, TEXT_MAX } from './textModel.js';
 import { uid } from './util.js';
 
 const end = clipEnd;
@@ -167,7 +167,7 @@ export function removeRanges(p, id, ranges) {
 // ---------------------------------------------------------------------------
 
 /** Длина файла клипа (текст — без файла) */
-export const mediaDurOf = (p, c) => (isText(c) ? TEXT_MAX : ((p.media && p.media[c.mediaId]) || {}).duration || c.out);
+export const mediaDurOf = (p, c) => (isGraphic(c) ? TEXT_MAX : ((p.media && p.media[c.mediaId]) || {}).duration || c.out);
 
 /** Соседи клипа на его строке: { prev, next } (adjacent — стоят впритык) */
 export function neighbours(p, id) {
@@ -194,7 +194,7 @@ function moveOut(p, c, d) {
 }
 function moveIn(p, c, d) {
   const sp = speedOf(c);
-  c.in = Math.min(c.out - MIN_CLIP * sp, Math.max(isText(c) ? -Infinity : 0, c.in + d * sp));
+  c.in = Math.min(c.out - MIN_CLIP * sp, Math.max(isGraphic(c) ? -Infinity : 0, c.in + d * sp));
   for (const x of partnersOf(p, c)) { const s2 = speedOf(x); x.in = Math.min(x.out - MIN_CLIP * s2, Math.max(0, x.in + d * s2)); }
 }
 
@@ -211,7 +211,7 @@ export function rippleTrim(p, id, side, d, { linked = true } = {}) {
   const mdur = mediaDurOf(p, c);
   // Ограничения: длина ≥ MIN_CLIP, кадры есть в файле
   if (side === 'l') {
-    const lo = isText(c) ? -(TEXT_MAX - tlLen(c)) : -c.in / sp; // удлинить влево — пока есть кадры до in
+    const lo = isGraphic(c) ? -(TEXT_MAX - tlLen(c)) : -c.in / sp; // удлинить влево — пока есть кадры до in
     d = Math.max(lo, Math.min(tlLen(c) - MIN_CLIP, d));
   } else {
     d = Math.min((mdur - c.out) / sp, Math.max(-(tlLen(c) - MIN_CLIP), d));
@@ -219,7 +219,7 @@ export function rippleTrim(p, id, side, d, { linked = true } = {}) {
   // Укорачивание: на строках группы место освобождает сам клип; строка, где сдвинуть нельзя (поперёк лежит
   // другой клип), просто не поедет — rippleShift её пропустит
   if (side === 'l') {
-    if (linked) moveIn(p, c, d); else c.in = Math.min(c.out - MIN_CLIP * sp, Math.max(isText(c) ? -Infinity : 0, c.in + d * sp));
+    if (linked) moveIn(p, c, d); else c.in = Math.min(c.out - MIN_CLIP * sp, Math.max(isGraphic(c) ? -Infinity : 0, c.in + d * sp));
   } else if (linked) moveOut(p, c, d); else c.out = Math.max(c.in + MIN_CLIP * sp, Math.min(mdur, c.out + d * sp));
   const newEnd = c.start + (c.out - c.in) / sp;
   const shift = newEnd - oldEnd;
@@ -237,7 +237,7 @@ export function rollEdit(p, id, d) {
   const a = n.clip; const b = n.next;
   const spA = speedOf(a); const spB = speedOf(b);
   const hi = Math.min((mediaDurOf(p, a) - a.out) / spA, tlLen(b) - MIN_CLIP);
-  const lo = Math.max(-(tlLen(a) - MIN_CLIP), isText(b) ? -Infinity : -b.in / spB, isText(b) ? -(TEXT_MAX - tlLen(b)) : -Infinity);
+  const lo = Math.max(-(tlLen(a) - MIN_CLIP), isGraphic(b) ? -Infinity : -b.in / spB, isGraphic(b) ? -(TEXT_MAX - tlLen(b)) : -Infinity);
   d = Math.max(lo, Math.min(hi, d));
   if (Math.abs(d) < 1e-9) return 0;
   moveOut(p, a, d);
@@ -249,7 +249,7 @@ export function rollEdit(p, id, d) {
 /** Slip: содержимое клипа id сдвигается внутри него на d (с файла в масштабе таймлайна), место и длина те же. → итоговый d */
 export function slipClip(p, id, d) {
   const f = rowOf(p, id);
-  if (!f || f.row.kind === 'sub' || isText(f.item)) return 0;
+  if (!f || f.row.kind === 'sub' || isGraphic(f.item)) return 0;
   const c = f.item; const sp = speedOf(c);
   // d > 0 — показать более поздние кадры (in и out вперёд)
   d = Math.max(-c.in / sp, Math.min((mediaDurOf(p, c) - c.out) / sp, d));
@@ -275,7 +275,7 @@ export function slideClip(p, id, d) {
   if (next) {
     if (n.nextAdj) {
       hi = Math.min(hi, tlLen(next) - MIN_CLIP);
-      if (!isText(next)) lo = Math.max(lo, -next.in / speedOf(next));
+      if (!isGraphic(next)) lo = Math.max(lo, -next.in / speedOf(next));
     } else hi = Math.min(hi, next.start - end(c));
   }
   d = Math.max(lo, Math.min(hi, d));

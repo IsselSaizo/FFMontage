@@ -9,6 +9,8 @@ import { contentRect, hitContent, tfOf } from './transform.js';
 import { clipEnd } from './clipTime.js';
 import { isText } from './textModel.js';
 import { textRect } from './textRender.js';
+import { isShape, shapeRect } from './shapes.js';
+import { isTimer, timerRect } from './timer.js';
 
 const SNAP_PX = 7;
 const CORNERS = ['nw', 'ne', 'se', 'sw'];
@@ -37,7 +39,9 @@ export function initGizmo(preview) {
   // Текст (M5.1): рамка — по раскладке текста (textRender.js), у титров «roll» — по текущему положению
   const rectOf = (clip) => (isText(clip)
     ? textRect(clip, stage.clientWidth, stage.clientHeight, store.time - clip.start)
-    : contentRect(clip, store.media(clip.mediaId), stage.clientWidth, stage.clientHeight));
+    : isShape(clip) ? shapeRect(clip, stage.clientWidth, stage.clientHeight)
+      : isTimer(clip) ? timerRect(clip, stage.clientWidth, stage.clientHeight)
+      : contentRect(clip, store.media(clip.mediaId), stage.clientWidth, stage.clientHeight));
   const active = () => !preview.cropEdit && document.body.dataset.mode !== 'anim' && document.body.dataset.mode !== 'audio';
 
   function draw() {

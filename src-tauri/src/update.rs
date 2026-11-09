@@ -118,13 +118,15 @@ fn asset_url(rel: &Value, name: &str) -> Option<String> {
 }
 
 /// Что и откуда ставить
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 struct Plan {
     version: String,
     name: String,
     url: String,
     sums_url: String,
     sig_url: String,
+    /// "github" — релиз; "drive" — хотфикс из папки Google Диска (0.5.0)
+    source: &'static str,
 }
 
 /// Почему обновление не предлагается
@@ -173,7 +175,173 @@ fn plan(rel: &Value, current: &str, os: &str, arch: &str, appimage: bool) -> Res
     let url = asset_url(rel, &name).ok_or(Skip::NoBuild)?;
     let sums_url = asset_url(rel, SUMS).ok_or(Skip::Unsigned)?;
     let sig_url = asset_url(rel, SIG).ok_or(Skip::Unsigned)?;
-    Ok(Plan { version, name, url, sums_url, sig_url })
+    Ok(Plan { version, name, url, sums_url, sig_url, source: "github" })
+}
+
+// ---------------------------------------------------------------------------
+// Хотфиксы с Google Диска (0.5.0): исправления, для которых ещё нет релиза на GitHub.
+// Папка (DRIVE_FOLDER, общий доступ «по ссылке») — те же файлы, что в релизе: FF-Montage-<версия>-<платформа>,
+// SHA256SUMS и SHA256SUMS.sig (подпись тем же ключом — tools/hotfix-pack.ps1 / sign-release.mjs). Файлы могут лежать
+// в корне или в подпапках (по одному набору в подпапке, например «0.5.1»). Хотфикс — следующая версия (0.5.1…):
+// предлагается, если она новее установленной и новее последнего релиза GitHub (при равных — GitHub).
+// Список папки — страница embeddedfolderview (без ключа API), скачивание — drive.usercontent.google.com.
+// Проверка та же: подпись SHA256SUMS → SHA-256 архива; без подписи ничего не ставится.
+// ---------------------------------------------------------------------------
+const DRIVE_FOLDER: &str = "1hFr83UOv7CpgD20gP1M6euudI2qyHngY";
+const DRIVE_MAX_SUBFOLDERS: usize = 12;
+
+#[derive(Debug, Clone, PartialEq)]
+struct DriveEntry {
+    id: String,
+    name: String,
+    folder: bool,
+}
+
+fn html_unescape(s: &str) -> String {
+    s.replace("&quot;", "\"").replace("&#39;", "'").replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
+}
+
+/// Записи страницы embeddedfolderview: <div class="flip-entry" id="entry-ID"> … <a href="…/file/d/ID/…" или
+/// «…/drive/folders/ID»> … <div class="flip-entry-title">ИМЯ</div>
+fn parse_drive_listing(html: &str) -> Vec<DriveEntry> {
+    let mut out = Vec::new();
+    for part in html.split("id=\"entry-").skip(1) {
+        let Some(end) = part.find('"') else { continue };
+        let id = &part[..end];
+        if id.is_empty() || id.len() > 128 || !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_') {
+            continue;
+        }
+        const TITLE: &str = "flip-entry-title\">";
+        let Some(t) = part.find(TITLE) else { continue };
+        let rest = &part[t + TITLE.len()..];
+        let Some(e) = rest.find('<') else { continue };
+        let name = html_unescape(rest[..e].trim());
+        if name.is_empty() {
+            continue;
+        }
+        let folder = part[..t].contains("/folders/");
+        out.push(DriveEntry { id: id.to_string(), name, folder });
+    }
+    out
+}
+
+fn drive_download_url(id: &str) -> String {
+    format!("https://drive.usercontent.google.com/download?id={id}&export=download&confirm=t")
+}
+
+/// Лучший хотфикс для этой системы среди наборов файлов (корень и подпапки): самая новая версия > current,
+/// у набора которой есть SHA256SUMS и подпись
+fn drive_plan(groups: &[Vec<DriveEntry>], current: &str, os: &str, arch: &str, appimage: bool) -> Result<Plan, Skip> {
+    let cur = parse_version(current).ok_or(Skip::NotNewer)?;
+    let probe = asset_name("0.0.0", os, arch, appimage).ok_or(Skip::NoBuild)?;
+    let (prefix, suffix) = probe.split_once("0.0.0").ok_or(Skip::NoBuild)?;
+    let mut found: Vec<((u64, u64, u64), usize, &DriveEntry)> = Vec::new();
+    for (gi, g) in groups.iter().enumerate() {
+        for e in g.iter().filter(|e| !e.folder) {
+            let Some(mid) = e.name.strip_prefix(prefix).and_then(|x| x.strip_suffix(suffix)) else { continue };
+            if let Some(v) = parse_version(mid).filter(|v| *v > cur) {
+                found.push((v, gi, e));
+            }
+        }
+    }
+    if found.is_empty() {
+        return Err(Skip::NotNewer);
+    }
+    found.sort_by_key(|x| std::cmp::Reverse(x.0));
+    let file = |g: &Vec<DriveEntry>, n: &str| g.iter().find(|e| !e.folder && e.name == n).map(|e| drive_download_url(&e.id));
+    for (v, gi, e) in &found {
+        let g = &groups[*gi];
+        if let (Some(sums_url), Some(sig_url)) = (file(g, SUMS), file(g, SIG)) {
+            return Ok(Plan {
+                version: format!("{}.{}.{}", v.0, v.1, v.2),
+                name: e.name.clone(),
+                url: drive_download_url(&e.id),
+                sums_url,
+                sig_url,
+                source: "drive",
+            });
+        }
+    }
+    Err(Skip::Unsigned)
+}
+
+/// Из двух вариантов — с большей версией; при равных — релиз GitHub
+fn better(a: Option<Plan>, b: Option<Plan>) -> Option<Plan> {
+    match (a, b) {
+        (Some(a), Some(b)) => {
+            if parse_version(&b.version) > parse_version(&a.version) {
+                Some(b)
+            } else {
+                Some(a)
+            }
+        }
+        (a, b) => a.or(b),
+    }
+}
+
+/// Проверять ли Google Диск (настройка update.drive, по умолчанию — да)
+fn drive_enabled() -> bool {
+    crate::settings::load()["update"]["drive"].as_bool() != Some(false)
+}
+
+async fn fetch_text(url: &str) -> Result<String, String> {
+    let curl = which("curl").ok_or(tr!("curl не найден", "curl not found"))?;
+    let out = ff::command(&curl)
+        .args(["-sSL", "--fail", "--proto", "=https", "--proto-redir", "=https", "--max-time", "30", "-H", "User-Agent: FF-Montage", url])
+        .output()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !out.status.success() {
+        return Err(tr!("Не удалось открыть {}: {}", "Cannot open {}: {}", url, String::from_utf8_lossy(&out.stderr).trim()));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).to_string())
+}
+
+/// Наборы файлов папки хотфиксов: корень и подпапки (не глубже одного уровня)
+async fn drive_groups() -> Result<Vec<Vec<DriveEntry>>, String> {
+    let list = |id: String| async move {
+        fetch_text(&format!("https://drive.google.com/embeddedfolderview?id={id}")).await.map(|h| parse_drive_listing(&h))
+    };
+    let root = list(DRIVE_FOLDER.to_string()).await?;
+    let mut groups = vec![root.clone()];
+    for f in root.iter().filter(|e| e.folder).take(DRIVE_MAX_SUBFOLDERS) {
+        if let Ok(g) = list(f.id.clone()).await {
+            groups.push(g);
+        }
+    }
+    Ok(groups)
+}
+
+/// Хотфикс с Диска: Ok(None) — нет новее / Диск выключен; Err — Диск не ответил
+async fn drive_check(current: &str) -> Result<Option<Plan>, String> {
+    if !drive_enabled() {
+        return Ok(None);
+    }
+    let groups = drive_groups().await?;
+    Ok(drive_plan(&groups, current, std::env::consts::OS, std::env::consts::ARCH, appimage_path().is_some()).ok())
+}
+
+/// Что ставить: лучший из релиза GitHub и хотфикса с Диска. Возвращает (план или причина, релиз GitHub, ошибка Диска).
+async fn best_plan(current: &str) -> Result<(Result<Plan, Skip>, Option<Value>, Option<String>), String> {
+    let (gh, drive) = tokio::join!(latest_release(), drive_check(current));
+    let appimage = appimage_path().is_some();
+    let gh_plan = gh.as_ref().ok().map(|rel| plan(rel, current, std::env::consts::OS, std::env::consts::ARCH, appimage));
+    let drive_err = drive.as_ref().err().cloned();
+    let drive_plan = drive.unwrap_or(None);
+    if gh.is_err() && drive_plan.is_none() {
+        // GitHub не ответил, а на Диске ничего новее нет (или он тоже не ответил) — ошибка GitHub
+        return Err(gh.err().unwrap_or_default());
+    }
+    let gh_ok = gh_plan.as_ref().and_then(|p| p.as_ref().ok()).cloned();
+    let best = better(gh_ok, drive_plan);
+    let res = match best {
+        Some(p) => Ok(p),
+        None => Err(match gh_plan {
+            Some(Err(e)) => e,
+            _ => Skip::NotNewer,
+        }),
+    };
+    Ok((res, gh.ok(), drive_err))
 }
 
 // ---------------------------------------------------------------------------
@@ -320,21 +488,30 @@ pub async fn update_check(app: AppHandle) -> Result<Value, String> {
             "available": behind > 0,
         }));
     }
-    let rel = latest_release().await?;
+    // Релиз GitHub и хотфикс с Google Диска (0.5.0) — ставится тот, что новее
+    let (p, rel, drive_error) = best_plan(&current).await?;
+    let rel = rel.unwrap_or(Value::Null);
     let tag = rel["tag_name"].as_str().unwrap_or("").to_string();
-    let p = plan(&rel, &current, std::env::consts::OS, std::env::consts::ARCH, appimage_path().is_some());
     // «newer»: версия больше, но поставить нельзя (нет сборки для системы или подписи) — окно так и пишет
     let newer = !matches!(p, Err(Skip::BadTag | Skip::NotNewer));
     let (reason, message) = match &p {
         Ok(_) => (Value::Null, Value::Null),
         Err(e) => (json!(e.code()), json!(e.message())),
     };
+    let from_drive = matches!(&p, Ok(x) if x.source == "drive");
     Ok(json!({
         "mode": "release", "current": current, "latest": tag, "available": p.is_ok(), "newer": newer,
         "reason": reason, "message": message,
-        "url": rel["html_url"], "notes": rel["body"],
-        "asset": p.as_ref().ok().map(|p| json!({ "name": p.name, "url": p.url })),
+        "url": rel["html_url"], "notes": if from_drive { Value::Null } else { rel["body"].clone() },
+        "asset": p.as_ref().ok().map(|p| json!({ "name": p.name, "url": p.url, "version": p.version, "source": p.source })),
+        "drive": { "enabled": drive_enabled(), "error": drive_error, "folder": format!("https://drive.google.com/drive/folders/{DRIVE_FOLDER}") },
     }))
+}
+
+/// Открыть папку хотфиксов в браузере (адрес зашит в программу — окно не может открыть произвольную ссылку)
+#[tauri::command]
+pub fn update_open_drive() -> Result<(), String> {
+    tauri_plugin_opener::open_url(format!("https://drive.google.com/drive/folders/{DRIVE_FOLDER}"), None::<&str>).map_err(|e| e.to_string())
 }
 
 fn emit(app: &AppHandle, text: &str) {
@@ -441,10 +618,12 @@ pub async fn update_apply(app: AppHandle) -> Result<Value, String> {
         return Ok(json!({ "updated": true, "rebuilt": true }));
     }
     // Готовая сборка: те же проверки, что в update_check, затем подпись и SHA-256
-    let rel = latest_release().await?;
     let current = app.package_info().version.to_string();
     let appimage = appimage_path();
-    let p = plan(&rel, &current, std::env::consts::OS, std::env::consts::ARCH, appimage.is_some()).map_err(|e| e.message().to_string())?;
+    let p = best_plan(&current).await?.0.map_err(|e| e.message().to_string())?;
+    if p.source == "drive" {
+        emit(&app, &tr!("Хотфикс {} с Google Диска", "Hotfix {} from Google Drive", p.version));
+    }
     let tmp = paths::get().temp.join("update");
     let _ = std::fs::remove_dir_all(&tmp);
     std::fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
@@ -498,6 +677,15 @@ async fn download_verified(app: &AppHandle, p: &Plan, tmp: &Path) -> Result<Path
     let a = archive.clone();
     let got = tokio::task::spawn_blocking(move || sha256_file(&a)).await.map_err(|e| e.to_string())?.map_err(|e| e.to_string())?;
     if got != want {
+        // Google Диск вместо файла иногда отдаёт страницу («не удалось проверить на вирусы», лимит скачиваний)
+        let html = std::fs::read(&archive).map(|b| b.trim_ascii_start().starts_with(b"<")).unwrap_or(false);
+        if p.source == "drive" && html {
+            return Err(tr!(
+                "Google Диск вернул страницу вместо файла {} (лимит скачиваний или проверка на вирусы) — попробуйте позже",
+                "Google Drive returned a web page instead of {} (download quota or virus scan) — try again later",
+                p.name
+            ));
+        }
         return Err(tr!(
             "SHA-256 архива {} не совпадает с SHA256SUMS — обновление не установлено",
             "SHA-256 of {} does not match SHA256SUMS — the update is not installed",
@@ -697,6 +885,67 @@ mod tests {
         assert_eq!(plan(&release("v0.4.0", &ALL), "garbage", "windows", "x86_64", false), Err(Skip::NotNewer));
         assert_eq!(plan(&release("v0.4.0", &ALL[..4]), "0.3.1", "windows", "x86_64", false), Err(Skip::Unsigned));
         assert_eq!(plan(&release("v0.4.0", &[ALL[0], ALL[4]]), "0.3.1", "windows", "x86_64", false), Err(Skip::Unsigned));
+    }
+
+    // Фрагмент страницы embeddedfolderview (как её отдаёт Google Диск)
+    const DRIVE_HTML: &str = r#"<div class="flip-entries"><div class="flip-entry" id="entry-1AbC_dEf-123" tabindex="0" role="link"><div class="flip-entry-info"><a href="https://drive.google.com/file/d/1AbC_dEf-123/view?usp=drive_web" target="_blank"><div class="flip-entry-visual"></div><div class="flip-entry-list-icon"></div><div class="flip-entry-title">FF-Montage-0.5.1-windows-x64.zip</div></a></div></div><div class="flip-entry" id="entry-SUMS1" tabindex="0"><a href="https://drive.google.com/file/d/SUMS1/view?usp=drive_web"><div class="flip-entry-title">SHA256SUMS</div></a></div><div class="flip-entry" id="entry-SIG1"><a href="https://drive.google.com/file/d/SIG1/view"><div class="flip-entry-title">SHA256SUMS.sig</div></a></div><div class="flip-entry" id="entry-FOLD1"><a href="https://drive.google.com/drive/folders/FOLD1"><div class="flip-entry-title">old &amp; misc</div></a></div><div class="flip-entry" id="entry-bad&quot;id"><div class="flip-entry-title">x</div></div></div>"#;
+
+    #[test]
+    fn drive_listing_parse() {
+        let e = parse_drive_listing(DRIVE_HTML);
+        assert_eq!(e.len(), 4, "{e:?}");
+        assert_eq!(e[0], DriveEntry { id: "1AbC_dEf-123".into(), name: "FF-Montage-0.5.1-windows-x64.zip".into(), folder: false });
+        assert_eq!(e[3], DriveEntry { id: "FOLD1".into(), name: "old & misc".into(), folder: true });
+        assert!(parse_drive_listing("").is_empty());
+        assert!(parse_drive_listing("<html>no entries</html>").is_empty());
+    }
+
+    #[test]
+    fn drive_hotfix_choice() {
+        let root = parse_drive_listing(DRIVE_HTML);
+        let p = drive_plan(&[root.clone()], "0.5.0", "windows", "x86_64", false).unwrap();
+        assert_eq!(p.version, "0.5.1");
+        assert_eq!(p.source, "drive");
+        assert_eq!(p.url, "https://drive.usercontent.google.com/download?id=1AbC_dEf-123&export=download&confirm=t");
+        assert!(p.sums_url.contains("id=SUMS1") && p.sig_url.contains("id=SIG1"));
+        // Уже стоит эта или более новая — не предлагается; Linux-сборки в папке нет
+        assert_eq!(drive_plan(&[root.clone()], "0.5.1", "windows", "x86_64", false), Err(Skip::NotNewer));
+        assert_eq!(drive_plan(&[root.clone()], "0.6.0", "windows", "x86_64", false), Err(Skip::NotNewer));
+        assert_eq!(drive_plan(&[root.clone()], "0.5.0", "linux", "x86_64", false), Err(Skip::NotNewer));
+        // Без подписи — не ставится
+        let unsigned: Vec<DriveEntry> = root.iter().filter(|e| e.name != SIG).cloned().collect();
+        assert_eq!(drive_plan(&[unsigned.clone()], "0.5.0", "windows", "x86_64", false), Err(Skip::Unsigned));
+        // Подпапка с более новой версией и своим SHA256SUMS выигрывает; новее, но без подписи — берётся следующая подписанная
+        let f = |id: &str, n: &str| DriveEntry { id: id.into(), name: n.into(), folder: false };
+        let sub = vec![f("Z2", "FF-Montage-0.5.2-windows-x64.zip"), f("S2", SUMS), f("G2", SIG)];
+        assert_eq!(drive_plan(&[root.clone(), sub.clone()], "0.5.0", "windows", "x86_64", false).unwrap().version, "0.5.2");
+        let sub_unsigned = vec![f("Z3", "FF-Montage-0.5.3-windows-x64.zip")];
+        assert_eq!(drive_plan(&[root.clone(), sub_unsigned], "0.5.0", "windows", "x86_64", false).unwrap().version, "0.5.1");
+        // Похожие имена не подхватываются
+        let odd = vec![
+            f("A", "FF-Montage-0.5.9-windows-x64.zip.part"),
+            f("B", "FF-Montage-0.5.9-beta-windows-x64.zip"),
+            f("S", SUMS),
+            f("G", SIG),
+        ];
+        assert_eq!(drive_plan(&[odd], "0.5.0", "windows", "x86_64", false), Err(Skip::NotNewer));
+    }
+
+    #[test]
+    fn github_vs_drive() {
+        let p = |v: &str, src: &'static str| Plan {
+            version: v.into(),
+            name: String::new(),
+            url: String::new(),
+            sums_url: String::new(),
+            sig_url: String::new(),
+            source: src,
+        };
+        assert_eq!(better(Some(p("0.5.0", "github")), Some(p("0.5.1", "drive"))).unwrap().source, "drive");
+        assert_eq!(better(Some(p("0.5.1", "github")), Some(p("0.5.1", "drive"))).unwrap().source, "github");
+        assert_eq!(better(Some(p("0.6.0", "github")), Some(p("0.5.1", "drive"))).unwrap().source, "github");
+        assert_eq!(better(None, Some(p("0.5.1", "drive"))).unwrap().source, "drive");
+        assert!(better(None, None).is_none());
     }
 
     #[test]

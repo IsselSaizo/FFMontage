@@ -222,6 +222,9 @@ kbd {
 .stage .slot.cover { object-fit: cover; }
 .stage .slot.stretch { object-fit: fill; }
 .stage-overlay { position: absolute; inset: 0; z-index: 3; opacity: 0; pointer-events: none; background: #fff; }
+/* 0.5.0: обводка клипа (preview.js applyBorder) — рамка во весь «экран» с трансформом слоя */
+.stage .slot-ring { position: absolute; inset: 0; display: none; pointer-events: none; transform-origin: 50% 50%; }
+.stage .slot-ring-box { position: absolute; box-sizing: border-box; border-style: solid; }
 /* Слой видеодорожки (свой контекст наложения; z-index = порядок дорожки) */
 .lane-view { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
 .lane-view.lane-hidden { opacity: 0; }
@@ -851,6 +854,40 @@ textarea.input.mono { font-family: Consolas, "Cascadia Mono", monospace; font-si
 .stage canvas.slot.txt.on { visibility: visible; }
 .clip.text { background: linear-gradient(180deg, #5a3fb8, #3b2a7d); }
 .clip.text .text-strip { position: absolute; left: 6px; right: 6px; bottom: 6px; top: 26px; display: flex; align-items: center; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none; text-shadow: 0 1px 2px rgba(0,0,0,.7); }
+/* 0.5.0: панели в отдельных окнах (popout.js) */
+.po-btn { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 24px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--text-2); cursor: pointer; }
+.po-btn:hover { color: var(--text); background: var(--panel-2); }
+.po-btn.on { color: var(--accent); }
+.panel-head.with-po { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.vb-side.right { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
+.tl-toolbar > .po-btn { margin-left: 4px; }
+.popout-ph { display: flex; align-items: center; justify-content: center; min-width: 0; min-height: 0; overflow: hidden; border: 1px dashed var(--line-2); border-radius: var(--radius); color: var(--text-2); }
+.popout-ph .btn { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.popout-ph.narrow .btn { writing-mode: vertical-rl; padding: 10px 4px; }
+.popout-ph.narrow .btn span:first-child { transform: rotate(90deg); }
+body:not([data-mode="video"]) .popout-ph[data-po="right"], body[data-mode="anim"] .popout-ph[data-po="media"] { display: none; }
+body:not([data-mode="anim"]) #app.po-media #workspace { --ws-l: 40px; }
+body[data-mode="video"] #app.po-right #workspace { --ws-r: 40px; }
+#app.po-media #workspace, #app.po-right #workspace { grid-template-columns: var(--ws-l, 300px) minmax(0, 1fr) var(--ws-r, 300px); }
+#app.po-timeline { grid-template-rows: 44px minmax(0, 1fr) 6px 40px; }
+#app.po-timeline > #tl-resizer { visibility: hidden; }
+#app.po-timeline > .popout-ph { margin: 0 8px 6px; }
+/* окно панели */
+body.popout { margin: 0; background: var(--bg); overflow: hidden; }
+.popout-root { position: fixed; inset: 0; display: flex; flex-direction: column; padding: 8px; min-width: 0; min-height: 0; }
+.popout-root.po-timeline { padding: 0; }
+.popout-root > * { flex: 1 1 auto; min-width: 0; min-height: 0; }
+body.popout #media-panel { display: block; }
+body.popout #right-side { display: flex; }
+
+/* 0.5.0: фигуры */
+.clip.text .text-strip.shape-strip { border-radius: 4px; }
+.shape-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; }
+.shape-tile { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); color: var(--text); cursor: pointer; font-size: 12px; text-align: left; }
+.shape-tile:hover { border-color: var(--accent); }
+.shape-tile span:first-child { display: inline-flex; color: #c9b8ff; }
+.shape-types .chip { display: inline-flex; align-items: center; gap: 5px; }
+.shape-types .chip span { display: inline-flex; }
 .tl-row.subs { margin-top: 6px; }
 .tl-head.sub-head { cursor: pointer; }
 .tl-head.sub-head.selected { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }

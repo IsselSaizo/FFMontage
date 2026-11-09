@@ -15,7 +15,9 @@ import { reportSkipped } from './edit.js';
 import { activeFx, fxSummary } from './audioFx.js';
 import { t, getLang } from './i18n.js';
 import { withKey } from './keymap.js';
-import { isText, TEXT_MAX } from './textModel.js';
+import { isText, isGraphic, TEXT_MAX } from './textModel.js';
+import { isShape, cleanShape } from './shapes.js';
+import { cleanTimer } from './timer.js';
 import { fontFamilies } from './textRender.js';
 import { subtitleRows, importSubtitles } from './subtitlesUi.js';
 import { getPref, setPref } from './prefs.js';
@@ -173,7 +175,7 @@ export class Timeline {
     this.bladeTc.textContent = fmtTime(bt);
     const clipEl = ev.target.closest('.clip');
     const f = clipEl && store.findClip(clipEl.dataset.id);
-    const rt = f && f.kind === 'video' && !isText(f.clip) ? store.runtime[f.clip.mediaId] : null;
+    const rt = f && f.kind === 'video' && !isGraphic(f.clip) ? store.runtime[f.clip.mediaId] : null;
     if (rt && rt.thumbs && rt.thumbs.urls.length) {
       const idx = clamp(Math.round(srcAt(f.clip, bt) / rt.thumbs.interval), 0, rt.thumbs.urls.length - 1);
       if (this.bladeImg.dataset.src !== rt.thumbs.urls[idx]) { this.bladeImg.dataset.src = rt.thumbs.urls[idx]; this.bladeImg.src = rt.thumbs.urls[idx]; }
@@ -204,7 +206,7 @@ export class Timeline {
       if (n.next && n.nextAdj && (r.right - x <= ROLL || ev.altKey)) return { op: 'roll', id };
       return { op: 'ripple-r', id };
     }
-    if (isText(n.clip)) return { op: 'slide', id };
+    if (isGraphic(n.clip)) return { op: 'slide', id };
     return { op: ev.clientY - r.top < r.height * 0.45 ? 'slide' : 'slip', id };
   }
 
@@ -693,6 +695,9 @@ export class Timeline {
   clipLabel(c, m, extra = null) {
     const label = h('div', { class: 'clip-label' });
     if (isText(c)) label.append(h('span', { class: 'ci fxb', title: t('Текст — двойной щелчок, чтобы изменить') }, 'T'));
+    if (isShape(c)) label.append(h('span', { class: 'ci fxb', title: t('Фигура — двойной щелчок, чтобы изменить') }, '◆'));
+    if (c.kind === 'timer') label.append(h('span', { class: 'ci fx', title: t('Таймер — двойной щелчок, чтобы настроить'), html: icon('timer', 13) }));
+    if (c.border) label.append(h('span', { class: 'ci fxb', title: t('Обводка или скруглённые углы') }, '▢'));
     if (isReversed(c)) label.append(h('span', { class: 'ci fx', title: t('Задом наперёд'), html: icon('reverse', 13) }));
     if (isFreeze(c)) label.append(h('span', { class: 'ci fx', title: t('Стоп-кадр'), html: icon('freeze', 13) }));
     const fxl = clipEffects(c);
@@ -717,8 +722,26 @@ export class Timeline {
     const rt = store.runtime[c.mediaId] || {};
     const left = seg.start * this.pps;
     const width = (seg.end - seg.start) * this.pps;
-    const el = this.clipBase('video', c, left, width, isText(c) ? 'text' : '');
+    const el = this.clipBase('video', c, left, width, isGraphic(c) ? 'text' : '');
     const sel = el.classList.contains('selected');
+    if (c.kind === 'timer') {
+      // Таймер: полоса отсчёта (цвет корпуса) и звонок в конце (штриховка)
+      const tm = cleanTimer(c.timer);
+      const ring = Math.max(0, Math.min(1, (tlLen(c) - tm.duration) / Math.max(0.01, tlLen(c))));
+      el.append(h('div', { class: 'text-strip shape-strip timer-strip', style: { background: `linear-gradient(90deg, ${tm.caseColor}cc, ${tm.fillColor}99 ${Math.round((1 - ring) * 100)}%, transparent ${Math.round((1 - ring) * 100)}%)` } }));
+      el.append(this.clipLabel(c, m, h('span', { class: 'cd' }, fmtTime(tlLen(c), { ms: false }))));
+      this.decorate(el, c, width, sel);
+      return el;
+    }
+    if (isShape(c)) {
+      // Фигура: полоса цвета заливки (или контура, если заливки нет)
+      const sh = cleanShape(c.shape);
+      const col = sh.fillOpacity > 0 ? sh.fill : sh.stroke;
+      el.append(h('div', { class: 'text-strip shape-strip', style: { background: `linear-gradient(90deg, ${col}cc, ${col}55)` } }));
+      el.append(this.clipLabel(c, m, h('span', { class: 'cd' }, fmtTime(tlLen(c), { ms: false }))));
+      this.decorate(el, c, width, sel);
+      return el;
+    }
     if (isText(c)) {
       // Текст: образец оформления (цвет, жирность, курсив) вместо плёнки
       const tx = c.text || {};
@@ -887,6 +910,8 @@ export class Timeline {
     // Анимация из пресета — открыть её в редакторе «Анимации»
     const f = store.findClip(clipEl.dataset.id);
     if (f && isText(f.clip)) { store.emit('focus-inspector', 'text'); return; }
+    if (f && isShape(f.clip)) { store.emit('focus-inspector', 'shape'); return; }
+    if (f && f.clip.kind === 'timer') { store.emit('focus-inspector', 'timer'); return; }
     const m = f && store.media(f.clip.mediaId);
     if (m && m.anim) { store.emit('anim-edit', f.clip.id); return; }
     store.setTime(this.xToTime(e.clientX));
@@ -960,7 +985,7 @@ export class Timeline {
     const origVT = store.project.videoTracks ? clone(store.project.videoTracks) : null;
     const origTracks = clone(store.project.audioTracks);
     const x0 = e.clientX; const y0 = e.clientY;
-    const txt = isText(orig);
+    const txt = isGraphic(orig);
     // У текста нет файла: длина — любая (обрезка слева двигает начало, fixup держит in = 0)
     const media = txt ? { duration: TEXT_MAX } : store.media(f.clip.mediaId) || { duration: orig.out };
     // Связанные клипы (видео и его звук) двигаются и обрезаются вместе
@@ -993,7 +1018,7 @@ export class Timeline {
     const vi = vOrig ? sorted.findIndex((c) => c.id === vOrig.id) : -1;
     const prevEnd = vi > 0 ? clipEnd(sorted[vi - 1]) : 0;
     const nextStart = vi >= 0 && vi < sorted.length - 1 ? sorted[vi + 1].start : Infinity;
-    const mediaDur = (c) => { if (isText(c)) return TEXT_MAX; const m = store.media(c.mediaId); return m ? m.duration : c.out; };
+    const mediaDur = (c) => { if (isGraphic(c)) return TEXT_MAX; const m = store.media(c.mediaId); return m ? m.duration : c.out; };
     // Обрезка партнёров на тот же сдвиг (Alt — только этот клип)
     const trimPartners = (ev, side, d) => {
       if (ev.altKey) return;

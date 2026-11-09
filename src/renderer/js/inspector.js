@@ -12,7 +12,8 @@ import { onRegistryChange } from './registry.js';
 import { speedOf, tlLen, fmtSpeed, SPEED_PRESETS, MIN_SPEED, MAX_SPEED } from './clipTime.js';
 import { tfOf, cleanTransform, TF_DEFAULT } from './transform.js';
 import { isText } from './textModel.js';
-import { renderTextClip, renderCue, renderSubTrack } from './textInspector.js';
+import { renderTextClip, renderShapeClip, renderTimerClip, borderSection, renderCue, renderSubTrack } from './textInspector.js';
+import { isShape } from './shapes.js';
 import { getPref, setPref } from './prefs.js';
 
 // Число как есть, но с десятичным разделителем языка: 0,8 / 0.8 (без лишних нулей, в отличие от i18n num)
@@ -125,6 +126,8 @@ export function initInspector() {
     const sel = s ? store.findClip(s.id) : null;
     if (!sel) return renderProject();
     if (isText(sel.clip)) { renderTextClip(ui, sel); applyFocus(); return; }
+    if (isShape(sel.clip)) { renderShapeClip(ui, sel); applyFocus(); return; }
+    if (sel.clip.kind === 'timer') { renderTimerClip(ui, sel); applyFocus(); return; }
     const { kind, clip } = sel;
     const m = store.media(clip.mediaId) || {};
     const srcMedia = m.derived ? store.media(m.derived.from) || m : m;
@@ -214,6 +217,8 @@ export function initInspector() {
 
     // --- Трансформ (видео): положение, масштаб, поворот, прозрачность; в плеере — рамка с ручками ---
     if (kind === 'video') root.append(transformSection(clip, sel));
+    // --- Обводка и скруглённые углы (0.5.0) ---
+    if (kind === 'video' && m.hasVideo !== false) root.append(borderSection(ui, clip, !!(sel.lane && sel.lane.locked)));
 
     // --- Фильтры (видео): список — во вкладке «Фильтры», подгонка и кадрирование — над плеером ---
     if (kind === 'video') {

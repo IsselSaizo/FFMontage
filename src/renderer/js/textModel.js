@@ -66,6 +66,9 @@ const STYLE_RE = /^[a-z0-9][a-z0-9_.-]{0,80}$/i;
 export const MAX_TEXT_LEN = 5000;
 
 export const isText = (c) => !!c && c.kind === 'text';
+// Клип без файла (текст или фигура, 0.5.0): звука, скорости и кадров файла нет, длина — любая до TEXT_MAX
+export const isGraphic = (c) => !!c && (c.kind === 'text' || c.kind === 'shape' || c.kind === 'timer');
+export const GRAPHIC_KINDS = Object.freeze(['text', 'shape', 'timer']);
 export const isFontName = (s) => typeof s === 'string' && FONT_RE.test(s.trim());
 
 const round = (v, d) => Math.round(v * 10 ** d) / 10 ** d;
