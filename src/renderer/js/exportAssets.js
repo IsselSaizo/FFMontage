@@ -4,12 +4,10 @@
 //               мягкие: .srt на каждую дорожку → потоки mov_text в MP4.
 // Результат кладётся в settings.assets (см. buildExport). Файлы сохраняет Rust (export_asset_save) — по содержимому,
 // повторный экспорт того же текста не пишет файл заново.
-import { isText } from './textModel.js';
-import { renderTextImage, ensureFonts } from './textRender.js';
-import { isShape, renderShapeImage } from './shapes.js';
+import { graphicOf } from './graphicKinds.js';
+import './textRender.js';   // экспорт текста (graphics.js)
 import { borderOf, renderBorderImages } from './border.js';
 import { layerSize } from './exportPlan.js';
-import { isTimer, cleanTimer, drawTimer, timerBox, timerFrameTimes, makeApng } from './timer.js';
 import { toAss, toSrt } from './subtitles.js';
 import { fontFile } from './fonts.js';
 import { hasVst } from './audioFx.js';
@@ -79,11 +77,7 @@ async function digest(buf) {
   const h = new Uint8Array(await crypto.subtle.digest('SHA-1', buf));
   return Array.from(h, (b) => b.toString(16).padStart(2, '0')).join('');
 }
-// Цифры таймера — шрифтом Inter (иначе первый кадр нарисуется запасным)
-async function ensureTimerFont() {
-  if (typeof document === 'undefined' || !document.fonts) return;
-  await document.fonts.load('700 40px "Inter"', '0123456789:').catch(() => null);
-}
+const canvasOf = (w, h) => (typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(w, h) : Object.assign(document.createElement('canvas'), { width: w, height: h }));
 
 /** Видимые дорожки субтитров с репликами */
 export const exportableSubs = (p) => (p.subtitleTracks || []).filter((tr) => !tr.hidden && tr.cues && tr.cues.length);
@@ -99,42 +93,18 @@ export async function prepareExportAssets(project, settings, api) {
   // «Только звук» (0.4.1): картинки текстов и субтитры не нужны
   if (/^(mp3|m4a|wav|ogg)$/.test(String(settings.container || ''))) return assets;
   const shown = visibleLanes(project).filter((l) => !l.hidden).flatMap((l) => l.clips);
-  const texts = shown.filter(isText);
-  if (texts.length) {
-    await ensureFonts(texts);
-    for (const c of texts) {
-      const img = renderTextImage(c, W, H);
-      const path = await api.exportAssetSave('png', await pngBase64(img.canvas));
-      assets.texts[c.id] = { path, w: img.w, h: img.h, roll: img.roll };
-    }
-  }
-  // Фигуры (0.5.0) — так же, как текст: кадр W×H с фигурой на своём месте
-  for (const c of shown.filter(isShape)) {
-    const img = renderShapeImage(c, W, H);
-    const path = await api.exportAssetSave('png', await pngBase64(img.canvas));
-    assets.texts[c.id] = { path, w: img.w, h: img.h, roll: false };
-  }
-  // Таймеры (0.5.0): кадры в рамке вокруг таймера → анимированный PNG (одинаковые подряд кадры склеиваются)
-  const timers = shown.filter(isTimer);
-  if (timers.length) await ensureTimerFont();
-  for (const c of timers) {
-    const box = timerBox(c, W, H);
-    const cv = typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(box.w, box.h) : Object.assign(document.createElement('canvas'), { width: box.w, height: box.h });
-    const ctx = cv.getContext('2d');
-    const len = Math.max(0.05, (c.out - c.in));
-    const frames = []; const delays = []; let prev = '';
-    for (const f of timerFrameTimes(cleanTimer(c.timer), len, settings.fps || 30)) {
-      ctx.setTransform(1, 0, 0, 1, 0, 0);
-      ctx.clearRect(0, 0, box.w, box.h);
-      ctx.translate(-box.x, -box.y);
-      drawTimer(ctx, c, W, H, f.t);
-      const png = await pngBytes(cv);
-      const key = await digest(png);
-      if (key === prev) { delays[delays.length - 1] += f.d; continue; }
-      prev = key; frames.push(png); delays.push(f.d);
-    }
-    const path = await api.exportAssetSave('apng', bytesBase64(makeApng(frames, delays)));
-    assets.texts[c.id] = { path, w: box.w, h: box.h, x: box.x, y: box.y, roll: false, anim: true };
+  // Графические клипы (текст, фигуры, таймеры — graphics.js): каждый вид готовит свой файл (exportAsset);
+  // в плане экспорта он — картинка с альфой (кадр W×H или рамка x, y, w×h; anim — анимация)
+  const env = {
+    W, H, fps: settings.fps || 30,
+    save: (kind, b64) => api.exportAssetSave(kind, b64),
+    pngBytes, pngBase64, bytesBase64, digest, canvas: canvasOf,
+  };
+  for (const c of shown) {
+    const g = graphicOf(c);
+    if (!g || !g.exportAsset) continue;
+    const a = await g.exportAsset(c, env);
+    if (a && a.path) assets.texts[c.id] = a;
   }
   // Обводка и скруглённые углы видео / картинок (0.5.0): PNG точно размера слоя (exportPlan.layerSize)
   for (const c of shown) {

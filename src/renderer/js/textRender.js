@@ -4,6 +4,7 @@
 import { cleanText } from './textModel.js';
 import { tfOf } from './transform.js';
 import { tlLen } from './clipTime.js';
+import { registerGraphic } from './graphics.js';
 
 let measure = null;
 const mctx = () => {
@@ -178,3 +179,15 @@ export async function ensureFonts(clips) {
   }
   await Promise.all([...want].map((f) => document.fonts.load(f, 'AaЯя').catch(() => null))); // i18n-ignore
 }
+
+// Вид 'text' (graphics.js): рисунок, рамка гизмо и картинка для экспорта
+registerGraphic('text', {
+  rect: (clip, W, H, local = 0) => textRect(clip, W, H, local),
+  draw: (ctx, clip, W, H, local = 0) => drawText(ctx, clip, W, H, { local }),
+  animated: (clip) => cleanText(clip && clip.text).motion === 'roll',
+  async exportAsset(clip, env) {
+    await ensureFonts([clip]);
+    const img = renderTextImage(clip, env.W, env.H);
+    return { path: await env.save('png', await env.pngBase64(img.canvas)), w: img.w, h: img.h, roll: img.roll };
+  },
+});

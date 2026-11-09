@@ -6,7 +6,7 @@ import { h, toast, errText, fmtTime, icon } from './util.js';
 import { t, getLang } from './i18n.js';
 import { keyHint } from './keymap.js';
 import { clipEnd } from './clipTime.js';
-import { isGraphic } from './textModel.js';
+import { isGraphic } from './graphicKinds.js';
 
 const dec = (x) => (getLang() === 'ru' ? String(x).replace('.', ',') : String(x));
 

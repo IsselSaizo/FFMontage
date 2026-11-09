@@ -15,10 +15,10 @@ import { reportSkipped } from './edit.js';
 import { activeFx, fxSummary } from './audioFx.js';
 import { t, getLang } from './i18n.js';
 import { withKey } from './keymap.js';
-import { isText, isGraphic, TEXT_MAX } from './textModel.js';
-import { isShape, cleanShape } from './shapes.js';
-import { cleanTimer } from './timer.js';
-import { fontFamilies } from './textRender.js';
+import { TEXT_MAX } from './textModel.js';
+import { isGraphic, graphicOf } from './graphicKinds.js';
+import { graphicBadge } from './graphicsUi.js';
+import { mapPoint } from './uidoc.js';
 import { subtitleRows, importSubtitles } from './subtitlesUi.js';
 import { getPref, setPref } from './prefs.js';
 import { routeOf, channelLabels, isDefaultRoute } from './audioLayout.js';
@@ -694,9 +694,8 @@ export class Timeline {
 
   clipLabel(c, m, extra = null) {
     const label = h('div', { class: 'clip-label' });
-    if (isText(c)) label.append(h('span', { class: 'ci fxb', title: t('Текст — двойной щелчок, чтобы изменить') }, 'T'));
-    if (isShape(c)) label.append(h('span', { class: 'ci fxb', title: t('Фигура — двойной щелчок, чтобы изменить') }, '◆'));
-    if (c.kind === 'timer') label.append(h('span', { class: 'ci fx', title: t('Таймер — двойной щелчок, чтобы настроить'), html: icon('timer', 13) }));
+    const gb = graphicBadge(c);
+    if (gb) label.append(gb);
     if (c.border) label.append(h('span', { class: 'ci fxb', title: t('Обводка или скруглённые углы') }, '▢'));
     if (isReversed(c)) label.append(h('span', { class: 'ci fx', title: t('Задом наперёд'), html: icon('reverse', 13) }));
     if (isFreeze(c)) label.append(h('span', { class: 'ci fx', title: t('Стоп-кадр'), html: icon('freeze', 13) }));
@@ -724,29 +723,11 @@ export class Timeline {
     const width = (seg.end - seg.start) * this.pps;
     const el = this.clipBase('video', c, left, width, isGraphic(c) ? 'text' : '');
     const sel = el.classList.contains('selected');
-    if (c.kind === 'timer') {
-      // Таймер: полоса отсчёта (цвет корпуса) и звонок в конце (штриховка)
-      const tm = cleanTimer(c.timer);
-      const ring = Math.max(0, Math.min(1, (tlLen(c) - tm.duration) / Math.max(0.01, tlLen(c))));
-      el.append(h('div', { class: 'text-strip shape-strip timer-strip', style: { background: `linear-gradient(90deg, ${tm.caseColor}cc, ${tm.fillColor}99 ${Math.round((1 - ring) * 100)}%, transparent ${Math.round((1 - ring) * 100)}%)` } }));
-      el.append(this.clipLabel(c, m, h('span', { class: 'cd' }, fmtTime(tlLen(c), { ms: false }))));
-      this.decorate(el, c, width, sel);
-      return el;
-    }
-    if (isShape(c)) {
-      // Фигура: полоса цвета заливки (или контура, если заливки нет)
-      const sh = cleanShape(c.shape);
-      const col = sh.fillOpacity > 0 ? sh.fill : sh.stroke;
-      el.append(h('div', { class: 'text-strip shape-strip', style: { background: `linear-gradient(90deg, ${col}cc, ${col}55)` } }));
-      el.append(this.clipLabel(c, m, h('span', { class: 'cd' }, fmtTime(tlLen(c), { ms: false }))));
-      this.decorate(el, c, width, sel);
-      return el;
-    }
-    if (isText(c)) {
-      // Текст: образец оформления (цвет, жирность, курсив) вместо плёнки
-      const tx = c.text || {};
-      el.append(h('div', { class: 'text-strip', style: { color: tx.color || '#fff', fontWeight: String(tx.weight || 700), fontStyle: tx.italic ? 'italic' : '', fontFamily: fontFamilies(tx.font || 'Inter') } },
-        (tx.content || '').replace(/\s*\n\s*/g, ' · ')));
+    const g = graphicOf(c);
+    if (g) {
+      // Графический клип (graphics.js): полоса вида вместо плёнки (текст — образец оформления, фигура — цвет…)
+      const strip = g.ui.strip ? g.ui.strip(c) : null;
+      el.append(strip || h('div', { class: 'text-strip' }));
       el.append(this.clipLabel(c, m, h('span', { class: 'cd' }, fmtTime(tlLen(c), { ms: false }))));
       this.decorate(el, c, width, sel);
       return el;
@@ -909,9 +890,7 @@ export class Timeline {
     if (!clipEl) return;
     // Анимация из пресета — открыть её в редакторе «Анимации»
     const f = store.findClip(clipEl.dataset.id);
-    if (f && isText(f.clip)) { store.emit('focus-inspector', 'text'); return; }
-    if (f && isShape(f.clip)) { store.emit('focus-inspector', 'shape'); return; }
-    if (f && f.clip.kind === 'timer') { store.emit('focus-inspector', 'timer'); return; }
+    if (f && isGraphic(f.clip)) { store.emit('focus-inspector', f.clip.kind); return; }
     const m = f && store.media(f.clip.mediaId);
     if (m && m.anim) { store.emit('anim-edit', f.clip.id); return; }
     store.setTime(this.xToTime(e.clientX));
@@ -1220,10 +1199,14 @@ export class Timeline {
   // ------------------------------------------------------------------------
   // Перетаскивание сделано без HTML5 drag&drop (в Tauri его заменяет перетаскивание файлов из Проводника):
   // медиатека и окно вызывают dragHover / dragLeave / dropAt с координатами курсора.
+  // Координаты x, y у dragHover / dropAt / dropGraphic — главного окна; таймлайн может быть в отдельном окне
+  // (popout.js) — точка переводится в его координаты (local), там же ищется дорожка под курсором.
+  local(x, y) { return mapPoint(x, y, window, this.scroll.ownerDocument.defaultView || window); }
+
   dropTargetAt(x, y) {
     const r = this.scroll.getBoundingClientRect();
     if (x < r.left || x > r.right || y < r.top || y > r.bottom) return null;
-    const el = document.elementFromPoint(x, y);
+    const el = this.scroll.ownerDocument.elementFromPoint(x, y);
     const lane = el && el.closest('[data-lane]');
     if (!lane) return { kind: 'none' };
     if (lane.dataset.lane === 'audio') return { kind: 'audio', track: lane.dataset.track };
@@ -1234,6 +1217,7 @@ export class Timeline {
 
   // true — курсор над таймлайном
   dragHover(x, y, mediaId = null) {
+    [x, y] = this.local(x, y);
     const tg = this.dropTargetAt(x, y);
     if (!tg) { this.dragLeave(); return false; }
     const m = mediaId ? store.media(mediaId) : null;
@@ -1249,6 +1233,7 @@ export class Timeline {
 
   // ids — медиа из медиатеки или paths — файлы из Проводника. false — точка вне таймлайна.
   async dropAt(x, y, { ids = [], paths = [], alt = false } = {}) {
+    [x, y] = this.local(x, y);
     const tg0 = this.dropTargetAt(x, y);
     this.dragLeave();
     if (!tg0) return false;
@@ -1258,6 +1243,20 @@ export class Timeline {
     if (paths.length) ids = await importPaths(paths);
     this.placeDropped(ids, tg, t, vt, alt);
     return true;
+  }
+
+  // Плитка «Библиотеки» (графический клип вида kind, данные data): на видеодорожку под курсором с места курсора
+  // (затирает то, что под клипом, как файл без Alt); над аудиодорожками и пустым местом — новая верхняя видеодорожка.
+  // Возвращает клип, null — дорожка под замком, false — точка вне таймлайна.
+  dropGraphic(x, y, kind, data) {
+    [x, y] = this.local(x, y);
+    const tg = this.dropTargetAt(x, y);
+    this.dragLeave();
+    if (!tg) return false;
+    const lane = tg.kind === 'video' ? (tg.vlane || MAIN_LANE) : 'new';
+    const L = lane !== 'new' ? store.vlane(lane) : null;
+    if (L && L.locked) { toast(t('Дорожка «{name}» закрыта замком', { name: store.trackName(L.id) }), 'info', 1600); return null; }
+    return store.addGraphicClip(kind, data, { at: this.dropTime(x), lane });
   }
 
   initDrop() {}

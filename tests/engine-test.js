@@ -559,12 +559,33 @@ async function timerTest(enc) {
   const timer = await js('timer.js');
   const plan = await js('exportPlan.js');
   const codec = enc.h264_nvenc ? 'h264_nvenc' : 'libx264';
-  const tm = timer.cleanTimer({ duration: 0.2, mode: 'sideways', size: 9, caseColor: 'x' });
-  assert(tm.duration === 1 && tm.mode === 'down' && tm.size === 1.5 && tm.caseColor === '#f06b93', `cleanTimer: ${JSON.stringify(tm)}`);
-  const s = (d, mode, l) => timer.timerState(timer.cleanTimer({ duration: d, mode }), l);
+  const styles = await js('timerStyles.js');
+  const tm = timer.cleanTimer({ duration: 0.2, mode: 'sideways', size: 9, style: 'neon', ring: 'x', colors: { case: 'x', fill: '#ABCDEF' } });
+  assert(tm.duration === 1 && tm.mode === 'down' && tm.size === 1.5 && tm.style === 'classic' && tm.ring === 'once' && tm.progress === 'elapsed'
+    && tm.colors.case === styles.stylePalette('classic').case && tm.colors.fill === '#abcdef', `cleanTimer: ${JSON.stringify(tm)}`);
+  // Смена стиля без цветов — цвета нового стиля; со своими цветами — они
+  const tr = timer.cleanTimer({ style: 'retro' }, tm);
+  assert(tr.style === 'retro' && tr.colors.case === styles.stylePalette('retro').case, `стиль ретро — его цвета: ${tr.colors.case}`);
+  assert(timer.cleanTimer({ colors: { ...tr.colors, fill: '#123456' } }, tr).colors.fill === '#123456', 'свой цвет сектора сохраняется');
+  const s = (d, mode, l, ring = 'once') => timer.timerState(timer.cleanTimer({ duration: d, mode, ring }), l);
   assert(s(10, 'down', 0).text === '0:10' && s(10, 'down', 0.5).text === '0:10' && s(10, 'down', 9.5).text === '0:01' && s(10, 'down', 10).text === '0:00' && s(10, 'down', 10).ringing,
     'обратный отсчёт 10 → 1 → 0, в конце — звонок');
   assert(s(90, 'up', 0).text === '0:00' && s(90, 'up', 65.4).text === '1:05' && s(90, 'up', 95).text === '1:30' && !s(90, 'up', 89).ringing, 'прямой отсчёт 0:00 → 1:30');
+  assert(s(600, 'down', 0).text === '10:00' && s(600, 'down', 1).text === '09:59' && s(3600, 'down', 0).text === '1:00:00' && s(3600, 'down', 3599.5).text === '0:00:01', 'формат по длительности: mm:ss, h:mm:ss');
+  // Звонок: один раз / повторять / нет
+  const R = timer.RING_DUR;
+  assert(s(10, 'down', 10 + R + 0.1).ringing === false && s(10, 'down', 10 + R + 0.1, 'loop').ringing && Math.abs(s(10, 'down', 10 + R + 0.1, 'loop').u - 0.1) < 1e-6
+    && s(10, 'down', 10.2, 'none').ringing === false && s(10, 'down', 10.2, 'none').text === '0:00', 'звонок: один раз, повтор, без звонка');
+  const L = (ring, cur) => timer.timerClipLen({ duration: 10, ring }, cur);
+  assert(Math.abs(L('once') - (10 + R)) < 1e-6 && L('none') === 10 && Math.abs(L('loop') - (10 + 3 * R)) < 1e-6 && L('loop', 30) === 30 && Math.abs(L('loop', 11) - (10 + 3 * R)) < 1e-6,
+    `длина клипа: ${L('once')} / ${L('none')} / ${L('loop')} / ${L('loop', 30)}`);
+  // Слои стилей: SVG у всех трёх, половинки сектора и стрелка — в квадрате spin
+  for (const id of styles.TIMER_STYLES) {
+    const x = styles.layerSvgs(id, styles.stylePalette(id), { fmt: 'm:ss', progress: 'elapsed', digits: true });
+    assert(['back', 'front', 'hand', 'halfL', 'halfR', 'rightOv'].every((k) => typeof x[k] === 'string' && x[k].startsWith('<svg')) && x.digits && x.digits.fs > 0, `слои стиля ${id}`);
+    const rg = styles.ringSvgs(id, styles.stylePalette(id), { fmt: 'm:ss', progress: 'elapsed', digits: true }, 0.5);
+    assert(rg.under.startsWith('<svg') && Array.isArray(rg.pose) && rg.pose.length > 0, `звонок стиля ${id}`);
+  }
   const ft = timer.timerFrameTimes(timer.cleanTimer({ duration: 10 }), 10 + timer.RING_DUR, 30);
   const sum = ft.reduce((a, x) => a + x.d, 0);
   assert(Math.abs(sum - 11.6) < 1e-6 && ft.length <= 900 + 60 && ft[0].t === 0, `кадры экспорта: ${ft.length}, сумма ${sum}`);

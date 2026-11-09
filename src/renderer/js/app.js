@@ -28,7 +28,7 @@ import * as edit from './edit.js';
 import { initShuttle } from './shuttle.js';
 import { initTrimPreview } from './trimPreview.js';
 import { initGamepad } from './gamepad.js';
-import { initPopouts, onPopout, popOut, dock, poppedOut } from './popout.js';
+import { initPopouts, onPopout, popOut, dock, poppedOut, setExperimental } from './popout.js';
 
 // Мост для ИИ-ассистента грузим отдельно: если с ним что-то не так, редактор всё равно запустится
 const mcpReady = import('./mcpBridge.js').catch((e) => { console.error('mcpBridge', e); return null; });
@@ -153,21 +153,19 @@ async function checkUpdates() {
       r.behind && !r.cargo ? h('p', { class: 'muted small' }, t('Rust (cargo) не найден: исходники обновятся, но программу нужно будет пересобрать или скачать готовую сборку.')) : null,
       logBox);
   } else {
-    const drive = r.drive || {};
-    const hotfix = r.available && r.asset && r.asset.source === 'drive';
+    const hotfixes = r.hotfixes || {};
+    const hotfix = r.available && r.asset && r.asset.hotfix;
     body.append(
       h('p', {}, t('Установлена версия {v}. Последний релиз: {latest}', { v: r.current, latest: r.latest || '—' })),
-      hotfix ? h('p', {}, t('На Google Диске есть хотфикс {v} — исправления, для которых ещё не выпущен релиз.', { v: r.asset.version })) : null,
+      hotfix ? h('p', {}, t('Доступен хотфикс {v} — исправления, которые войдут в следующий релиз.', { v: r.asset.version })) : null,
       r.available ? h('p', {}, t('Будет скачан {name}. Настройки и проекты не затрагиваются.', { name: r.asset.name }))
         // r.message — причина от Rust (нет сборки для системы, релиз без подписи, неверный тег), уже на языке интерфейса
         : h('p', { class: 'muted' }, r.newer ? (r.message || t('Для этой системы в релизе нет готовой сборки.')) : t('У вас последняя версия.')),
       r.notes ? h('pre', { class: 'update-log' }, r.notes) : null,
-      // 0.5.0: хотфиксы с Google Диска — переключатель (settings.json → update.drive) и ссылка на папку
-      h('label', { class: 'check-row', title: t('Подписанные сборки с исправлениями между релизами. Проверка подписи та же, что у релизов GitHub.') },
-        h('input', { type: 'checkbox', id: 'update-drive', checked: drive.enabled !== false, onchange: (e) => setPref('update.drive', e.target.checked) }),
-        h('span', {}, t('Искать хотфиксы на Google Диске'))),
-      drive.error ? h('p', { class: 'muted small' }, t('Google Диск не ответил: {e}', { e: drive.error })) : null,
-      drive.folder ? h('p', { class: 'muted small' }, h('a', { href: '#', onclick: (e) => { e.preventDefault(); api.updateOpenDrive().catch((x) => toast(errText(x), 'error')); } }, t('Папка хотфиксов'))) : null,
+      // Хотфиксы — пре-релизы GitHub vX.Y.Z-hotfix.N (settings.json → update.hotfixes, по умолчанию включено)
+      h('label', { class: 'check-row', title: t('Подписанные предварительные выпуски GitHub с исправлениями между релизами. Подпись проверяется так же, как у релизов.') },
+        h('input', { type: 'checkbox', id: 'update-hotfixes', checked: hotfixes.enabled !== false, onchange: (e) => setPref('update.hotfixes', e.target.checked) }),
+        h('span', {}, t('Получать хотфиксы (предварительные выпуски с исправлениями)'))),
       logBox);
   }
   foot.append(closeBtn);
@@ -429,7 +427,7 @@ async function main() {
     gizmo.draw();
   });
   initPopouts();
-  window.__ffm = { store, preview, timeline, importPaths, openExport, browser, crop, gizmo, anim, openSettings, reloadUi, plugins: pluginHost, loadProjectText: loadFromText, subsOverlay, fontsReady, shuttle, edit, popout: { popOut, dock, poppedOut } };
+  window.__ffm = { store, preview, timeline, importPaths, openExport, browser, crop, gizmo, anim, openSettings, reloadUi, plugins: pluginHost, loadProjectText: loadFromText, subsOverlay, fontsReady, shuttle, edit, popout: { popOut, dock, poppedOut, setExperimental } };
   const bridge = await mcpReady;
   if (bridge) bridge.initMcpBridge({
     loadProjectText: (text, filePath) => loadFromText(text, filePath),

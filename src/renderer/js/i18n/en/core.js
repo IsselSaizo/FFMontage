@@ -70,11 +70,9 @@ export default {
   'Rust (cargo) не найден: исходники обновятся, но программу нужно будет пересобрать или скачать готовую сборку.': 'Rust (cargo) not found: the sources will update, but you will need to rebuild the app or download a ready-made build.',
   'Установлена версия {v}. Последний релиз: {latest}': 'Installed version {v}. Latest release: {latest}',
   'Будет скачан {name}. Настройки и проекты не затрагиваются.': '{name} will be downloaded. Settings and projects are not affected.',
-  'На Google Диске есть хотфикс {v} — исправления, для которых ещё не выпущен релиз.': 'Hotfix {v} is available on Google Drive — fixes that have not been released yet.',
-  'Подписанные сборки с исправлениями между релизами. Проверка подписи та же, что у релизов GitHub.': 'Signed builds with fixes between releases. The signature check is the same as for GitHub releases.',
-  'Искать хотфиксы на Google Диске': 'Look for hotfixes on Google Drive',
-  'Google Диск не ответил: {e}': 'Google Drive did not respond: {e}',
-  'Папка хотфиксов': 'Hotfix folder',
+  'Доступен хотфикс {v} — исправления, которые войдут в следующий релиз.': 'Hotfix {v} is available — fixes that will be part of the next release.',
+  'Подписанные предварительные выпуски GitHub с исправлениями между релизами. Подпись проверяется так же, как у релизов.': 'Signed GitHub pre-releases with fixes between releases. The signature is checked the same way as for releases.',
+  'Получать хотфиксы (предварительные выпуски с исправлениями)': 'Get hotfixes (pre-releases with fixes)',
   'Для этой системы в релизе нет готовой сборки.': 'The release has no build for this system.',
 
   // Действия и категории (keymap.js)

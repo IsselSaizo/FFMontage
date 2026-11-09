@@ -10,6 +10,7 @@
 // и overlay обводки до прозрачности и поворота слоя.
 // Без DOM при импорте.
 import { roundRectPath } from './shapes.js';
+import { isGraphic } from './graphicKinds.js';
 
 export const BORDER_DEFAULT = Object.freeze({ width: 0.004, color: '#e2a64b', radius: 0 });
 export const BORDER_LIMITS = Object.freeze({ width: [0, 0.05, 4], radius: [0, 0.5, 4] });
@@ -35,7 +36,7 @@ export function cleanBorder(patch, base = null) {
 
 /** Обводка клипа (или null): только у клипов с файлом — у текста и фигур своё оформление */
 export function borderOf(c) {
-  if (!c || c.kind === 'text' || c.kind === 'shape' || c.kind === 'timer' || !c.border) return null;
+  if (!c || isGraphic(c) || !c.border) return null;
   return cleanBorder(c.border);
 }
 

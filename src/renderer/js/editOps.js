@@ -9,7 +9,8 @@
 // Время — секунды таймлайна. mediaDur(c) — длина файла клипа (текст — TEXT_MAX).
 import { vlanes, carve, splitLink, ADJ, MIN_CLIP, MIN_CUE } from './store.js';
 import { speedOf, tlLen, clipEnd, srcAt, tlAt } from './clipTime.js';
-import { isGraphic, TEXT_MAX } from './textModel.js';
+import { TEXT_MAX } from './textModel.js';
+import { isGraphic } from './graphicKinds.js';
 import { uid } from './util.js';
 
 const end = clipEnd;

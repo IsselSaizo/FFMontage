@@ -12,11 +12,71 @@
 //   • свёрнутое главное окно не останавливает анимацию плеера: requestAnimationFrame идёт через видимое окно панели.
 // Окно закрыли — панель возвращается на место. Положение и размер окон — settings.json → ui.popouts.<id>;
 // какие панели были вынесены — восстанавливаются при следующем запуске.
+//
+// Экспериментальная функция: работает, только если в настройках включены экспериментальные функции
+// (settings.json → experimental, по умолчанию нет). Выключили — все панели возвращаются в главное окно, кнопок ⧉ нет
+// (CSS: body без data-experimental). Окно, сохранённое за пределами мониторов (монитор отключили), открывается рядом с главным.
 import { h, icon, t, toast } from './util.js';
 import { addPopDoc, removePopDoc, setUiDoc, popDocs } from './uidoc.js';
 import { getPref, setPref } from './prefs.js';
 import { closePopover } from './popover.js';
 import { closeMenu } from './contextMenu.js';
+import { appWindow } from './tauri.js';
+
+/** Включены ли экспериментальные функции (сейчас — только панели в отдельных окнах) */
+export const experimentalOn = () => getPref('experimental', false) === true;
+function markBody() {
+  if (experimentalOn()) document.body.dataset.experimental = '1';
+  else delete document.body.dataset.experimental;
+}
+
+// Мониторы (логические пиксели, как screenX окна) — чтобы не открыть окно там, где экрана уже нет
+let MONITORS = null;
+async function refreshMonitors() {
+  try {
+    const list = await appWindow.availableMonitors();
+    if (Array.isArray(list) && list.length) {
+      MONITORS = list.map((m) => {
+        const k = Number(m.scaleFactor) || 1;
+        return { x: m.position.x / k, y: m.position.y / k, w: m.size.width / k, h: m.size.height / k };
+      });
+    }
+  } catch { /* нет разрешения или не поддерживается — не проверяем */ }
+  return MONITORS;
+}
+/** Сохранённое окно видно: заголовок (верхние 40 px, не меньше 120 px по ширине) лежит на каком-то мониторе */
+export function onScreen(g, monitors = MONITORS) {
+  if (!g || !Array.isArray(monitors) || !monitors.length) return true;
+  return monitors.some((m) => {
+    const ix = Math.min(g.x + g.w, m.x + m.w) - Math.max(g.x, m.x);
+    const iy = Math.min(g.y + 40, m.y + m.h) - Math.max(g.y, m.y);
+    return ix >= Math.min(120, g.w) && iy >= 20;
+  });
+}
+
+/**
+ * Включить или выключить экспериментальные функции. Выключение возвращает все панели в главное окно и проверяет,
+ * что каждая на своём месте: { ok, missing } — missing — панели, которых нет в главном окне.
+ */
+export function setExperimental(on) {
+  setPref('experimental', !!on);
+  markBody();
+  if (on) { refreshMonitors(); return { ok: true, missing: [] }; }
+  for (const id of poppedOut()) dock(id);
+  setPref('ui.popoutOpen', []);
+  const missing = Object.entries(POPOUT_PANELS).filter(([id, P]) => {
+    const el = document.querySelector(P.sel);
+    return !el || el.ownerDocument !== document || document.querySelector(`.popout-ph[data-po="${id}"]`);
+  }).map(([id]) => id);
+  for (const id of missing) {
+    // Последняя попытка: заглушку убрать, панель — в главное окно
+    document.querySelector(`.popout-ph[data-po="${id}"]`)?.remove();
+    document.getElementById('app')?.classList.remove(`po-${id}`);
+  }
+  for (const d of popDocs()) { try { d.defaultView.close(); } catch { /* уже закрыто */ } }
+  window.dispatchEvent(new Event('resize'));
+  return { ok: !missing.length, missing };
+}
 
 export const POPOUT_PANELS = {
   media: { sel: '#media-panel', title: () => t('Медиафайлы'), area: 'left', size: [420, 780] },
@@ -87,10 +147,16 @@ export function initPopouts() {
   // Последний документ действия — главный
   document.addEventListener('pointerdown', () => setUiDoc(document), true);
   document.addEventListener('keydown', () => setUiDoc(document), true);
-  // Панели, вынесенные в прошлый раз (не в автотестах — им нужно одно окно)
+  markBody();
+  // Панели, вынесенные в прошлый раз (только с экспериментальными функциями; не в автотестах — им нужно одно окно).
+  // Сначала — список мониторов: окно, сохранённое за пределами экранов, откроется рядом с главным.
   const boot = window.__FFM_BOOT || {};
-  const was = boot.selftest ? [] : getPref('ui.popoutOpen', []);
-  if (Array.isArray(was)) for (const id of was) if (POPOUT_PANELS[id]) setTimeout(() => popOut(id, { restore: true }), 300);
+  const was = boot.selftest || !experimentalOn() ? [] : getPref('ui.popoutOpen', []);
+  if (Array.isArray(was) && was.length) {
+    refreshMonitors().finally(() => { for (const id of was) if (POPOUT_PANELS[id]) popOut(id, { restore: true }); });
+  } else if (experimentalOn()) refreshMonitors();
+  // Подключили или отключили монитор — список обновится при следующем возврате в окно
+  window.addEventListener('focus', () => { if (experimentalOn()) refreshMonitors(); });
 }
 
 function remember() {
@@ -100,11 +166,12 @@ function remember() {
 /** Вынести панель id в отдельное окно. false — окно не открылось. */
 export function popOut(id, { restore = false } = {}) {
   const P = POPOUT_PANELS[id];
-  if (!P || opened.has(id)) return false;
+  if (!P || opened.has(id) || !experimentalOn()) return false;
   const el = document.querySelector(P.sel);
   if (!el) return false;
   closeMenu(); closePopover();
-  const saved = getPref(`ui.popouts.${id}`, null);
+  let saved = getPref(`ui.popouts.${id}`, null);
+  if (saved && !onScreen(saved)) saved = null;   // монитор, где было окно, отключили
   const [w0, h0] = P.size;
   const geo = saved && saved.w > 100 && saved.h > 80
     ? { left: saved.x, top: saved.y, width: saved.w, height: saved.h }
@@ -161,10 +228,15 @@ export function popOut(id, { restore = false } = {}) {
   };
   win.addEventListener('keydown', fwdKey);
   win.addEventListener('keyup', fwdKey);
-  // Перетаскивания слушают pointermove/pointerup у главного окна
+  // Перетаскивания слушают pointermove/pointerup у главного окна. Координаты — этого окна (по ним работают панели,
+  // вынесенные сюда); ffmWin — откуда событие: перетаскивание в другое окно переводит точку (uidoc.dragPoint)
   for (const type of ['pointermove', 'pointerup', 'pointercancel']) {
     win.addEventListener(type, (e) => {
-      try { document.dispatchEvent(new PointerEvent(type, e)); } catch (err) { console.warn('popout fwd', err); }
+      try {
+        const ev = new PointerEvent(type, e);
+        ev.ffmWin = win;
+        document.dispatchEvent(ev);
+      } catch (err) { console.warn('popout fwd', err); }
     });
   }
   // Файлы, брошенные из Проводника на отдельное окно, обработать нечем — не даём WebView открыть их как страницу

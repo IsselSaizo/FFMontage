@@ -10,9 +10,10 @@ import { speedOf, tlLen } from './clipTime.js';
 import { hasVst, splitStages } from './audioFx.js';
 import { trackGraph } from './exportPlan.js';
 import { clipChannel } from './audioLayout.js';
+import { isGraphic } from './graphicKinds.js';
 
 const r6 = (x) => Number(Number(x).toFixed(6));
-const isTextClip = (c) => c && (c.kind === 'text' || c.kind === 'shape' || c.kind === 'timer');
+const isTextClip = (c) => isGraphic(c);
 
 /** Все видеоклипы проекта (основная и верхние дорожки, старые overlayClips) */
 export const allVideoClips = (p) => [

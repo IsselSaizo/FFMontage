@@ -7,10 +7,8 @@ import { store } from './store.js';
 import { h, t } from './util.js';
 import { contentRect, hitContent, tfOf } from './transform.js';
 import { clipEnd } from './clipTime.js';
-import { isText } from './textModel.js';
-import { textRect } from './textRender.js';
-import { isShape, shapeRect } from './shapes.js';
-import { isTimer, timerRect } from './timer.js';
+import { graphicOf } from './graphicKinds.js';
+import './textRender.js';   // рисунок и рамка текста (graphics.js)
 
 const SNAP_PX = 7;
 const CORNERS = ['nw', 'ne', 'se', 'sw'];
@@ -36,12 +34,12 @@ export function initGizmo(preview) {
     if (store.time < f.clip.start - 0.004 || store.time >= clipEnd(f.clip) - 0.004) return null;
     return f;
   };
-  // Текст (M5.1): рамка — по раскладке текста (textRender.js), у титров «roll» — по текущему положению
-  const rectOf = (clip) => (isText(clip)
-    ? textRect(clip, stage.clientWidth, stage.clientHeight, store.time - clip.start)
-    : isShape(clip) ? shapeRect(clip, stage.clientWidth, stage.clientHeight)
-      : isTimer(clip) ? timerRect(clip, stage.clientWidth, stage.clientHeight)
-      : contentRect(clip, store.media(clip.mediaId), stage.clientWidth, stage.clientHeight));
+  // Графические клипы (graphics.js): рамка вида — у текста по раскладке, у титров «roll» — по текущему положению
+  const rectOf = (clip) => {
+    const g = graphicOf(clip);
+    if (g && g.rect) return g.rect(clip, stage.clientWidth, stage.clientHeight, store.time - clip.start);
+    return contentRect(clip, store.media(clip.mediaId), stage.clientWidth, stage.clientHeight);
+  };
   const active = () => !preview.cropEdit && document.body.dataset.mode !== 'anim' && document.body.dataset.mode !== 'audio';
 
   function draw() {

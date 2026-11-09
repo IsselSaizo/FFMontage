@@ -5,10 +5,9 @@ import { speedOf, tlLen, clipEnd, srcAt, tlAt, MIN_SPEED, MAX_SPEED } from './cl
 import { newAudioFx } from './audioFx.js';
 import { MIN_DURATION as TR_MIN, MAX_DURATION as TR_MAX, DEFAULT_DURATION as TR_DEFAULT } from './transitions.js';
 import { cleanTransform } from './transform.js';
-import { isText, isGraphic, cleanText, textTitle, TEXT_MAX, TEXT_DEFAULT_DUR } from './textModel.js';
-import { isShape, cleanShape, newShape, shapeName, SHAPE_DEFAULT_DUR } from './shapes.js';
+import { cleanText, TEXT_MAX } from './textModel.js';
+import { isGraphic, graphicOf, graphicKind, graphicFields, graphicData, graphicLength } from './graphicKinds.js';
 import { cleanBorder } from './border.js';
-import { isTimer, cleanTimer, timerClipLen, fmtClock } from './timer.js';
 import { cleanSubStyle } from './subtitles.js';
 import { cleanLayout, cleanRoute, isDefaultRoute, streamChannels, channelCount } from './audioLayout.js';
 // Циклический импорт безопасен: editOps использует экспорты store.js только при вызове функций
@@ -133,14 +132,12 @@ export function normalizeProject(p) {
     c.muted = !!c.muted;
     c.fadeIn = Math.max(0, Number(c.fadeIn) || 0);
     c.fadeOut = Math.max(0, Number(c.fadeOut) || 0);
-    if (c.kind === 'text' || c.kind === 'shape' || c.kind === 'timer') {
-      if (c.kind !== 'text') delete c.text;
-      if (c.kind !== 'shape') delete c.shape;
-      if (c.kind !== 'timer') delete c.timer;
-      if (c.kind === 'text') c.text = cleanText(c.text);
-      else if (c.kind === 'shape') c.shape = cleanShape(c.shape);
-      else c.timer = cleanTimer(c.timer);
-      const d = Math.min(TEXT_MAX, Math.max(MIN_CLIP, (Number(c.out) || 0) - (Number(c.in) || 0)) || TEXT_DEFAULT_DUR);
+    const g = graphicOf(c);
+    if (g) {
+      // Графический клип (graphics.js): данные только своего вида, в пределах
+      for (const f of graphicFields()) if (f !== g.field) delete c[f];
+      c[g.field] = graphicData(c);
+      const d = Math.min(TEXT_MAX, Math.max(MIN_CLIP, (Number(c.out) || 0) - (Number(c.in) || 0)) || g.defaultDur);
       c.in = 0; c.out = d; c.muted = true;
       delete c.mediaId; delete c.speed; delete c.link; delete c.noAudio; delete c.crop; delete c.fit; delete c.effects; delete c.afx; delete c.border;
     } else {
@@ -601,9 +598,8 @@ class Store {
   // Название клипа для показа: своё имя → имя исходного файла (у реверса/стоп-кадра — имя оригинала)
   clipName(c) {
     if (c.name) return c.name;
-    if (isText(c)) return textTitle(c) || t('Текст');
-    if (isShape(c)) return shapeName((c.shape && c.shape.type) || 'rect');
-    if (isTimer(c)) return t('Таймер {time}', { time: fmtClock(cleanTimer(c.timer).duration) });
+    const g = graphicOf(c);
+    if (g) return (g.name && g.name(c)) || (g.title && g.title()) || c.kind;
     const m = this.media(c.mediaId);
     if (!m) return '?';
     if (m.derived) { const src = this.media(m.derived.from); return src ? src.name : m.name; }
@@ -1485,85 +1481,19 @@ class Store {
   }
 
   // ------------------------------------------------------------------------
-  // Текст (M5.1)
+  // Графические клипы (graphics.js): текст, фигуры, таймер…
   // ------------------------------------------------------------------------
-  // Новый текстовый клип. style — стиль из реестра (registry.textStyleById) или null; text — поля оформления поверх стиля.
-  //   at — время (по умолчанию курсор), lane — видеодорожка ('new' — новая верхняя; по умолчанию — верхняя, где свободно).
-  addTextClip({ style = null, text = {}, at = this.time, duration = null, lane = null, transform = null, select = true } = {}) {
-    const st = style || null;
-    const d = clamp(Number(duration) || (st && st.duration) || TEXT_DEFAULT_DUR, MIN_CLIP, TEXT_MAX);
+  // Новый графический клип вида kind с данными data (поверх умолчаний вида).
+  //   at — время (по умолчанию курсор); lane — видеодорожка ('new' — новая верхняя; по умолчанию — верхняя, где свободно);
+  //   duration — длина (по умолчанию — заданная данными или defaultDur вида); transform — положение и масштаб.
+  addGraphicClip(kind, data = {}, { at = this.time, duration = null, lane = null, transform = null, select = true } = {}) {
+    const g = graphicKind(kind);
+    if (!g) return null;
+    const probe = { kind, [g.field]: typeof g.clean === 'function' ? g.clean(data || {}) : { ...(data || {}) } };
+    const d = clamp(Number(duration) || graphicLength(probe) || g.defaultDur, MIN_CLIP, TEXT_MAX);
     const clip = {
-      id: uid('clp'), kind: 'text', in: 0, out: d, start: Math.max(0, Number(at) || 0), volume: 1, muted: true, fadeIn: 0, fadeOut: 0,
-      text: cleanText({ ...(st ? { style: st.id } : {}), ...(text || {}) }, st ? st.text : null),
-    };
-    if (!clip.text.content) clip.text.content = t('Текст');
-    const tf = cleanTransform(transform || (st && st.transform) || null);
-    if (tf) clip.transform = tf;
-    let ok = true;
-    this.mutate((p) => {
-      const tracks = p.videoTracks || [];
-      let tr = null;
-      if (lane && lane !== 'new') {
-        const L = vlane(p, lane);
-        if (!L || L.locked) { ok = false; return; }
-        L.clips.push(clip);
-        overwriteVideo(p, clip, clip.start);
-        return;
-      }
-      if (lane !== 'new') tr = [...tracks].reverse().find((x) => !x.locked && x.clips.every((c) => end(c) <= clip.start + ADJ || c.start >= clip.start + d - ADJ));
-      if (!tr) { tr = newVideoTrack(); p.videoTracks = [...tracks, tr]; }
-      tr.clips.push(clip);
-    });
-    if (!ok) return null;
-    if (select) this.select({ kind: 'video', id: clip.id });
-    return clip;
-  }
-
-  // Оформление текстовых клипов: patch поверх текущего (textModel.cleanText). live — без записи в историю.
-  setText(ids, patch, { live = false } = {}) {
-    const set = new Set(Array.isArray(ids) ? ids : [ids]);
-    const fn = (p) => { for (const c of allVideo(p)) if (set.has(c.id) && isText(c)) c.text = cleanText(patch, c.text); };
-    if (live) this.live(fn); else this.mutate(fn);
-  }
-
-  // ------------------------------------------------------------------------
-  // Фигуры (0.5.0): прямоугольник, со скошенными углами, треугольник, овал (shapes.js)
-  // ------------------------------------------------------------------------
-  // Новая фигура: type — SHAPE_TYPES, shape — поля поверх умолчаний типа; at/lane/transform — как у addTextClip
-  addShapeClip({ type = 'rect', shape = {}, at = this.time, duration = null, lane = null, transform = null, select = true } = {}) {
-    const d = clamp(Number(duration) || SHAPE_DEFAULT_DUR, MIN_CLIP, TEXT_MAX);
-    const clip = {
-      id: uid('clp'), kind: 'shape', in: 0, out: d, start: Math.max(0, Number(at) || 0), volume: 1, muted: true, fadeIn: 0, fadeOut: 0,
-      shape: newShape(type, shape || {}),
-    };
-    const tf = cleanTransform(transform || null);
-    if (tf) clip.transform = tf;
-    let ok = true;
-    this.mutate((p) => {
-      const tracks = p.videoTracks || [];
-      let tr = null;
-      if (lane && lane !== 'new') {
-        const L = vlane(p, lane);
-        if (!L || L.locked) { ok = false; return; }
-        L.clips.push(clip);
-        overwriteVideo(p, clip, clip.start);
-        return;
-      }
-      if (lane !== 'new') tr = [...tracks].reverse().find((x) => !x.locked && x.clips.every((c) => end(c) <= clip.start + ADJ || c.start >= clip.start + d - ADJ));
-      if (!tr) { tr = newVideoTrack(); p.videoTracks = [...tracks, tr]; }
-      tr.clips.push(clip);
-    });
-    if (!ok) return null;
-    if (select) this.select({ kind: 'video', id: clip.id });
-    return clip;
-  }
-
-  // Таймер (0.5.0, timer.js): секундомер с отсчётом и звонком; длина клипа = время отсчёта + звонок
-  addTimerClip({ timer = {}, at = this.time, lane = null, transform = null, select = true } = {}) {
-    const tm = cleanTimer(timer);
-    const d = clamp(timerClipLen(tm), MIN_CLIP, TEXT_MAX);
-    const clip = {
-      id: uid('clp'), kind: 'timer', in: 0, out: d, start: Math.max(0, Number(at) || 0), volume: 1, muted: true, fadeIn: 0, fadeOut: 0, timer: tm,
+      id: uid('clp'), kind, in: 0, out: d, start: Math.max(0, Number(at) || 0), volume: 1, muted: true, fadeIn: 0, fadeOut: 0,
+      [g.field]: probe[g.field],
     };
     const tf = cleanTransform(transform || null);
     if (tf) clip.transform = tf;
@@ -1586,18 +1516,21 @@ class Store {
     return clip;
   }
 
-  // Настройки таймеров: patch поверх текущих. Изменилось время отсчёта — клип становится «отсчёт + звонок»
-  // (удлинился — следующие клипы дорожки сдвигаются, как при «Изменить длительность»). live — без истории.
-  setTimer(ids, patch, { live = false } = {}) {
+  // Данные графических клипов: patch поверх текущих (clean вида); другие клипы не трогаются. Если длину задают
+  // данные (таймер: отсчёт + звонок) и она изменилась — клип меняет длину (удлинился — следующие клипы дорожки
+  // сдвигаются, как при «Изменить длительность»). live — без записи в историю (и без сдвига соседей).
+  setGraphic(ids, patch, { live = false, kind = null } = {}) {
     const set = new Set(Array.isArray(ids) ? ids : [ids]);
     const fn = (p) => {
       for (const c of allVideo(p)) {
-        if (!set.has(c.id) || !isTimer(c)) continue;
-        const old = cleanTimer(c.timer);
-        c.timer = cleanTimer(patch, old);
-        if (c.timer.duration !== old.duration) {
+        const g = graphicOf(c);
+        if (!set.has(c.id) || !g || (kind && c.kind !== kind)) continue;
+        const before = graphicLength(c);
+        c[g.field] = graphicData(c, patch);
+        const after = graphicLength(c);
+        if (after !== null && after !== before) {
           const oldEnd = end(c);
-          c.out = clamp(timerClipLen(c.timer), MIN_CLIP, TEXT_MAX);
+          c.out = clamp(after, MIN_CLIP, TEXT_MAX);
           if (!live && end(c) > oldEnd) pushFrom((vlaneOf(p, c) || vlane(p, MAIN_LANE)).clips, oldEnd, end(c), c);
         }
       }
@@ -1605,13 +1538,28 @@ class Store {
     if (live) this.live(fn); else this.mutate(fn);
   }
 
-  // Описание фигур: patch поверх текущего (shapes.cleanShape). live — без записи в историю.
-  setShape(ids, patch, { live = false } = {}) {
-    const set = new Set(Array.isArray(ids) ? ids : [ids]);
-    const fn = (p) => { for (const c of allVideo(p)) if (set.has(c.id) && isShape(c)) c.shape = cleanShape(patch, c.shape); };
-    if (live) this.live(fn); else this.mutate(fn);
+  // Новый текстовый клип. style — стиль из реестра (registry.textStyleById) или null; text — поля оформления поверх стиля.
+  addTextClip({ style = null, text = {}, at = this.time, duration = null, lane = null, transform = null, select = true } = {}) {
+    const st = style || null;
+    const data = cleanText({ ...(st ? { style: st.id } : {}), ...(text || {}) }, st ? st.text : null);
+    if (!data.content) data.content = t('Текст');
+    return this.addGraphicClip('text', data, { at, duration: Number(duration) || (st && st.duration) || null, lane, transform: transform || (st && st.transform) || null, select });
   }
 
+  // Оформление текстовых клипов: patch поверх текущего (textModel.cleanText). live — без записи в историю.
+  setText(ids, patch, opts = {}) { this.setGraphic(ids, patch, { ...opts, kind: 'text' }); }
+
+  // Фигуры (shapes.js): type — SHAPE_TYPES, shape — поля поверх умолчаний типа
+  addShapeClip({ type = 'rect', shape = {}, ...opts } = {}) {
+    const g = graphicKind('shape');
+    const item = g && (g.library || []).find((x) => x.id === `shape.${type}`);
+    return this.addGraphicClip('shape', { ...(item ? item.data() : {}), ...(shape || {}) }, opts);
+  }
+  setShape(ids, patch, opts = {}) { this.setGraphic(ids, patch, { ...opts, kind: 'shape' }); }
+
+  // Таймер (timer.js): длина клипа = время отсчёта + звонок
+  addTimerClip({ timer = {}, ...opts } = {}) { return this.addGraphicClip('timer', timer, { ...opts, duration: null }); }
+  setTimer(ids, patch, opts = {}) { this.setGraphic(ids, patch, { ...opts, kind: 'timer' }); }
   // Обводка и скругление углов видеоклипов (border.js): patch поверх текущей; null — убрать. live — без истории.
   setBorder(ids, patch, { live = false } = {}) {
     const set = new Set(Array.isArray(ids) ? ids : [ids]);

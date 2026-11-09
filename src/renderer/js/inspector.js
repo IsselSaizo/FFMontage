@@ -11,9 +11,9 @@ import { clipEffects, unknownEffects, effectById, effectValues } from './effects
 import { onRegistryChange } from './registry.js';
 import { speedOf, tlLen, fmtSpeed, SPEED_PRESETS, MIN_SPEED, MAX_SPEED } from './clipTime.js';
 import { tfOf, cleanTransform, TF_DEFAULT } from './transform.js';
-import { isText } from './textModel.js';
-import { renderTextClip, renderShapeClip, renderTimerClip, borderSection, renderCue, renderSubTrack } from './textInspector.js';
-import { isShape } from './shapes.js';
+import { graphicOf } from './graphicKinds.js';
+import './graphicsUi.js';
+import { borderSection, renderCue, renderSubTrack } from './textInspector.js';
 import { getPref, setPref } from './prefs.js';
 
 // Число как есть, но с десятичным разделителем языка: 0,8 / 0.8 (без лишних нулей, в отличие от i18n num)
@@ -125,9 +125,8 @@ export function initInspector() {
     if (s && s.kind === 'strack' && store.subtitleTrack(s.id)) { renderSubTrack(ui, s.id); applyFocus(); return; }
     const sel = s ? store.findClip(s.id) : null;
     if (!sel) return renderProject();
-    if (isText(sel.clip)) { renderTextClip(ui, sel); applyFocus(); return; }
-    if (isShape(sel.clip)) { renderShapeClip(ui, sel); applyFocus(); return; }
-    if (sel.clip.kind === 'timer') { renderTimerClip(ui, sel); applyFocus(); return; }
+    const g = graphicOf(sel.clip);
+    if (g && g.ui.inspector) { g.ui.inspector(ui, sel); applyFocus(); return; }
     const { kind, clip } = sel;
     const m = store.media(clip.mediaId) || {};
     const srcMedia = m.derived ? store.media(m.derived.from) || m : m;

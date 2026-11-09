@@ -1,59 +1,95 @@
 // Таймер (0.5.0): clip.kind === 'timer' на любой видеодорожке — секундомер на прозрачном фоне: сектор и стрелка
-// показывают прошедшее время, цифры — обратный или прямой отсчёт; когда время вышло — анимация звонка
-// (секундомер трясётся и подпрыгивает, от кнопки расходятся «звуковые» штрихи; звука нет).
-//   clip.timer = { duration, mode, digits, size, caseColor, faceColor, fillColor, inkColor }
-//     duration — время отсчёта, с; клип на таймлайне = duration + RING_DUR (звонок); короче — звонка не будет
+// показывают прошедшее время, цифры — обратный или прямой отсчёт; когда время вышло — анимация звонка (без звука).
+//   clip.timer = { duration, mode, style, ring, progress, digits, size, colors }
+//     duration — время отсчёта, с
 //     mode     — 'down' (обратный отсчёт) | 'up' (прямой)
-//     digits   — показывать цифры под секундомером
-//     size     — высота всего рисунка в долях высоты кадра (до масштаба клипа)
-// Положение, масштаб, поворот, прозрачность — обычный clip.transform; рисует одна функция для плеера и экспорта.
-// Экспорт: окно рисует кадры в рамке вокруг таймера и собирает анимированный PNG (makeApng) → overlay в FFmpeg.
-// Без DOM при импорте: модуль используется окном, экспортом и автотестами.
+//     style    — рисунок (timerStyles.js): 'classic' | 'digital' | 'retro'
+//     ring     — звонок, когда время вышло: 'once' (один раз, клип = отсчёт + RING_DUR), 'loop' (повторяется до конца
+//                клипа), 'none' (нет, клип = отсчёт); после звонка — последний кадр отсчёта
+//     progress — сектор: 'elapsed' (закрашено прошедшее) | 'remaining' (закрашен остаток)
+//     digits   — показывать цифры
+//     size     — высота рисунка в долях высоты кадра (до масштаба клипа)
+//     colors   — { case, face, fill, ink, accent, digits }; при смене стиля — цвета нового стиля
+// Положение, масштаб, поворот, прозрачность — обычный clip.transform.
+//
+// Рисует таймер одна функция для плеера и экспорта — по слоям (timerStyles.js): картинки слоёв из SVG (кэш, грузятся
+// асинхронно — пока не готовы, drawTimer возвращает false и после загрузки зовёт bumpGraphics → плеер перерисует),
+// сектор — из двух повёрнутых половинок с обрезкой, стрелка — поворот, цифры — Inter в ячейках постоянной ширины,
+// звонок — кадры SVG с частотой RING_FPS. Экспорт собирает те же слои (exportAssets.js / exportPlan.js).
 import { tfOf } from './transform.js';
+import { t } from './i18n.js';
+import { registerGraphic, bumpGraphics } from './graphics.js';
+import {
+  RING_DUR, TIMER_STYLES, fmtFor, fmtTime, cells, styleOf, stylePalette, layerSvgs, ringSvgs,
+} from './timerStyles.js';
 
-export const RING_DUR = 1.6;
+export { RING_DUR, TIMER_STYLES, fmtFor, fmtTime, cells };
+export const RING_FPS = 30;
 export const TIMER_MAX = 3 * 3600;
+export const TIMER_MODES = Object.freeze(['down', 'up']);
+export const TIMER_RINGS = Object.freeze(['once', 'loop', 'none']);
+export const TIMER_PROGRESS = Object.freeze(['elapsed', 'remaining']);
+export const COLOR_KEYS = Object.freeze(['case', 'face', 'fill', 'ink', 'accent', 'digits']);
 export const TIMER_DEFAULT = Object.freeze({
   duration: 10,
   mode: 'down',
+  style: 'classic',
+  ring: 'once',
+  progress: 'elapsed',
   digits: true,
   size: 0.42,
-  caseColor: '#f06b93',
-  faceColor: '#d9f1fb',
-  fillColor: '#ffc2c2',
-  inkColor: '#1d3557',
+  colors: Object.freeze(stylePalette('classic')),
 });
-export const TIMER_MODES = Object.freeze(['down', 'up']);
 const LIMITS = { duration: [1, TIMER_MAX, 2], size: [0.05, 1.5, 3] };
 const COLOR_RE = /^#[0-9a-f]{6}$/i;
 const round = (v, d) => Math.round(v * 10 ** d) / 10 ** d;
+const pick = (list, v, b, def) => (list.includes(v) ? v : list.includes(b) ? b : def);
 
 export const isTimer = (c) => !!c && c.kind === 'timer';
 
-/** Полные настройки таймера: patch поверх base, значения в пределах */
+/** Полные настройки таймера: patch поверх base, значения в пределах. Сменился стиль и цвета не заданы — цвета стиля. */
 export function cleanTimer(patch, base = null) {
   const b = { ...TIMER_DEFAULT, ...(base && typeof base === 'object' ? base : {}) };
   const p = patch && typeof patch === 'object' ? patch : {};
+  const v = (k) => (p[k] !== undefined ? p[k] : b[k]);
   const out = {};
-  for (const [k, def] of Object.entries(TIMER_DEFAULT)) {
-    const v = p[k] !== undefined ? p[k] : b[k];
-    if (k === 'mode') out[k] = TIMER_MODES.includes(v) ? v : (TIMER_MODES.includes(b[k]) ? b[k] : def);
-    else if (typeof def === 'boolean') out[k] = v === true || v === 1 || v === 'true';
-    else if (typeof def === 'string') out[k] = typeof v === 'string' && COLOR_RE.test(v) ? v.toLowerCase() : (COLOR_RE.test(String(b[k])) ? String(b[k]).toLowerCase() : def);
-    else {
-      let n = Number(v);
-      if (!Number.isFinite(n)) n = Number.isFinite(Number(b[k])) ? Number(b[k]) : def;
-      const [lo, hi, d] = LIMITS[k];
-      out[k] = round(Math.min(hi, Math.max(lo, n)), d);
-    }
+  for (const k of ['duration', 'size']) {
+    let n = Number(v(k));
+    if (!Number.isFinite(n)) n = Number.isFinite(Number(b[k])) ? Number(b[k]) : TIMER_DEFAULT[k];
+    const [lo, hi, d] = LIMITS[k];
+    out[k] = round(Math.min(hi, Math.max(lo, n)), d);
+  }
+  out.mode = pick(TIMER_MODES, v('mode'), b.mode, TIMER_DEFAULT.mode);
+  out.style = pick(TIMER_STYLES, v('style'), b.style, TIMER_DEFAULT.style);
+  out.ring = pick(TIMER_RINGS, v('ring'), b.ring, TIMER_DEFAULT.ring);
+  out.progress = pick(TIMER_PROGRESS, v('progress'), b.progress, TIMER_DEFAULT.progress);
+  const dg = v('digits');
+  out.digits = dg === true || dg === 1 || dg === 'true';
+  const pal = stylePalette(out.style);
+  const styleChanged = p.style !== undefined && TIMER_STYLES.includes(b.style) && out.style !== b.style;
+  const baseColors = styleChanged ? pal : { ...pal, ...(b.colors && typeof b.colors === 'object' ? b.colors : {}) };
+  const pc = p.colors && typeof p.colors === 'object' ? p.colors : {};
+  out.colors = {};
+  for (const k of COLOR_KEYS) {
+    const c = pc[k] !== undefined ? pc[k] : baseColors[k];
+    out.colors[k] = typeof c === 'string' && COLOR_RE.test(c) ? c.toLowerCase() : pal[k];
   }
   return out;
 }
 
-/** Длина клипа на таймлайне для таймера tm: отсчёт + звонок */
-export const timerClipLen = (tm) => cleanTimer(tm).duration + RING_DUR;
+/**
+ * Длина клипа, которую задают настройки (clipLen — текущая длина клипа или undefined у нового):
+ * 'once' — отсчёт + звонок; 'none' — отсчёт; 'loop' — не короче отсчёта + полутора звонков (новый — + три звонка).
+ */
+export function timerClipLen(tm, clipLen = undefined) {
+  const x = cleanTimer(tm);
+  if (x.ring === 'none') return x.duration;
+  if (x.ring === 'once') return x.duration + RING_DUR;
+  const min = x.duration + RING_DUR * 1.5;
+  return Number.isFinite(clipLen) && clipLen >= min ? clipLen : x.duration + RING_DUR * 3;
+}
 
-/** «1:05», «0:07», «1:02:03» */
+/** «1:05», «0:07», «1:02:03» — для названий */
 export function fmtClock(sec) {
   const s = Math.max(0, Math.floor(sec + 1e-6));
   const hh = Math.floor(s / 3600); const mm = Math.floor((s % 3600) / 60); const ss = s % 60;
@@ -61,151 +97,248 @@ export function fmtClock(sec) {
   return hh ? `${hh}:${p2(mm)}:${p2(ss)}` : `${mm}:${p2(ss)}`;
 }
 
-/** Что показывать в момент local (секунды от начала клипа): { p (0…1 прошло), text, ringing, u (с от начала звонка) } */
+/**
+ * Что показывать в момент local (с от начала клипа): { p (0…1 прошло), text, ringing, u (с от начала звонка) }.
+ * Обратный отсчёт: 10 → … → 1 → 0 (целая секунда вверх, как у кухонного таймера); прямой: 0 → … → 10.
+ */
 export function timerState(tm, local) {
   const d = tm.duration;
   const l = Math.max(0, local);
-  const ringing = l >= d;
-  const p = Math.min(1, l / d);
-  // Обратный отсчёт: 10 → … → 1 → 0 (целая секунда вверх, как у кухонного таймера); прямой: 0 → … → 10
-  const shown = tm.mode === 'down' ? (ringing ? 0 : Math.ceil(d - l - 1e-6)) : Math.min(d, Math.floor(l + 1e-6));
-  return { p, text: fmtClock(shown), ringing, u: ringing ? l - d : 0 };
+  const fmt = fmtFor(d);
+  if (l < d) {
+    const shown = tm.mode === 'down' ? Math.ceil(d - l - 1e-6) : Math.min(d, Math.floor(l + 1e-6));
+    return { p: l / d, text: fmtTime(shown, fmt), ringing: false, u: 0 };
+  }
+  const text = fmtTime(tm.mode === 'down' ? 0 : d, fmt);
+  const after = l - d;
+  const u = tm.ring === 'loop' ? after % RING_DUR : tm.ring === 'once' && after < RING_DUR ? after : null;
+  return { p: 1, text, ringing: u !== null, u: u ?? 0 };
 }
 
-// Рисунок в единицах: радиус корпуса = 1; по высоте от верха кнопки (−1.62) до низа корпуса (1.05) и цифр (+0.62)
-const TOP = -1.62;
-const BOTTOM = 1.06;
-const DIGITS_H = 0.62;
-const unitH = (tm) => BOTTOM - TOP + (tm.digits ? DIGITS_H : 0);
+/** Кадр звонка (номер) в момент u */
+export const ringFrame = (u) => Math.max(0, Math.min(Math.round(RING_DUR * RING_FPS) - 1, Math.floor(u * RING_FPS + 1e-6)));
 
-/** Где таймер в кадре W×H (без тряски): { cx, cy, w, h, rot, opacity } — как contentRect / textRect */
-export function timerRect(clip, W, H) {
+// ---------------------------------------------------------------------------
+// Геометрия
+// ---------------------------------------------------------------------------
+/**
+ * Таймер клипа в кадре W×H: { tm, k (пикселей на единицу viewBox), cx, cy (центр рисунка), rot, opacity,
+ * viewBox, pivot, spin, fmt, w, h (рамка без поворота) }
+ */
+export function timerGeom(clip, W, H) {
   const tm = cleanTimer(clip && clip.timer);
   const tf = tfOf(clip);
-  const k = (tm.size * H * tf.scale) / unitH(tm);   // пикселей на единицу
-  const w = 2.2 * k; const h = unitH(tm) * k;
-  return { cx: W / 2 + tf.x * W, cy: H / 2 + tf.y * H, w, h, rot: tf.rotate, opacity: tf.opacity };
+  const s = styleOf(tm.style);
+  const [, , vw, vh] = s.viewBox;
+  const k = (tm.size * H * tf.scale) / vh;
+  return {
+    tm, k, cx: W / 2 + tf.x * W, cy: H / 2 + tf.y * H, rot: tf.rotate, opacity: tf.opacity,
+    viewBox: s.viewBox, pivot: s.pivot, spin: s.spin, fmt: fmtFor(tm.duration), w: vw * k, h: vh * k,
+  };
 }
 
-/** Рамка кадров для экспорта: квадрат, в который таймер помещается при любом повороте и тряске (чётные размеры) */
+/** Где таймер в кадре W×H: { cx, cy, w, h, rot, opacity } — как contentRect / textRect */
+export function timerRect(clip, W, H) {
+  const g = timerGeom(clip, W, H);
+  return { cx: g.cx, cy: g.cy, w: g.w, h: g.h, rot: g.rot, opacity: g.opacity };
+}
+
+/** Рамка кадров для экспорта: квадрат, в который таймер помещается при любом повороте (чётные размеры) */
 export function timerBox(clip, W, H) {
   const r = timerRect(clip, W, H);
-  const side = Math.min(4 * Math.max(W, H), Math.ceil((Math.hypot(r.w, r.h) * 1.18 + 8) / 2) * 2);
+  const side = Math.min(4 * Math.max(W, H), Math.ceil((Math.hypot(r.w, r.h) * 1.04 + 8) / 2) * 2);
   return { x: Math.round(r.cx - side / 2), y: Math.round(r.cy - side / 2), w: side, h: side };
+}
+
+/** ctx → единицы viewBox таймера (центр рисунка — в центре клипа, поворот, прозрачность, масштаб) */
+export function toTimerUnits(ctx, g) {
+  const [vx, vy, vw, vh] = g.viewBox;
+  ctx.translate(g.cx, g.cy);
+  if (g.rot) ctx.rotate((g.rot * Math.PI) / 180);
+  ctx.globalAlpha *= g.opacity;
+  ctx.scale(g.k, g.k);
+  ctx.translate(-(vx + vw / 2), -(vy + vh / 2));
+}
+
+// ---------------------------------------------------------------------------
+// Картинки слоёв (SVG → Image, кэш по стилю, цветам, формату цифр и виду сектора)
+// ---------------------------------------------------------------------------
+const CACHE = new Map();   // ключ → { layers: { имя: Image|null }, digits, ring: Map(кадр → { under, over, pose, digits }) }
+const CACHE_MAX = 24;
+const hasImage = () => typeof Image !== 'undefined';
+
+function svgImage(svg) {
+  if (!svg || !hasImage()) return null;
+  const img = new Image();
+  img.decoding = 'async';
+  img.onload = () => bumpGraphics();
+  img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+  return img;
+}
+const ok = (img) => !img || (img.complete && img.naturalWidth > 0);
+
+const P_OF = (tm) => ({ fmt: fmtFor(tm.duration), progress: tm.progress, digits: tm.digits });
+const keyOf = (tm) => `${tm.style}|${COLOR_KEYS.map((k) => tm.colors[k]).join(',')}|${fmtFor(tm.duration)}|${tm.progress}|${tm.digits ? 1 : 0}`;
+
+/** Набор картинок таймера tm (создаётся при первом обращении) */
+export function timerAssets(tm) {
+  const key = keyOf(tm);
+  let a = CACHE.get(key);
+  if (a) { CACHE.delete(key); CACHE.set(key, a); return a; }   // свежий — в конец (LRU)
+  const svgs = layerSvgs(tm.style, tm.colors, P_OF(tm));
+  const layers = {};
+  for (const n of ['back', 'front', 'cap', 'hand', 'halfL', 'halfR', 'rightOv', 'base']) layers[n] = svgImage(svgs[n]);
+  a = { key, tm, layers, svgs, digits: svgs.digits, ring: new Map() };
+  CACHE.set(key, a);
+  while (CACHE.size > CACHE_MAX) CACHE.delete(CACHE.keys().next().value);
+  return a;
+}
+/** Картинки кадра звонка n (создаются при первом обращении) */
+export function ringAssets(a, n) {
+  let r = a.ring.get(n);
+  if (!r) {
+    const x = ringSvgs(a.tm.style, a.tm.colors, P_OF(a.tm), n / RING_FPS);
+    r = { under: svgImage(x.under), over: svgImage(x.over), pose: x.pose, digits: x.digits, svgs: x };
+    a.ring.set(n, r);
+  }
+  return r;
+}
+export const layersReady = (a) => Object.values(a.layers).every(ok);
+export const ringReady = (r) => ok(r.under) && ok(r.over);
+
+/** Дождаться картинок слоёв (и кадров звонка, если ring) и шрифта цифр — перед экспортом и в автотестах */
+export async function timerReady(tm, { ring = false } = {}) {
+  const a = timerAssets(cleanTimer(tm));
+  const imgs = Object.values(a.layers).filter(Boolean);
+  if (ring) for (let n = 0; n < Math.round(RING_DUR * RING_FPS); n++) { const r = ringAssets(a, n); imgs.push(...[r.under, r.over].filter(Boolean)); }
+  await Promise.all(imgs.map((img) => (ok(img) ? null : img.decode().catch(() => null))));
+  if (typeof document !== 'undefined' && document.fonts) await document.fonts.load('700 40px "Inter"', '0123456789:').catch(() => null);
+  return a;
+}
+
+// ---------------------------------------------------------------------------
+// Рисование (ctx — в единицах viewBox, см. toTimerUnits)
+// ---------------------------------------------------------------------------
+/** Нарисовать картинку слоя во весь viewBox (статичные) или в квадрате spin вокруг pivot (вращающиеся) */
+export function drawLayer(ctx, a, name) {
+  const img = a.layers[name];
+  if (!img) return;
+  const s = styleOf(a.tm.style);
+  if (name === 'back' || name === 'front' || name === 'cap') {
+    const [vx, vy, vw, vh] = s.viewBox;
+    ctx.drawImage(img, vx, vy, vw, vh);
+  } else {
+    const S = s.spin;
+    ctx.drawImage(img, s.pivot[0] - S, s.pivot[1] - S, 2 * S, 2 * S);
+  }
+}
+
+/** Сектор из половинок (как в экспорте): θ = 360°·p */
+export function drawProgress(ctx, a, p) {
+  const s = styleOf(a.tm.style);
+  const [px, py] = s.pivot; const S = s.spin;
+  const th = 360 * Math.max(0, Math.min(1, p));
+  const rotImg = (img, deg, clipX) => {
+    if (!img) return;
+    ctx.save();
+    ctx.beginPath(); ctx.rect(clipX, py - S, S, 2 * S); ctx.clip();
+    ctx.translate(px, py); ctx.rotate((deg * Math.PI) / 180);
+    ctx.drawImage(img, -S, -S, 2 * S, 2 * S);
+    ctx.restore();
+  };
+  drawLayer(ctx, a, 'base');
+  if (th >= 180) drawLayer(ctx, a, 'rightOv');
+  else if (th > 0.01) rotImg(a.layers.halfL, th, px);
+  if (th > 180.01) rotImg(a.layers.halfR, th - 180, px - S);
+}
+
+/** Стрелка, повёрнутая на θ = 360°·p вокруг pivot */
+export function drawHand(ctx, a, p) {
+  const s = styleOf(a.tm.style);
+  const img = a.layers.hand;
+  if (!img) return;
+  const S = s.spin;
+  ctx.save();
+  ctx.translate(s.pivot[0], s.pivot[1]);
+  ctx.rotate((360 * p * Math.PI) / 180);
+  ctx.drawImage(img, -S, -S, 2 * S, 2 * S);
+  ctx.restore();
+}
+
+/** Цифры text в ячейках формата fmt: d = { cx, cy, fs, color } (единицы viewBox) */
+export function drawDigits(ctx, d, text, fmt, color = d.color) {
+  const c = cells(fmt, d.fs);
+  const x0 = d.cx - c.width / 2;
+  ctx.save();
+  ctx.font = `700 ${d.fs}px "Inter", "Segoe UI", Arial, sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = color;
+  c.list.forEach((cell, i) => { if (text[i]) ctx.fillText(text[i], x0 + cell.x, d.cy); });
+  ctx.restore();
+}
+
+function applyPose(ctx, ops) {
+  for (const o of ops) {
+    if (o[0] === 't') ctx.translate(o[1], o[2]);
+    else if (o[0] === 's') ctx.scale(o[1], o[2]);
+    else { ctx.translate(o[2], o[3]); ctx.rotate((o[1] * Math.PI) / 180); ctx.translate(-o[2], -o[3]); }
+  }
+}
+
+/** Кадр звонка n (ctx — в единицах viewBox); false — картинки ещё грузятся */
+export function drawRing(ctx, a, n, text) {
+  const r = ringAssets(a, n);
+  if (!ringReady(r)) return false;
+  const [vx, vy, vw, vh] = styleOf(a.tm.style).viewBox;
+  ctx.drawImage(r.under, vx, vy, vw, vh);
+  if (r.digits.show) {
+    ctx.save();
+    applyPose(ctx, r.pose);
+    drawDigits(ctx, r.digits, text, fmtFor(a.tm.duration));
+    ctx.restore();
+  }
+  if (r.over) ctx.drawImage(r.over, vx, vy, vw, vh);
+  return true;
+}
+
+/** Таймер в состоянии st (ctx — в единицах viewBox); false — картинки ещё грузятся (ничего не нарисовано) */
+export function drawTimerUnits(ctx, a, st) {
+  if (st.ringing) {
+    const n = ringFrame(st.u);
+    if (drawRing(ctx, a, n, st.text)) return true;
+    // Кадр звонка ещё не готов — пока последний кадр отсчёта
+    for (let i = 0; i < Math.round(RING_DUR * RING_FPS); i++) ringAssets(a, i);   // подготовить весь звонок
+  }
+  if (!layersReady(a)) return false;
+  drawLayer(ctx, a, 'back');
+  drawProgress(ctx, a, st.p);
+  drawLayer(ctx, a, 'front');
+  drawHand(ctx, a, st.p);
+  drawLayer(ctx, a, 'cap');
+  if (a.digits.show) drawDigits(ctx, a.digits, st.text, fmtFor(a.tm.duration));
+  return true;
 }
 
 /** Нарисовать таймер клипа на ctx (холст кадра W×H пикселей; ctx без трансформа). local — с от начала клипа. */
 export function drawTimer(ctx, clip, W, H, local = 0) {
-  const tm = cleanTimer(clip && clip.timer);
-  const tf = tfOf(clip);
-  const st = timerState(tm, local);
-  const k = (tm.size * H * tf.scale) / unitH(tm);
-  const midY = (TOP + BOTTOM + (tm.digits ? DIGITS_H : 0)) / 2;   // центр рисунка (в единицах)
-  // Звонок: циклы по 1.2 с — быстрая тряска с затуханием и подпрыгивание
-  let shake = 0; let jump = 0; let env = 0;
-  if (st.ringing) {
-    const cyc = st.u % 1.2;
-    env = Math.max(0, 1 - cyc / 0.9);
-    shake = Math.sin(st.u * Math.PI * 2 * 9) * 13 * env;
-    jump = -Math.abs(Math.sin(st.u * Math.PI * 2 * 4.5)) * 0.1 * env;
-  }
+  const g = timerGeom(clip, W, H);
+  if (!hasImage()) return false;
+  const a = timerAssets(g.tm);
   ctx.save();
-  ctx.translate(W / 2 + tf.x * W, H / 2 + tf.y * H);
-  if (tf.rotate) ctx.rotate((tf.rotate * Math.PI) / 180);
-  ctx.globalAlpha = tf.opacity;
-  ctx.scale(k, k);
-  ctx.translate(0, -midY);
-  ctx.translate(0, jump);
-  ctx.save();
-  if (shake) ctx.rotate((shake * Math.PI) / 180);
-  const lw = 0.085;
-  ctx.lineJoin = 'round'; ctx.lineCap = 'round';
-  ctx.strokeStyle = tm.inkColor;
-  const circle = (x, y, r) => { ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.closePath(); };
-
-  // Кнопка: кольцо и ножка
-  circle(0, -1.38, 0.2);
-  ctx.lineWidth = 0.15; ctx.strokeStyle = tm.inkColor; ctx.stroke();
-  ctx.lineWidth = 0.07; ctx.strokeStyle = '#34b6e8'; ctx.stroke();
-  ctx.strokeStyle = tm.inkColor;
-  ctx.beginPath(); ctx.rect(-0.13, -1.2, 0.26, 0.24); ctx.fillStyle = '#34b6e8'; ctx.fill(); ctx.lineWidth = lw * 0.8; ctx.stroke();
-
-  // Корпус
-  circle(0, 0, 1);
-  ctx.fillStyle = tm.caseColor; ctx.fill();
-  ctx.lineWidth = lw; ctx.stroke();
-  // Блик на корпусе
-  ctx.save();
-  ctx.beginPath(); ctx.arc(0, 0, 0.9, -Math.PI * 0.42, -Math.PI * 0.08);
-  ctx.strokeStyle = 'rgba(255,255,255,.55)'; ctx.lineWidth = 0.07; ctx.stroke();
+  toTimerUnits(ctx, g);
+  const done = drawTimerUnits(ctx, a, timerState(g.tm, local));
   ctx.restore();
-  // Циферблат
-  const R = 0.76;
-  circle(0, 0, R);
-  ctx.fillStyle = tm.faceColor; ctx.fill();
-  // Сектор прошедшего времени (по часовой от 12)
-  if (st.p > 0.0005) {
-    ctx.beginPath();
-    ctx.moveTo(0, 0);
-    ctx.arc(0, 0, R, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * st.p);
-    ctx.closePath();
-    ctx.fillStyle = tm.fillColor;
-    if (st.ringing) ctx.globalAlpha *= 0.75 + 0.25 * Math.round((st.u * 4) % 1);
-    ctx.fill();
-    ctx.globalAlpha = tf.opacity;
-  }
-  circle(0, 0, R);
-  ctx.lineWidth = lw; ctx.strokeStyle = tm.inkColor; ctx.stroke();
-  // Деления
-  ctx.lineWidth = 0.075;
-  for (let i = 0; i < 8; i++) {
-    const a = (i * Math.PI) / 4;
-    const s = Math.sin(a); const c = -Math.cos(a);
-    ctx.beginPath(); ctx.moveTo(s * 0.52, c * 0.52); ctx.lineTo(s * 0.62, c * 0.62); ctx.stroke();
-  }
-  // Стрелка — к краю сектора, короткая — к 12 (как у секундомера)
-  const ang = -Math.PI / 2 + Math.PI * 2 * st.p;
-  ctx.lineWidth = 0.09;
-  ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(Math.cos(ang) * 0.55, Math.sin(ang) * 0.55); ctx.stroke();
-  ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(-0.16, -0.12); ctx.stroke();
-  circle(0, 0, 0.12);
-  ctx.fillStyle = '#34b6e8'; ctx.fill(); ctx.lineWidth = 0.06; ctx.stroke();
-  ctx.restore();
+  return done;
+}
 
-  // Звонок: штрихи по бокам от кнопки (не трясутся вместе с корпусом)
-  if (st.ringing && env > 0.02) {
-    ctx.save();
-    ctx.globalAlpha = tf.opacity * Math.min(1, env * 1.4);
-    ctx.strokeStyle = tm.inkColor; ctx.lineWidth = 0.08; ctx.lineCap = 'round';
-    const grow = 0.12 * (1 - env);
-    for (const side of [-1, 1]) {
-      for (let i = 0; i < 3; i++) {
-        const a = (-Math.PI / 2) + side * (0.55 + i * 0.32);
-        const r0 = 1.18 + grow; const r1 = 1.42 + grow;
-        ctx.beginPath(); ctx.moveTo(Math.cos(a) * r0, Math.sin(a) * r0 - 0.15); ctx.lineTo(Math.cos(a) * r1, Math.sin(a) * r1 - 0.15); ctx.stroke();
-      }
-    }
-    ctx.restore();
+/** Название стиля */
+export function timerStyleName(id) {
+  switch (id) {
+    case 'digital': return t('Цифровой');
+    case 'retro': return t('Ретро');
+    default: return t('Классический');
   }
-
-  // Цифры под секундомером (во время звонка — мигают)
-  if (tm.digits) {
-    const blink = st.ringing && Math.floor(st.u * 4) % 2 === 1;
-    if (!blink) {
-      // Шрифт — в пикселях (доли пикселя в ctx.font браузер может округлить): масштаб единиц снимается
-      ctx.save();
-      const y = (BOTTOM + DIGITS_H / 2 + 0.04) * k;
-      ctx.scale(1 / k, 1 / k);
-      ctx.font = `700 ${(0.5 * k).toFixed(2)}px "Inter", "Inter Variable", sans-serif`;
-      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      ctx.lineWidth = 0.12 * k; ctx.strokeStyle = tm.inkColor; ctx.lineJoin = 'round';
-      ctx.strokeText(st.text, 0, y);
-      ctx.fillStyle = '#ffffff';
-      ctx.fillText(st.text, 0, y);
-      ctx.restore();
-    }
-  }
-  ctx.restore();
 }
 
 // ---------------------------------------------------------------------------
@@ -288,8 +421,7 @@ export function makeApng(frames, delays) {
 /**
  * Моменты кадров анимации для экспорта клипа длиной len (с): [{ t, d }] — время кадра от начала клипа и его длительность.
  * Отсчёт — около 900 кадров (не чаще частоты проекта и 30 в секунду; у длинных таймеров — реже, но не реже 1 в секунду:
- * цифры меняются каждую секунду), 
- * звонок — с частотой проекта (до 30). Кадры, которые совпадают на экране, склеивает вызывающий (по содержимому).
+ * цифры меняются каждую секунду), после отсчёта — с частотой проекта (до 30). Совпадающие кадры склеивает вызывающий.
  */
 export function timerFrameTimes(tm, len, fps) {
   const full = Math.max(1, Math.min(30, Math.round(fps) || 30));
@@ -304,3 +436,52 @@ export function timerFrameTimes(tm, len, fps) {
   }
   return out.filter((x) => x.d > 1e-6);
 }
+
+// Вид 'timer' (graphics.js); плитки «Библиотеки» — по два отсчёта на стиль и прямой отсчёт
+const LIBRARY = [
+  ['classic', 10, 'down'], ['classic', 60, 'down'],
+  ['digital', 10, 'down'], ['digital', 60, 'down'], ['digital', 30, 'up'],
+  ['retro', 10, 'down'], ['retro', 60, 'down'],
+];
+registerGraphic('timer', {
+  field: 'timer',
+  title: () => t('Таймер'),
+  libraryTitle: () => t('Таймеры'),
+  clean: cleanTimer,
+  defaultDur: TIMER_DEFAULT.duration + RING_DUR,
+  length: (tm, clip) => timerClipLen(tm, clip && Number.isFinite(clip.out) ? clip.out - (clip.in || 0) : undefined),
+  name: (c) => t('Таймер {time}', { time: fmtClock(cleanTimer(c && c.timer).duration) }),
+  rect: timerRect,
+  draw: (ctx, clip, W, H, local = 0) => drawTimer(ctx, clip, W, H, local),
+  animated: () => true,
+  // Кадры в рамке вокруг таймера → анимированный PNG (одинаковые подряд кадры склеиваются)
+  async exportAsset(clip, env) {
+    await timerReady(clip.timer, { ring: true });
+    const box = timerBox(clip, env.W, env.H);
+    const cv = env.canvas(box.w, box.h);
+    const ctx = cv.getContext('2d');
+    const len = Math.max(0.05, clip.out - clip.in);
+    const frames = []; const delays = []; let prev = '';
+    for (const f of timerFrameTimes(cleanTimer(clip.timer), len, env.fps)) {
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.clearRect(0, 0, box.w, box.h);
+      ctx.translate(-box.x, -box.y);
+      drawTimer(ctx, clip, env.W, env.H, f.t);
+      const png = await env.pngBytes(cv);
+      const key = await env.digest(png);
+      if (key === prev) { delays[delays.length - 1] += f.d; continue; }
+      prev = key; frames.push(png); delays.push(f.d);
+    }
+    const path = await env.save('apng', env.bytesBase64(makeApng(frames, delays)));
+    return { path, w: box.w, h: box.h, x: box.x, y: box.y, roll: false, anim: true };
+  },
+  library: LIBRARY.map(([style, s, mode]) => ({
+    id: `timer.${style}.${mode}${s}`,
+    group: () => timerStyleName(style),
+    title: () => (mode === 'down' ? t('Обратный {time}', { time: fmtClock(s) }) : t('Прямой {time}', { time: fmtClock(s) })),
+    data: () => cleanTimer({ duration: s, mode, style }),
+    thumbAt: (tm) => tm.duration * 0.4,
+    // Миниатюра: рисунок почти во всю высоту плитки (у рисунков поля под звонок)
+    thumbTransform: { scale: 2.6 },
+  })),
+});

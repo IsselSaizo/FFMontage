@@ -62,8 +62,12 @@
     const ta = document.querySelector('#text-content');
     const undo0 = store.undoStack.length;
     ta.focus(); ta.value = 'Привет'; ta.dispatchEvent(new Event('input')); ta.value = 'Привет, мир'; ta.dispatchEvent(new Event('input'));
-    ta.blur(); await sleep(150);
-    ok(store.findClip(tc.id).clip.text.content === 'Привет, мир' && store.undoStack.length === undo0 + 1, 'ввод текста: одна запись в истории');
+    // Окно без фокуса системы (другое окно на переднем плане) не получает focus/blur от ta.focus()/blur() — шлём сами
+    const hadFocus = document.hasFocus();
+    ta.blur();
+    if (!hadFocus) ta.dispatchEvent(new FocusEvent('blur'));
+    await sleep(150);
+    ok(store.findClip(tc.id).clip.text.content === 'Привет, мир' && store.undoStack.length === undo0 + 1, `ввод текста: одна запись в истории (${store.findClip(tc.id).clip.text.content}, ${undo0} → ${store.undoStack.length}, ta ${!!ta} ${ta && ta.isConnected})`);
     ok(document.querySelector(`.clip[data-id="${tc.id}"] .text-strip`).textContent.includes('Привет, мир'), 'таймлайн показывает новый текст');
     // оформление: красная подложка
     store.setText([tc.id], { box: true, boxColor: '#ff0000', boxOpacity: 1, color: '#ffffff' }); await sleep(100);

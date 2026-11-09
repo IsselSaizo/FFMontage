@@ -17,6 +17,7 @@ import { ffAudioFx, unknownFx, hasVst, missingVst } from './audioFx.js';
 import { TRANSITIONS } from './transitions.js';
 import { t } from './i18n.js';
 import { tfOf, isIdentity, contentAspect } from './transform.js';
+import { isGraphic, graphicOf } from './graphicKinds.js';
 import { ffPath } from './core/ffEscape.js';
 import { borderOf } from './border.js';
 import { layoutOf, ffLayout, routeOf, routePan, downmixPan, clipChannel, channelPick, channelLabels, outputMode } from './audioLayout.js';
@@ -254,13 +255,14 @@ export function buildExport(project, settings) {
   const addWav = (p) => { inputs.push('-i', p); return nInputs(inputs) - 1; };
   const warnText = (c) => {
     if (!assets) return;
-    if (c.kind === 'shape') warnings.add(t('Фигура не подготовлена к экспорту — пропущена'));
-    else if (c.kind === 'timer') warnings.add(t('Таймер не подготовлен к экспорту — пропущен'));
-    else warnings.add(t('Текст «{name}» не подготовлен к экспорту — пропущен', { name: String((c.text && c.text.content) || '').split('\n')[0].slice(0, 30) }));
+    const g = graphicOf(c);
+    const name = String((g && g.name && g.name(c)) || (g && g.title && g.title()) || c.kind).split('\n')[0].slice(0, 30);
+    warnings.add(t('«{name}» не подготовлен к экспорту — пропущен ({kind})', { name, kind: (g && g.title && g.title()) || c.kind }));
   };
-  // Текстовый клип или фигура → картинка PNG W×H (или полоса титров W×h) с альфой; трансформ уже нарисован в ней
+  // Графический клип (graphics.js: текст, фигура, таймер) → картинка PNG W×H (или полоса титров W×h, или рамка x, y
+  // таймера — анимированный PNG) с альфой; трансформ уже нарисован в ней
   const asMedia = (c) => {
-    if (c.kind !== 'text' && c.kind !== 'shape' && c.kind !== 'timer') return media[c.mediaId];
+    if (!isGraphic(c)) return media[c.mediaId];
     const a = textImg[c.id];
     // Таймер (0.5.0): анимированный PNG (apng) в рамке a.x, a.y — читается как видео
     return a && a.path ? { path: a.path, isImage: true, isAnimation: !!a.anim, hasVideo: true, hasAudio: false, width: a.w, height: a.h, _text: a } : null;
@@ -360,7 +362,7 @@ export function buildExport(project, settings) {
     // Метки основной дорожки — без префикса (как в 0.3), у верхних — свой префикс
     const P = li ? `l${li}_` : '';
     const alpha = !L.main;
-    for (const c of L.clips) if ((c.kind === 'text' || c.kind === 'shape' || c.kind === 'timer') && !L.hidden && clipDuration(c) > 0.001 && !asMedia(c)) warnText(c);
+    for (const c of L.clips) if (isGraphic(c) && !L.hidden && clipDuration(c) > 0.001 && !asMedia(c)) warnText(c);
     const vclips = L.clips
       .filter((c) => clipDuration(c) > 0.001 && asMedia(c))
       .map((c, i) => ({ ...c, start: Number.isFinite(c.start) ? c.start : NaN, _i: i }));

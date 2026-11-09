@@ -5,7 +5,7 @@ import { store } from './store.js';
 import { h, fmtTime } from './util.js';
 import { t } from './i18n.js';
 import { playUrl } from './media.js';
-import { isText, isGraphic, textTitle } from './textModel.js';
+import { isGraphic } from './graphicKinds.js';
 
 const OP_TITLE = {
   roll: () => t('Roll — стык двух клипов'),
@@ -36,7 +36,6 @@ export function initTrimPreview(preview) {
     const c = f.clip;
     // Время файла: при roll / slip видно, какой именно кадр станет краем клипа
     p.tc.textContent = `${store.clipName(c)} · ${fmtTime(Math.max(0, f.src))}`;
-    if (isText(c)) { p.note.textContent = textTitle(c) || t('Текст'); return; }
     if (isGraphic(c)) { p.note.textContent = store.clipName(c); return; }
     const m = store.media(c.mediaId) || {};
     const url = playUrl(c.mediaId);

@@ -52,6 +52,8 @@ export const appWindow = {
   isFullscreen: () => win('is_fullscreen'),
   setTitle: (value) => win('set_title', { value: String(value) }),
   startDragging: () => win('start_dragging'),
+  /** Мониторы: [{ position: { x, y }, size: { width, height }, scaleFactor }] — в физических пикселях */
+  availableMonitors: () => win('available_monitors'),
   /** Изменение размера окна: fn({ width, height }) в физических пикселях */
   onResized: (fn) => listen('tauri://resize', (e) => fn(e.payload), { kind: 'Window', label: windowLabel() }),
 };

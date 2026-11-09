@@ -148,7 +148,6 @@ fn run() {
             selftest::test_shot,
             update::update_check,
             update::update_apply,
-            update::update_open_drive,
             plugins::plugins_list,
             plugins::plugins_pick,
             plugins::plugins_install,

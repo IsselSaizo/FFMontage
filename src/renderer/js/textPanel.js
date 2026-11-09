@@ -9,9 +9,6 @@ import './core/textStyles.js';
 import { drawText } from './textRender.js';
 import { fontList, addFonts, removeFont } from './fonts.js';
 import { importSubtitles } from './subtitlesUi.js';
-import { SHAPE_TYPES, shapeName } from './shapes.js';
-import { fmtClock } from './timer.js';
-import { shapeIcon } from './textInspector.js';
 
 const label = (v, fb = '') => (typeof v === 'string' ? v : v && typeof v === 'object' ? v[getLang()] || v.ru || v.en || fb : fb);
 
@@ -36,20 +33,6 @@ export function addTextFromStyle(style) {
   return c;
 }
 
-export function addShape(type) {
-  const c = store.addShapeClip({ type });
-  if (!c) { toast(t('Нет свободной дорожки для фигуры'), 'error'); return null; }
-  store.emit('focus-inspector', 'shape');
-  return c;
-}
-
-export function addTimer(timer) {
-  const c = store.addTimerClip({ timer });
-  if (!c) { toast(t('Нет свободной дорожки для таймера'), 'error'); return null; }
-  store.emit('focus-inspector', 'timer');
-  return c;
-}
-
 export function renderTextPanel(root) {
   if (!root || root.hidden) return;
   root.innerHTML = '';
@@ -61,22 +44,6 @@ export function renderTextPanel(root) {
     grid.append(h('button', { class: 'ts-tile', dataset: { style: st.id }, title: name, onclick: () => addTextFromStyle(st) }, thumb(st), h('span', {}, name)));
   }
   root.append(grid);
-
-  // --- Фигуры (0.5.0) ---
-  root.append(h('div', { class: 'insp-section', dataset: { section: 'shapes' } }, h('h3', {}, t('Фигуры')),
-    h('p', { class: 'muted small' }, t('Щелчок — фигура в месте курсора на верхней видеодорожке. Цвет, контур и углы — в «Свойствах».')),
-    h('div', { class: 'shape-grid' }, ...SHAPE_TYPES.map((ty) => h('button', {
-      class: 'shape-tile', dataset: { shape: ty }, title: shapeName(ty), onclick: () => addShape(ty),
-    }, h('span', { html: shapeIcon(ty, 26) }), h('span', {}, shapeName(ty)))))));
-
-  // --- Таймер (0.5.0) ---
-  root.append(h('div', { class: 'insp-section', dataset: { section: 'timers' } }, h('h3', {}, t('Таймер')),
-    h('p', { class: 'muted small' }, t('Секундомер с отсчётом и звонком в конце (без звука), фон прозрачный. Время, направление и цвета — в «Свойствах».')),
-    h('div', { class: 'shape-grid' },
-      ...[[10, 'down'], [30, 'down'], [60, 'down'], [10, 'up']].map(([s, mode]) => h('button', {
-        class: 'shape-tile', dataset: { timer: `${mode}${s}` },
-        onclick: () => addTimer({ duration: s, mode }),
-      }, h('span', { html: icon('timer', 24) }), h('span', {}, mode === 'down' ? t('Обратный {time}', { time: fmtClock(s) }) : t('Прямой {time}', { time: fmtClock(s) })))))));
 
   // --- Субтитры ---
   const subs = store.subtitleTracks();

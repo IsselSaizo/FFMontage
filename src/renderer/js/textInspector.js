@@ -3,9 +3,10 @@
 import { store, MAX_FADE, MIN_CUE } from './store.js';
 import { h, icon, iconEl, fmtTime, t, toast, errText } from './util.js';
 import { cleanText, TEXT_DEFAULT } from './textModel.js';
-import { cleanShape, shapeName, SHAPE_TYPES, CHAMFER_DEFAULT } from './shapes.js';
+import { cleanShape, shapeName, shapeIcon, SHAPE_TYPES, CHAMFER_DEFAULT } from './shapes.js';
 import { borderOf, cleanBorder, BORDER_DEFAULT } from './border.js';
-import { cleanTimer, fmtClock, RING_DUR } from './timer.js';
+import { cleanTimer, fmtClock, RING_DUR, TIMER_STYLES, timerStyleName } from './timer.js';
+import { stylePalette } from './timerStyles.js';
 import { parseDuration } from './util.js';
 import { fontList, addFonts } from './fonts.js';
 import { listTextStyles, textStyleById } from './registry.js';
@@ -237,36 +238,38 @@ export function renderTimerClip(ui, sel) {
     h('div', { class: 'presets' }, ...quick.map((s) => h('button', { class: `chip${Math.abs(tm.duration - s) < 0.01 ? ' on' : ''}`, disabled: locked, onclick: () => setTm({ duration: s }) }, fmtClock(s)))),
     h('div', { class: 'row between' }, h('label', {}, t('Направление')),
       select([['down', t('Обратный отсчёт')], ['up', t('Прямой отсчёт')]], tm.mode, (v) => setTm({ mode: v }))),
+    h('div', { class: 'row between' }, h('label', {}, t('Звонок')),
+      select([['once', t('Один раз')], ['loop', t('Повторять до конца клипа')], ['none', t('Без звонка')]], tm.ring, (v) => setTm({ ring: v }))),
+    h('div', { class: 'row between' }, h('label', {}, t('Сектор')),
+      select([['elapsed', t('Прошедшее время')], ['remaining', t('Оставшееся время')]], tm.progress, (v) => setTm({ progress: v }))),
     h('label', { class: 'check-row' },
       h('input', { type: 'checkbox', checked: tm.digits, disabled: locked, onchange: (e) => setTm({ digits: e.target.checked }) }),
-      h('span', {}, t('Цифры под секундомером'))),
-    h('p', { class: 'muted small' }, t('Клип длится время отсчёта и ещё {s} с — звонок (секундомер трясётся, без звука). Обрежьте клип, если звонок не нужен.', { s: ui.num(RING_DUR) })));
+      h('span', {}, t('Цифры'))),
+    h('p', { class: 'muted small' }, tm.ring === 'once'
+      ? t('Клип длится время отсчёта и ещё {s} с — звонок (анимация, без звука).', { s: ui.num(RING_DUR) })
+      : tm.ring === 'loop'
+        ? t('Звонок повторяется до конца клипа — растяните клип на таймлайне, сколько нужно.')
+        : t('Клип длится ровно время отсчёта; если растянуть его, таймер остановится на последней цифре.')));
   root.append(sec);
 
   const look = h('div', { class: 'insp-section', dataset: { section: 'timer-look' } }, h('h3', {}, t('Оформление')));
+  const styles = h('div', { class: 'presets timer-styles' }, ...TIMER_STYLES.map((id) => h('button', {
+    class: `chip${tm.style === id ? ' on' : ''}`, dataset: { timerStyle: id }, disabled: locked, onclick: () => setTm({ style: id }),
+  }, timerStyleName(id))));
   const sz = styleSlider(ui, tm.size, { min: 0.1, max: 1, step: 0.01, fmt: (v) => `${Math.round(v * 100)}%`, live: (v) => liveTm({ size: v }), commit: (v) => setTm({ size: v }) });
+  const COLORS = [['case', t('Корпус')], ['face', t('Циферблат')], ['fill', t('Сектор')], ['ink', t('Контур')], ['accent', t('Акцент')], ['digits', t('Цифры')]];
   look.append(
+    h('label', {}, t('Стиль')), styles,
     h('div', { class: 'row between' }, h('label', {}, t('Размер (от высоты кадра)')), sz.val), sz.slider,
     h('div', { class: 'row between' }, h('label', {}, t('Цвета')), h('span', { class: 'row gap' },
-      colorInput(tm.caseColor, (v) => setTm({ caseColor: v }), t('Корпус')),
-      colorInput(tm.faceColor, (v) => setTm({ faceColor: v }), t('Циферблат')),
-      colorInput(tm.fillColor, (v) => setTm({ fillColor: v }), t('Прошедшее время')),
-      colorInput(tm.inkColor, (v) => setTm({ inkColor: v }), t('Контур и стрелки')))));
+      ...COLORS.map(([k, name]) => colorInput(tm.colors[k], (v) => setTm({ colors: { ...tm.colors, [k]: v } }), name)))),
+    h('button', { class: 'btn ghost small', disabled: locked, onclick: () => setTm({ colors: stylePalette(tm.style) }) }, t('Цвета стиля')));
   root.append(look);
 
   const dur = tlLen(clip);
   root.append(h('div', { class: 'insp-section', dataset: { section: 'fade' } }, h('h3', {}, t('На таймлайне')),
     h('dl', { class: 'kv' }, h('dt', {}, t('Длительность')), h('dd', {}, fmtTime(dur)), h('dt', {}, t('На таймлайне')), h('dd', {}, `${fmtTime(clip.start)} – ${fmtTime(clip.start + dur)}`))));
   root.append(ui.transformSection(clip, sel));
-}
-
-// Значок типа фигуры (SVG)
-export function shapeIcon(type, size = 16) {
-  const p = type === 'ellipse' ? '<ellipse cx="12" cy="12" rx="9" ry="7"/>'
-    : type === 'triangle' ? '<path d="M12 4 L21 20 L3 20 Z"/>'
-      : type === 'chamfer' ? '<path d="M8 5 H16 L21 10 V14 L16 19 H8 L3 14 V10 Z"/>'
-        : '<rect x="3" y="6" width="18" height="12" rx="1.5"/>';
-  return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round">${p}</svg>`;
 }
 
 // ---------------- Обводка видео / картинки (0.5.0) ----------------

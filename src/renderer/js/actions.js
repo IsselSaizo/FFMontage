@@ -6,7 +6,8 @@ import { keyHint } from './keymap.js';
 import { openMenu } from './contextMenu.js';
 import { toggleReverse, freezeFrameAt, isReversed, isFreeze } from './fx.js';
 import { speedOf, tlLen, clipEnd } from './clipTime.js';
-import { isText, isGraphic, TEXT_MAX } from './textModel.js';
+import { TEXT_MAX } from './textModel.js';
+import { isGraphic, graphicOf } from './graphicKinds.js';
 import { openPausesDialog, markClipById } from './edit.js';
 import { streamChannels, channelCount } from './audioLayout.js';
 import { openRouting } from './routingDialog.js';
@@ -115,12 +116,9 @@ export function openClipMenu(id, x, y, clickTime = null) {
   const busy = !!store.busy[id];
   const hasSound = video ? m.hasAudio : true;
   if (isGraphic(c)) {
+    const ed = graphicOf(c).ui.edit || {};
     openMenu(x, y, [
-      isText(c)
-        ? { id: 'edit-text', label: t('Изменить текст'), icon: 'rename', onClick: () => { store.select({ kind: 'video', id }); focusInspector('text'); } }
-        : c.kind === 'timer'
-          ? { id: 'edit-timer', label: t('Настроить таймер'), icon: 'timer', onClick: () => { store.select({ kind: 'video', id }); focusInspector('timer'); } }
-          : { id: 'edit-shape', label: t('Изменить фигуру'), icon: 'rename', onClick: () => { store.select({ kind: 'video', id }); focusInspector('shape'); } },
+      { id: `edit-${c.kind}`, label: ed.label ? ed.label() : t('Изменить'), icon: ed.icon || 'rename', onClick: () => { store.select({ kind: 'video', id }); focusInspector(c.kind); } },
       { id: 'duplicate', label: t('Дублировать'), icon: 'duplicate', key: keyHint('clip.duplicate'), onClick: () => store.duplicateClip(id) },
       { id: 'copy', label: t('Копировать'), icon: 'copy', key: keyHint('clip.copy'), onClick: () => copyClip(id) },
       { id: 'delete', label: t('Удалить'), icon: 'trash', key: keyHint('clip.delete'), onClick: () => deleteClip(id) },

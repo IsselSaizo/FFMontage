@@ -1,7 +1,8 @@
 // «Проверить обновления».
 //  • Папка программы — git-клон: git fetch → сколько новых коммитов → git pull --ff-only →
 //    если изменились исходники и есть Rust (cargo) — пересборка и перезапуск.
-//  • Готовая сборка (архив с GitHub, M0.10 / R-4): последний релиз → тег должен быть версией и больше текущей →
+//  • Готовая сборка (архив с GitHub, M0.10 / R-4): список релизов (и хотфиксов — пре-релизов vX.Y.Z-hotfix.N, если они
+//    включены, см. choose) → тег должен быть версией и больше текущей →
 //    ассет строго своей ОС и архитектуры → SHA256SUMS с подписью ed25519 (ключ — UPDATE_PUBKEY) →
 //    SHA-256 скачанного архива сверяется с SHA256SUMS → только после этого замена программы и перезапуск.
 //    Любая ошибка проверки — ничего не устанавливается. Подпись делает tools/sign-release.mjs в release-workflow.
@@ -63,15 +64,40 @@ fn is_git() -> bool {
 }
 
 // ---------------------------------------------------------------------------
-// Версии: только «1.2.3» или «v1.2.3» — пре-релизы и прочие теги не предлагаются
+// Версии: релиз «1.2.3» / «v1.2.3» и хотфикс «1.2.3-hotfix.N» (N ≥ 1) — пре-релиз СЛЕДУЮЩЕЙ версии:
+// 0.5.0 < 0.5.1-hotfix.1 < 0.5.1-hotfix.2 < 0.5.1. Прочие пре-релизы (rc, beta…) и теги не предлагаются.
 // ---------------------------------------------------------------------------
-fn parse_version(v: &str) -> Option<(u64, u64, u64)> {
+/// Ранг релиза: выше любого хотфикса той же версии (N хотфикса — не больше 9 цифр)
+const RELEASE_RANK: u64 = u64::MAX;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct Version {
+    major: u64,
+    minor: u64,
+    patch: u64,
+    /// N хотфикса или RELEASE_RANK у релиза (порядок полей = порядок сравнения)
+    rank: u64,
+}
+
+impl Version {
+    fn is_hotfix(&self) -> bool {
+        self.rank != RELEASE_RANK
+    }
+}
+
+impl std::fmt::Display for Version {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}.{}.{}", self.major, self.minor, self.patch)?;
+        if self.is_hotfix() {
+            write!(f, "-hotfix.{}", self.rank)?;
+        }
+        Ok(())
+    }
+}
+
+fn parse_version(v: &str) -> Option<Version> {
     let v = v.trim();
     let v = v.strip_prefix('v').unwrap_or(v);
-    let parts: Vec<&str> = v.split('.').collect();
-    if parts.len() != 3 {
-        return None;
-    }
     let num = |p: &str| -> Option<u64> {
         if p.is_empty() || p.len() > 9 || !p.bytes().all(|b| b.is_ascii_digit()) {
             None
@@ -79,7 +105,22 @@ fn parse_version(v: &str) -> Option<(u64, u64, u64)> {
             p.parse().ok()
         }
     };
-    Some((num(parts[0])?, num(parts[1])?, num(parts[2])?))
+    let (core, rank) = match v.split_once('-') {
+        None => (v, RELEASE_RANK),
+        Some((core, pre)) => {
+            // Только «hotfix.N»: N без ведущих нулей, не 0
+            let n = pre.strip_prefix("hotfix.")?;
+            if n.starts_with('0') {
+                return None;
+            }
+            (core, num(n)?)
+        }
+    };
+    let parts: Vec<&str> = core.split('.').collect();
+    if parts.len() != 3 {
+        return None;
+    }
+    Some(Version { major: num(parts[0])?, minor: num(parts[1])?, patch: num(parts[2])?, rank })
 }
 
 // ---------------------------------------------------------------------------
@@ -125,8 +166,8 @@ struct Plan {
     url: String,
     sums_url: String,
     sig_url: String,
-    /// "github" — релиз; "drive" — хотфикс из папки Google Диска (0.5.0)
-    source: &'static str,
+    /// Хотфикс (пре-релиз GitHub vX.Y.Z-hotfix.N), а не обычный релиз
+    hotfix: bool,
 }
 
 /// Почему обновление не предлагается
@@ -164,184 +205,81 @@ impl Skip {
 }
 
 fn plan(rel: &Value, current: &str, os: &str, arch: &str, appimage: bool) -> Result<Plan, Skip> {
-    let (a, b, c) = parse_version(rel["tag_name"].as_str().unwrap_or("")).ok_or(Skip::BadTag)?;
-    let version = format!("{a}.{b}.{c}");
+    let v = parse_version(rel["tag_name"].as_str().unwrap_or("")).ok_or(Skip::BadTag)?;
+    let version = v.to_string();
     // Текущая версия не разобралась — не рискуем
     let cur = parse_version(current).ok_or(Skip::NotNewer)?;
-    if (a, b, c) <= cur {
+    if v <= cur {
         return Err(Skip::NotNewer);
     }
     let name = asset_name(&version, os, arch, appimage).ok_or(Skip::NoBuild)?;
     let url = asset_url(rel, &name).ok_or(Skip::NoBuild)?;
     let sums_url = asset_url(rel, SUMS).ok_or(Skip::Unsigned)?;
     let sig_url = asset_url(rel, SIG).ok_or(Skip::Unsigned)?;
-    Ok(Plan { version, name, url, sums_url, sig_url, source: "github" })
+    Ok(Plan { version, name, url, sums_url, sig_url, hotfix: v.is_hotfix() })
 }
 
 // ---------------------------------------------------------------------------
-// Хотфиксы с Google Диска (0.5.0): исправления, для которых ещё нет релиза на GitHub.
-// Папка (DRIVE_FOLDER, общий доступ «по ссылке») — те же файлы, что в релизе: FF-Montage-<версия>-<платформа>,
-// SHA256SUMS и SHA256SUMS.sig (подпись тем же ключом — tools/hotfix-pack.ps1 / sign-release.mjs). Файлы могут лежать
-// в корне или в подпапках (по одному набору в подпапке, например «0.5.1»). Хотфикс — следующая версия (0.5.1…):
-// предлагается, если она новее установленной и новее последнего релиза GitHub (при равных — GitHub).
-// Список папки — страница embeddedfolderview (без ключа API), скачивание — drive.usercontent.google.com.
-// Проверка та же: подпись SHA256SUMS → SHA-256 архива; без подписи ничего не ставится.
+// Выбор из списка релизов GitHub. Хотфиксы — пре-релизы с тегом vX.Y.Z-hotfix.N (собирает и подписывает тот же
+// release.yml); предлагаются, только если включена настройка update.hotfixes. Черновики не смотрим, прочие пре-релизы
+// (rc, beta, пре-релиз с тегом обычной версии) — тоже. Берётся самая новая версия новее установленной; если для неё нет
+// сборки этой системы или подписи — следующая по новизне, которую можно поставить; если таких нет — причина самой новой.
 // ---------------------------------------------------------------------------
-const DRIVE_FOLDER: &str = "1hFr83UOv7CpgD20gP1M6euudI2qyHngY";
-const DRIVE_MAX_SUBFOLDERS: usize = 12;
-
-#[derive(Debug, Clone, PartialEq)]
-struct DriveEntry {
-    id: String,
-    name: String,
-    folder: bool,
+/// Результат выбора: план (или причина отказа), релиз, о котором речь (ссылка и описание в окне), последний обычный релиз
+struct Choice<'a> {
+    plan: Result<Plan, Skip>,
+    subject: Option<&'a Value>,
+    latest: Option<&'a Value>,
 }
 
-fn html_unescape(s: &str) -> String {
-    s.replace("&quot;", "\"").replace("&#39;", "'").replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
-}
-
-/// Записи страницы embeddedfolderview: <div class="flip-entry" id="entry-ID"> … <a href="…/file/d/ID/…" или
-/// «…/drive/folders/ID»> … <div class="flip-entry-title">ИМЯ</div>
-fn parse_drive_listing(html: &str) -> Vec<DriveEntry> {
-    let mut out = Vec::new();
-    for part in html.split("id=\"entry-").skip(1) {
-        let Some(end) = part.find('"') else { continue };
-        let id = &part[..end];
-        if id.is_empty() || id.len() > 128 || !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_') {
-            continue;
-        }
-        const TITLE: &str = "flip-entry-title\">";
-        let Some(t) = part.find(TITLE) else { continue };
-        let rest = &part[t + TITLE.len()..];
-        let Some(e) = rest.find('<') else { continue };
-        let name = html_unescape(rest[..e].trim());
-        if name.is_empty() {
-            continue;
-        }
-        let folder = part[..t].contains("/folders/");
-        out.push(DriveEntry { id: id.to_string(), name, folder });
-    }
-    out
-}
-
-fn drive_download_url(id: &str) -> String {
-    format!("https://drive.usercontent.google.com/download?id={id}&export=download&confirm=t")
-}
-
-/// Лучший хотфикс для этой системы среди наборов файлов (корень и подпапки): самая новая версия > current,
-/// у набора которой есть SHA256SUMS и подпись
-fn drive_plan(groups: &[Vec<DriveEntry>], current: &str, os: &str, arch: &str, appimage: bool) -> Result<Plan, Skip> {
-    let cur = parse_version(current).ok_or(Skip::NotNewer)?;
-    let probe = asset_name("0.0.0", os, arch, appimage).ok_or(Skip::NoBuild)?;
-    let (prefix, suffix) = probe.split_once("0.0.0").ok_or(Skip::NoBuild)?;
-    let mut found: Vec<((u64, u64, u64), usize, &DriveEntry)> = Vec::new();
-    for (gi, g) in groups.iter().enumerate() {
-        for e in g.iter().filter(|e| !e.folder) {
-            let Some(mid) = e.name.strip_prefix(prefix).and_then(|x| x.strip_suffix(suffix)) else { continue };
-            if let Some(v) = parse_version(mid).filter(|v| *v > cur) {
-                found.push((v, gi, e));
+fn choose<'a>(rels: &'a [Value], current: &str, hotfixes: bool, os: &str, arch: &str, appimage: bool) -> Choice<'a> {
+    let tag = |r: &Value| parse_version(r["tag_name"].as_str().unwrap_or(""));
+    let pre = |r: &Value| r["prerelease"].as_bool().unwrap_or(false);
+    let listed: Vec<&Value> = rels.iter().filter(|r| r["draft"].as_bool() != Some(true)).collect();
+    // Обычные релизы (не пре-релизы и не хотфиксы); последний — с самой большой версией, а если ни один тег
+    // не версия — первый в списке (самый свежий, как /releases/latest)
+    let stable: Vec<&Value> = listed.iter().copied().filter(|r| !pre(r) && !tag(r).is_some_and(|v| v.is_hotfix())).collect();
+    let latest = stable.iter().copied().filter_map(|r| tag(r).map(|v| (v, r))).max_by_key(|x| x.0).map(|x| x.1).or(stable.first().copied());
+    let cur = parse_version(current);
+    let mut cands: Vec<(Version, &Value)> = listed
+        .iter()
+        .filter_map(|r| {
+            let v = tag(r)?;
+            let ok = if v.is_hotfix() { hotfixes } else { !pre(r) };
+            ok.then_some((v, *r))
+        })
+        .filter(|(v, _)| cur.is_some_and(|c| *v > c))
+        .collect();
+    cands.sort_by_key(|c| std::cmp::Reverse(c.0));
+    let mut first_err: Option<(Skip, &Value)> = None;
+    for (_, r) in &cands {
+        match plan(r, current, os, arch, appimage) {
+            Ok(p) => return Choice { plan: Ok(p), subject: Some(r), latest },
+            Err(e) => {
+                if first_err.is_none() {
+                    first_err = Some((e, r));
+                }
             }
         }
     }
-    if found.is_empty() {
-        return Err(Skip::NotNewer);
+    if let Some((e, r)) = first_err {
+        return Choice { plan: Err(e), subject: Some(r), latest };
     }
-    found.sort_by_key(|x| std::cmp::Reverse(x.0));
-    let file = |g: &Vec<DriveEntry>, n: &str| g.iter().find(|e| !e.folder && e.name == n).map(|e| drive_download_url(&e.id));
-    for (v, gi, e) in &found {
-        let g = &groups[*gi];
-        if let (Some(sums_url), Some(sig_url)) = (file(g, SUMS), file(g, SIG)) {
-            return Ok(Plan {
-                version: format!("{}.{}.{}", v.0, v.1, v.2),
-                name: e.name.clone(),
-                url: drive_download_url(&e.id),
-                sums_url,
-                sig_url,
-                source: "drive",
-            });
-        }
-    }
-    Err(Skip::Unsigned)
+    // Новее ничего нет: ни у одного обычного релиза тег не версия — так и говорим (как раньше с /releases/latest)
+    let bad_tag = latest.is_some_and(|r| tag(r).is_none());
+    Choice { plan: Err(if bad_tag { Skip::BadTag } else { Skip::NotNewer }), subject: latest, latest }
 }
 
-/// Из двух вариантов — с большей версией; при равных — релиз GitHub
-fn better(a: Option<Plan>, b: Option<Plan>) -> Option<Plan> {
-    match (a, b) {
-        (Some(a), Some(b)) => {
-            if parse_version(&b.version) > parse_version(&a.version) {
-                Some(b)
-            } else {
-                Some(a)
-            }
-        }
-        (a, b) => a.or(b),
-    }
+/// Получать ли хотфиксы: settings.json → update.hotfixes (по умолчанию да). Миграция с 0.5.0: если его нет,
+/// а старое update.drive (хотфиксы с Google Диска) выключено — тоже выключено.
+fn hotfixes_enabled(settings: &Value) -> bool {
+    let u = &settings["update"];
+    u["hotfixes"].as_bool().unwrap_or(u["drive"].as_bool() != Some(false))
 }
 
-/// Проверять ли Google Диск (настройка update.drive, по умолчанию — да)
-fn drive_enabled() -> bool {
-    crate::settings::load()["update"]["drive"].as_bool() != Some(false)
-}
-
-async fn fetch_text(url: &str) -> Result<String, String> {
-    let curl = which("curl").ok_or(tr!("curl не найден", "curl not found"))?;
-    let out = ff::command(&curl)
-        .args(["-sSL", "--fail", "--proto", "=https", "--proto-redir", "=https", "--max-time", "30", "-H", "User-Agent: FF-Montage", url])
-        .output()
-        .await
-        .map_err(|e| e.to_string())?;
-    if !out.status.success() {
-        return Err(tr!("Не удалось открыть {}: {}", "Cannot open {}: {}", url, String::from_utf8_lossy(&out.stderr).trim()));
-    }
-    Ok(String::from_utf8_lossy(&out.stdout).to_string())
-}
-
-/// Наборы файлов папки хотфиксов: корень и подпапки (не глубже одного уровня)
-async fn drive_groups() -> Result<Vec<Vec<DriveEntry>>, String> {
-    let list = |id: String| async move {
-        fetch_text(&format!("https://drive.google.com/embeddedfolderview?id={id}")).await.map(|h| parse_drive_listing(&h))
-    };
-    let root = list(DRIVE_FOLDER.to_string()).await?;
-    let mut groups = vec![root.clone()];
-    for f in root.iter().filter(|e| e.folder).take(DRIVE_MAX_SUBFOLDERS) {
-        if let Ok(g) = list(f.id.clone()).await {
-            groups.push(g);
-        }
-    }
-    Ok(groups)
-}
-
-/// Хотфикс с Диска: Ok(None) — нет новее / Диск выключен; Err — Диск не ответил
-async fn drive_check(current: &str) -> Result<Option<Plan>, String> {
-    if !drive_enabled() {
-        return Ok(None);
-    }
-    let groups = drive_groups().await?;
-    Ok(drive_plan(&groups, current, std::env::consts::OS, std::env::consts::ARCH, appimage_path().is_some()).ok())
-}
-
-/// Что ставить: лучший из релиза GitHub и хотфикса с Диска. Возвращает (план или причина, релиз GitHub, ошибка Диска).
-async fn best_plan(current: &str) -> Result<(Result<Plan, Skip>, Option<Value>, Option<String>), String> {
-    let (gh, drive) = tokio::join!(latest_release(), drive_check(current));
-    let appimage = appimage_path().is_some();
-    let gh_plan = gh.as_ref().ok().map(|rel| plan(rel, current, std::env::consts::OS, std::env::consts::ARCH, appimage));
-    let drive_err = drive.as_ref().err().cloned();
-    let drive_plan = drive.unwrap_or(None);
-    if gh.is_err() && drive_plan.is_none() {
-        // GitHub не ответил, а на Диске ничего новее нет (или он тоже не ответил) — ошибка GitHub
-        return Err(gh.err().unwrap_or_default());
-    }
-    let gh_ok = gh_plan.as_ref().and_then(|p| p.as_ref().ok()).cloned();
-    let best = better(gh_ok, drive_plan);
-    let res = match best {
-        Some(p) => Ok(p),
-        None => Err(match gh_plan {
-            Some(Err(e)) => e,
-            _ => Skip::NotNewer,
-        }),
-    };
-    Ok((res, gh.ok(), drive_err))
+/// Выбор для этой копии программы (ОС, архитектура, AppImage)
+fn choose_here<'a>(rels: &'a [Value], current: &str, hotfixes: bool) -> Choice<'a> {
+    choose(rels, current, hotfixes, std::env::consts::OS, std::env::consts::ARCH, appimage_path().is_some())
 }
 
 // ---------------------------------------------------------------------------
@@ -420,7 +358,8 @@ fn verify_signature(msg: &[u8], sig_text: &str, pubkey: &str) -> Result<(), Stri
 // ---------------------------------------------------------------------------
 // Сеть
 // ---------------------------------------------------------------------------
-async fn latest_release() -> Result<Value, String> {
+/// Последние релизы и пре-релизы (новые сверху)
+async fn releases() -> Result<Vec<Value>, String> {
     let curl = which("curl").ok_or(tr!("curl не найден", "curl not found"))?;
     let mut c = ff::command(&curl);
     c.args([
@@ -431,14 +370,16 @@ async fn latest_release() -> Result<Value, String> {
         "Accept: application/vnd.github+json",
         "-H",
         "User-Agent: FF-Montage",
-        &format!("https://api.github.com/repos/{REPO}/releases/latest"),
+        &format!("https://api.github.com/repos/{REPO}/releases?per_page=20"),
     ]);
     let out = c.output().await.map_err(|e| e.to_string())?;
     let v: Value = serde_json::from_slice(&out.stdout).map_err(|_| tr!("GitHub не ответил", "GitHub did not respond").to_string())?;
-    if v["tag_name"].is_null() {
-        return Err(v["message"].as_str().unwrap_or(tr!("Релизов пока нет", "No releases yet")).to_string());
+    match v {
+        Value::Array(list) if !list.is_empty() => Ok(list),
+        Value::Array(_) => Err(tr!("Релизов пока нет", "No releases yet").into()),
+        // Ошибка API (лимит запросов и т. п.) — объект с message
+        v => Err(v["message"].as_str().unwrap_or(tr!("GitHub не ответил", "GitHub did not respond")).to_string()),
     }
-    Ok(v)
 }
 
 /// Скачать по HTTPS (и редиректы только HTTPS)
@@ -488,30 +429,29 @@ pub async fn update_check(app: AppHandle) -> Result<Value, String> {
             "available": behind > 0,
         }));
     }
-    // Релиз GitHub и хотфикс с Google Диска (0.5.0) — ставится тот, что новее
-    let (p, rel, drive_error) = best_plan(&current).await?;
-    let rel = rel.unwrap_or(Value::Null);
-    let tag = rel["tag_name"].as_str().unwrap_or("").to_string();
+    // Релизы GitHub и (если включено) хотфиксы — пре-релизы vX.Y.Z-hotfix.N; ставится самое новое, что можно поставить
+    let hotfixes = hotfixes_enabled(&crate::settings::load());
+    let rels = releases().await?;
+    let c = choose_here(&rels, &current, hotfixes);
+    let p = &c.plan;
+    let subject = c.subject.unwrap_or(&Value::Null);
+    let latest = c.latest.or(c.subject).and_then(|r| r["tag_name"].as_str()).unwrap_or("");
     // «newer»: версия больше, но поставить нельзя (нет сборки для системы или подписи) — окно так и пишет
     let newer = !matches!(p, Err(Skip::BadTag | Skip::NotNewer));
-    let (reason, message) = match &p {
+    let (reason, message) = match p {
         Ok(_) => (Value::Null, Value::Null),
         Err(e) => (json!(e.code()), json!(e.message())),
     };
-    let from_drive = matches!(&p, Ok(x) if x.source == "drive");
     Ok(json!({
-        "mode": "release", "current": current, "latest": tag, "available": p.is_ok(), "newer": newer,
+        "mode": "release", "current": current, "latest": latest, "available": p.is_ok(), "newer": newer,
         "reason": reason, "message": message,
-        "url": rel["html_url"], "notes": if from_drive { Value::Null } else { rel["body"].clone() },
-        "asset": p.as_ref().ok().map(|p| json!({ "name": p.name, "url": p.url, "version": p.version, "source": p.source })),
-        "drive": { "enabled": drive_enabled(), "error": drive_error, "folder": format!("https://drive.google.com/drive/folders/{DRIVE_FOLDER}") },
+        "url": subject["html_url"], "notes": subject["body"],
+        "asset": p.as_ref().ok().map(|p| json!({
+            "name": p.name, "url": p.url, "version": p.version, "hotfix": p.hotfix,
+            "source": if p.hotfix { "hotfix" } else { "release" },
+        })),
+        "hotfixes": { "enabled": hotfixes },
     }))
-}
-
-/// Открыть папку хотфиксов в браузере (адрес зашит в программу — окно не может открыть произвольную ссылку)
-#[tauri::command]
-pub fn update_open_drive() -> Result<(), String> {
-    tauri_plugin_opener::open_url(format!("https://drive.google.com/drive/folders/{DRIVE_FOLDER}"), None::<&str>).map_err(|e| e.to_string())
 }
 
 fn emit(app: &AppHandle, text: &str) {
@@ -620,9 +560,10 @@ pub async fn update_apply(app: AppHandle) -> Result<Value, String> {
     // Готовая сборка: те же проверки, что в update_check, затем подпись и SHA-256
     let current = app.package_info().version.to_string();
     let appimage = appimage_path();
-    let p = best_plan(&current).await?.0.map_err(|e| e.message().to_string())?;
-    if p.source == "drive" {
-        emit(&app, &tr!("Хотфикс {} с Google Диска", "Hotfix {} from Google Drive", p.version));
+    let rels = releases().await?;
+    let p = choose_here(&rels, &current, hotfixes_enabled(&crate::settings::load())).plan.map_err(|e| e.message().to_string())?;
+    if p.hotfix {
+        emit(&app, &tr!("Хотфикс {} (предварительный выпуск на GitHub)", "Hotfix {} (GitHub pre-release)", p.version));
     }
     let tmp = paths::get().temp.join("update");
     let _ = std::fs::remove_dir_all(&tmp);
@@ -677,15 +618,6 @@ async fn download_verified(app: &AppHandle, p: &Plan, tmp: &Path) -> Result<Path
     let a = archive.clone();
     let got = tokio::task::spawn_blocking(move || sha256_file(&a)).await.map_err(|e| e.to_string())?.map_err(|e| e.to_string())?;
     if got != want {
-        // Google Диск вместо файла иногда отдаёт страницу («не удалось проверить на вирусы», лимит скачиваний)
-        let html = std::fs::read(&archive).map(|b| b.trim_ascii_start().starts_with(b"<")).unwrap_or(false);
-        if p.source == "drive" && html {
-            return Err(tr!(
-                "Google Диск вернул страницу вместо файла {} (лимит скачиваний или проверка на вирусы) — попробуйте позже",
-                "Google Drive returned a web page instead of {} (download quota or virus scan) — try again later",
-                p.name
-            ));
-        }
         return Err(tr!(
             "SHA-256 архива {} не совпадает с SHA256SUMS — обновление не установлено",
             "SHA-256 of {} does not match SHA256SUMS — the update is not installed",
@@ -831,13 +763,54 @@ mod tests {
 
     #[test]
     fn versions() {
-        assert_eq!(parse_version("v0.4.0"), Some((0, 4, 0)));
-        assert_eq!(parse_version("0.10.2"), Some((0, 10, 2)));
-        for bad in ["", "v", "latest", "v0.4", "v0.4.0.1", "v0.4.0-beta", "0.4.x", "V0.4.0", "v 0.4.0", "v0..1", "v99999999999.0.0"] {
+        let v = |s: &str| parse_version(s).unwrap();
+        assert_eq!(v("v0.4.0"), Version { major: 0, minor: 4, patch: 0, rank: RELEASE_RANK });
+        assert_eq!(v("0.10.2"), Version { major: 0, minor: 10, patch: 2, rank: RELEASE_RANK });
+        assert_eq!(v("v0.5.1-hotfix.1"), Version { major: 0, minor: 5, patch: 1, rank: 1 });
+        assert_eq!(v("0.5.1-hotfix.12").rank, 12);
+        assert!(!v("0.5.1").is_hotfix() && v("0.5.1-hotfix.3").is_hotfix());
+        // Строка версии обратно — как в имени ассета и в теге
+        assert_eq!(v("v0.5.1").to_string(), "0.5.1");
+        assert_eq!(v("v0.5.1-hotfix.2").to_string(), "0.5.1-hotfix.2");
+        for bad in [
+            "",
+            "v",
+            "latest",
+            "v0.4",
+            "v0.4.0.1",
+            "v0.4.0-beta",
+            "v0.4.0-rc1",
+            "v0.4.0-rc.1",
+            "0.4.x",
+            "V0.4.0",
+            "v 0.4.0",
+            "v0..1",
+            "v99999999999.0.0",
+            "0.5.1-",
+            "0.5.1-hotfix",
+            "0.5.1-hotfix.",
+            "0.5.1-hotfix.0",
+            "0.5.1-hotfix.01",
+            "0.5.1-hotfix.1.2",
+            "0.5.1-hotfix.x",
+            "0.5.1-hotfix.-1",
+            "0.5.1-Hotfix.1",
+            "0.5.1-hotfix1",
+            "0.5.1-hotfix.1+build",
+            "0.5.1-hotfix.1-hotfix.2",
+            "0.5-hotfix.1",
+            "0.5.1-hotfix.9999999999",
+        ] {
             assert_eq!(parse_version(bad), None, "{bad}");
         }
-        assert!(parse_version("0.4.0") > parse_version("0.3.10"));
-        assert!(parse_version("0.10.0") > parse_version("0.9.9"));
+        assert!(v("0.4.0") > v("0.3.10"));
+        assert!(v("0.10.0") > v("0.9.9"));
+        // 0.5.0 < 0.5.1-hotfix.1 < 0.5.1-hotfix.2 < 0.5.1-hotfix.10 < 0.5.1 < 0.5.2-hotfix.1
+        let order = ["0.5.0", "0.5.1-hotfix.1", "0.5.1-hotfix.2", "0.5.1-hotfix.10", "0.5.1", "0.5.2-hotfix.1", "0.6.0"];
+        for w in order.windows(2) {
+            assert!(v(w[0]) < v(w[1]), "{} < {}", w[0], w[1]);
+        }
+        assert_eq!(v("0.5.1-hotfix.1"), v("v0.5.1-hotfix.1"));
     }
 
     fn release(tag: &str, names: &[&str]) -> Value {
@@ -887,65 +860,155 @@ mod tests {
         assert_eq!(plan(&release("v0.4.0", &[ALL[0], ALL[4]]), "0.3.1", "windows", "x86_64", false), Err(Skip::Unsigned));
     }
 
-    // Фрагмент страницы embeddedfolderview (как её отдаёт Google Диск)
-    const DRIVE_HTML: &str = r#"<div class="flip-entries"><div class="flip-entry" id="entry-1AbC_dEf-123" tabindex="0" role="link"><div class="flip-entry-info"><a href="https://drive.google.com/file/d/1AbC_dEf-123/view?usp=drive_web" target="_blank"><div class="flip-entry-visual"></div><div class="flip-entry-list-icon"></div><div class="flip-entry-title">FF-Montage-0.5.1-windows-x64.zip</div></a></div></div><div class="flip-entry" id="entry-SUMS1" tabindex="0"><a href="https://drive.google.com/file/d/SUMS1/view?usp=drive_web"><div class="flip-entry-title">SHA256SUMS</div></a></div><div class="flip-entry" id="entry-SIG1"><a href="https://drive.google.com/file/d/SIG1/view"><div class="flip-entry-title">SHA256SUMS.sig</div></a></div><div class="flip-entry" id="entry-FOLD1"><a href="https://drive.google.com/drive/folders/FOLD1"><div class="flip-entry-title">old &amp; misc</div></a></div><div class="flip-entry" id="entry-bad&quot;id"><div class="flip-entry-title">x</div></div></div>"#;
-
     #[test]
-    fn drive_listing_parse() {
-        let e = parse_drive_listing(DRIVE_HTML);
-        assert_eq!(e.len(), 4, "{e:?}");
-        assert_eq!(e[0], DriveEntry { id: "1AbC_dEf-123".into(), name: "FF-Montage-0.5.1-windows-x64.zip".into(), folder: false });
-        assert_eq!(e[3], DriveEntry { id: "FOLD1".into(), name: "old & misc".into(), folder: true });
-        assert!(parse_drive_listing("").is_empty());
-        assert!(parse_drive_listing("<html>no entries</html>").is_empty());
+    fn hotfix_plan() {
+        // Ассет хотфикса — то же имя с полной версией: FF-Montage-0.5.1-hotfix.1-windows-x64.zip
+        let names = ["FF-Montage-0.5.1-hotfix.1-windows-x64.zip", "FF-Montage-0.5.1-hotfix.1-linux-x86_64.AppImage", SUMS, SIG];
+        let rel = release("v0.5.1-hotfix.1", &names);
+        let p = plan(&rel, "0.5.0", "windows", "x86_64", false).unwrap();
+        assert_eq!((p.version.as_str(), p.name.as_str(), p.hotfix), ("0.5.1-hotfix.1", names[0], true));
+        assert_eq!(plan(&rel, "0.5.0", "linux", "x86_64", true).unwrap().name, names[1]);
+        // Архив без суффикса хотфикса в хотфикс-релизе не подходит
+        let rel2 = release("v0.5.1-hotfix.1", &["FF-Montage-0.5.1-windows-x64.zip", SUMS, SIG]);
+        assert_eq!(plan(&rel2, "0.5.0", "windows", "x86_64", false), Err(Skip::NoBuild));
+        // Установлен хотфикс: этот же и более старые — не новее; релиз той же версии — новее
+        assert_eq!(plan(&rel, "0.5.1-hotfix.1", "windows", "x86_64", false), Err(Skip::NotNewer));
+        assert_eq!(plan(&rel, "0.5.1-hotfix.2", "windows", "x86_64", false), Err(Skip::NotNewer));
+        assert_eq!(plan(&rel, "0.5.1", "windows", "x86_64", false), Err(Skip::NotNewer));
+        let r = release("v0.5.1", &["FF-Montage-0.5.1-windows-x64.zip", SUMS, SIG]);
+        let p = plan(&r, "0.5.1-hotfix.2", "windows", "x86_64", false).unwrap();
+        assert_eq!((p.version.as_str(), p.hotfix), ("0.5.1", false));
+    }
+
+    /// Релиз из списка GitHub: тег, пре-релиз ли, ассеты под Windows (+ SHA256SUMS и подпись, если signed)
+    fn gh(tag: &str, prerelease: bool, build: bool, signed: bool) -> Value {
+        let v = tag.trim_start_matches('v');
+        let mut names = vec![];
+        let win = format!("FF-Montage-{v}-windows-x64.zip");
+        if build {
+            names.push(win.as_str());
+        }
+        if signed {
+            names.extend([SUMS, SIG]);
+        }
+        let mut r = release(tag, &names);
+        r["prerelease"] = json!(prerelease);
+        r["draft"] = json!(false);
+        r["html_url"] = json!(format!("https://github.com/x/releases/tag/{tag}"));
+        r["body"] = json!(format!("notes {tag}"));
+        r
+    }
+
+    fn pick(rels: &[Value], current: &str, hotfixes: bool) -> (Result<String, Skip>, Option<String>, Option<String>) {
+        let c = choose(rels, current, hotfixes, "windows", "x86_64", false);
+        let tag = |r: Option<&Value>| r.and_then(|r| r["tag_name"].as_str()).map(str::to_string);
+        (c.plan.map(|p| p.version), tag(c.subject), tag(c.latest))
     }
 
     #[test]
-    fn drive_hotfix_choice() {
-        let root = parse_drive_listing(DRIVE_HTML);
-        let p = drive_plan(std::slice::from_ref(&root), "0.5.0", "windows", "x86_64", false).unwrap();
-        assert_eq!(p.version, "0.5.1");
-        assert_eq!(p.source, "drive");
-        assert_eq!(p.url, "https://drive.usercontent.google.com/download?id=1AbC_dEf-123&export=download&confirm=t");
-        assert!(p.sums_url.contains("id=SUMS1") && p.sig_url.contains("id=SIG1"));
-        // Уже стоит эта или более новая — не предлагается; Linux-сборки в папке нет
-        assert_eq!(drive_plan(std::slice::from_ref(&root), "0.5.1", "windows", "x86_64", false), Err(Skip::NotNewer));
-        assert_eq!(drive_plan(std::slice::from_ref(&root), "0.6.0", "windows", "x86_64", false), Err(Skip::NotNewer));
-        assert_eq!(drive_plan(std::slice::from_ref(&root), "0.5.0", "linux", "x86_64", false), Err(Skip::NotNewer));
-        // Без подписи — не ставится
-        let unsigned: Vec<DriveEntry> = root.iter().filter(|e| e.name != SIG).cloned().collect();
-        assert_eq!(drive_plan(std::slice::from_ref(&unsigned), "0.5.0", "windows", "x86_64", false), Err(Skip::Unsigned));
-        // Подпапка с более новой версией и своим SHA256SUMS выигрывает; новее, но без подписи — берётся следующая подписанная
-        let f = |id: &str, n: &str| DriveEntry { id: id.into(), name: n.into(), folder: false };
-        let sub = vec![f("Z2", "FF-Montage-0.5.2-windows-x64.zip"), f("S2", SUMS), f("G2", SIG)];
-        assert_eq!(drive_plan(&[root.clone(), sub.clone()], "0.5.0", "windows", "x86_64", false).unwrap().version, "0.5.2");
-        let sub_unsigned = vec![f("Z3", "FF-Montage-0.5.3-windows-x64.zip")];
-        assert_eq!(drive_plan(&[root.clone(), sub_unsigned], "0.5.0", "windows", "x86_64", false).unwrap().version, "0.5.1");
-        // Похожие имена не подхватываются
-        let odd = vec![
-            f("A", "FF-Montage-0.5.9-windows-x64.zip.part"),
-            f("B", "FF-Montage-0.5.9-beta-windows-x64.zip"),
-            f("S", SUMS),
-            f("G", SIG),
+    fn release_list_choice() {
+        let ok = |s: &str| -> Result<String, Skip> { Ok(s.to_string()) };
+        let some = |s: &str| Some(s.to_string());
+        // Список GitHub — новые сверху
+        let rels = vec![
+            gh("v0.5.1-hotfix.2", true, true, true),
+            gh("v0.5.1-hotfix.1", true, true, true),
+            gh("v0.5.0", false, true, true),
+            gh("v0.4.7", false, true, true),
         ];
-        assert_eq!(drive_plan(&[odd], "0.5.0", "windows", "x86_64", false), Err(Skip::NotNewer));
+        // Хотфиксы включены — самый новый хотфикс; «последний релиз» — обычный v0.5.0
+        assert_eq!(pick(&rels, "0.5.0", true), (ok("0.5.1-hotfix.2"), some("v0.5.1-hotfix.2"), some("v0.5.0")));
+        let c = choose(&rels, "0.5.0", true, "windows", "x86_64", false);
+        assert!(c.plan.unwrap().hotfix);
+        // Выключены — пре-релизы не смотрим: новее ничего нет
+        assert_eq!(pick(&rels, "0.5.0", false), (Err(Skip::NotNewer), some("v0.5.0"), some("v0.5.0")));
+        assert_eq!(pick(&rels, "0.4.7", false), (ok("0.5.0"), some("v0.5.0"), some("v0.5.0")));
+        // Установлен хотфикс
+        assert_eq!(pick(&rels, "0.5.1-hotfix.1", true).0, ok("0.5.1-hotfix.2"));
+        assert_eq!(pick(&rels, "0.5.1-hotfix.2", true).0, Err(Skip::NotNewer));
+        assert_eq!(pick(&rels, "0.5.1-hotfix.2", false).0, Err(Skip::NotNewer));
+        // Релиз выигрывает у своих хотфиксов (и ставится поверх установленного хотфикса, даже если хотфиксы выключены)
+        let mut with_rel = vec![gh("v0.5.1", false, true, true)];
+        with_rel.extend(rels.iter().cloned());
+        assert_eq!(pick(&with_rel, "0.5.0", true), (ok("0.5.1"), some("v0.5.1"), some("v0.5.1")));
+        assert_eq!(pick(&with_rel, "0.5.1-hotfix.2", false).0, ok("0.5.1"));
+        // Порядок в списке не важен — выбирается по версии
+        let mut rev = with_rel.clone();
+        rev.reverse();
+        assert_eq!(pick(&rev, "0.5.0", true).0, ok("0.5.1"));
+        // Черновики не смотрим
+        let mut draft = gh("v0.6.0", false, true, true);
+        draft["draft"] = json!(true);
+        assert_eq!(pick(&[draft, gh("v0.5.0", false, true, true)], "0.4.7", true).0, ok("0.5.0"));
     }
 
     #[test]
-    fn github_vs_drive() {
-        let p = |v: &str, src: &'static str| Plan {
-            version: v.into(),
-            name: String::new(),
-            url: String::new(),
-            sums_url: String::new(),
-            sig_url: String::new(),
-            source: src,
-        };
-        assert_eq!(better(Some(p("0.5.0", "github")), Some(p("0.5.1", "drive"))).unwrap().source, "drive");
-        assert_eq!(better(Some(p("0.5.1", "github")), Some(p("0.5.1", "drive"))).unwrap().source, "github");
-        assert_eq!(better(Some(p("0.6.0", "github")), Some(p("0.5.1", "drive"))).unwrap().source, "github");
-        assert_eq!(better(None, Some(p("0.5.1", "drive"))).unwrap().source, "drive");
-        assert!(better(None, None).is_none());
+    fn release_list_ignores_other_prereleases() {
+        let rels = vec![
+            gh("v0.6.0-rc.1", true, true, true),
+            gh("v0.6.0-beta", false, true, true),
+            gh("v0.6.0", true, true, true), // пре-релиз с тегом обычной версии
+            gh("v0.5.0", false, true, true),
+        ];
+        assert_eq!(pick(&rels, "0.5.0", true).0, Err(Skip::NotNewer));
+        assert_eq!(pick(&rels, "0.5.0", false).0, Err(Skip::NotNewer));
+        assert_eq!(pick(&rels, "0.4.0", true).0, Ok("0.5.0".to_string()));
+        // Хотфикс-тег без отметки «пре-релиз» — всё равно хотфикс: только при включённой настройке
+        let rels = vec![gh("v0.5.1-hotfix.1", false, true, true), gh("v0.5.0", false, true, true)];
+        assert_eq!(pick(&rels, "0.5.0", false), (Err(Skip::NotNewer), Some("v0.5.0".into()), Some("v0.5.0".into())));
+        assert_eq!(pick(&rels, "0.5.0", true).0, Ok("0.5.1-hotfix.1".to_string()));
+    }
+
+    #[test]
+    fn release_list_fallback() {
+        let some = |s: &str| Some(s.to_string());
+        // Самый новый без сборки для системы — берётся следующий, который можно поставить
+        let rels = vec![gh("v0.5.2-hotfix.1", true, false, true), gh("v0.5.1", false, true, true), gh("v0.5.0", false, true, true)];
+        assert_eq!(pick(&rels, "0.5.0", true), (Ok("0.5.1".into()), some("v0.5.1"), some("v0.5.1")));
+        // Без подписи — тоже
+        let rels = vec![gh("v0.5.1-hotfix.2", true, true, false), gh("v0.5.1-hotfix.1", true, true, true), gh("v0.5.0", false, true, true)];
+        assert_eq!(pick(&rels, "0.5.0", true).0, Ok("0.5.1-hotfix.1".into()));
+        // Поставить нечего — причина самой новой версии, речь о ней
+        let rels =
+            vec![gh("v0.5.1-hotfix.2", true, true, false), gh("v0.5.1-hotfix.1", true, false, true), gh("v0.5.0", false, true, true)];
+        assert_eq!(pick(&rels, "0.5.0", true), (Err(Skip::Unsigned), some("v0.5.1-hotfix.2"), some("v0.5.0")));
+        let rels = vec![gh("v0.5.1", false, false, true), gh("v0.5.0", false, true, true)];
+        assert_eq!(pick(&rels, "0.5.0", true).0, Err(Skip::NoBuild));
+        assert_eq!(pick(&rels, "0.5.0", true).0.unwrap_err().code(), "platform");
+        // macOS — сборки нет ни в одном
+        let c = choose(&rels, "0.5.0", true, "macos", "aarch64", false);
+        assert_eq!(c.plan, Err(Skip::NoBuild));
+    }
+
+    #[test]
+    fn release_list_bad_tag_and_current() {
+        // Релиз с тегом не версией пропускается, если есть релизы с версией
+        let rels = vec![gh("nightly", false, true, true), gh("v0.5.0", false, true, true)];
+        assert_eq!(pick(&rels, "0.5.0", true), (Err(Skip::NotNewer), Some("v0.5.0".into()), Some("v0.5.0".into())));
+        assert_eq!(pick(&rels, "0.4.0", true).0, Ok("0.5.0".into()));
+        // Только релиз с кривым тегом — он и «последний», причина BadTag (как раньше с /releases/latest)
+        let rels = vec![gh("nightly", false, true, true)];
+        assert_eq!(pick(&rels, "0.5.0", true), (Err(Skip::BadTag), Some("nightly".into()), Some("nightly".into())));
+        // Текущая версия не разобралась — ничего не ставим
+        let rels = vec![gh("v0.5.1", false, true, true)];
+        assert_eq!(pick(&rels, "garbage", true).0, Err(Skip::NotNewer));
+        assert_eq!(pick(&rels, "0.5.1-rc.1", true).0, Err(Skip::NotNewer));
+        // Пустой список
+        assert_eq!(pick(&[], "0.5.0", true), (Err(Skip::NotNewer), None, None));
+    }
+
+    #[test]
+    fn hotfix_setting_and_migration() {
+        assert!(hotfixes_enabled(&json!({})));
+        assert!(hotfixes_enabled(&json!({ "update": {} })));
+        assert!(hotfixes_enabled(&json!({ "update": { "hotfixes": true } })));
+        assert!(!hotfixes_enabled(&json!({ "update": { "hotfixes": false } })));
+        // 0.5.0: update.drive=false (хотфиксы с Google Диска выключены) — выключено и теперь
+        assert!(!hotfixes_enabled(&json!({ "update": { "drive": false } })));
+        assert!(hotfixes_enabled(&json!({ "update": { "drive": true } })));
+        // Новая настройка важнее старой
+        assert!(hotfixes_enabled(&json!({ "update": { "drive": false, "hotfixes": true } })));
+        assert!(!hotfixes_enabled(&json!({ "update": { "drive": true, "hotfixes": false } })));
     }
 
     #[test]

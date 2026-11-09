@@ -10,6 +10,7 @@
 // Без DOM при импорте: модуль используется окном, экспортом и автотестами.
 import { tfOf } from './transform.js';
 import { t } from './i18n.js';
+import { registerGraphic } from './graphics.js';
 
 export const SHAPE_TYPES = Object.freeze(['rect', 'chamfer', 'triangle', 'ellipse']);
 export const SHAPE_MAX = 24 * 3600;
@@ -182,3 +183,31 @@ export function renderShapeImage(clip, W, H) {
   drawShape(ctx, clip, W, H);
   return { canvas: cv, w: W, h: H, roll: false };
 }
+
+/** Значок типа фигуры (SVG-строка; цвет — currentColor) */
+export function shapeIcon(type, size = 16) {
+  const p = type === 'ellipse' ? '<ellipse cx="12" cy="12" rx="9" ry="7"/>'
+    : type === 'triangle' ? '<path d="M12 4 L21 20 L3 20 Z"/>'
+      : type === 'chamfer' ? '<path d="M8 5 H16 L21 10 V14 L16 19 H8 L3 14 V10 Z"/>'
+        : '<rect x="3" y="6" width="18" height="12" rx="1.5"/>';
+  return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round">${p}</svg>`;
+}
+
+// Вид 'shape' (graphics.js)
+registerGraphic('shape', {
+  field: 'shape',
+  title: () => t('Фигура'),
+  libraryTitle: () => t('Фигуры'),
+  clean: cleanShape,
+  defaultDur: SHAPE_DEFAULT_DUR,
+  name: (c) => shapeName(cleanShape(c && c.shape).type),
+  describe: (sh) => ({ type: cleanShape(sh).type, ...shapeDiff(sh) }),
+  rect: shapeRect,
+  draw: (ctx, clip, W, H) => drawShape(ctx, clip, W, H),
+  animated: () => false,
+  async exportAsset(clip, env) {
+    const img = renderShapeImage(clip, env.W, env.H);
+    return { path: await env.save('png', await env.pngBase64(img.canvas)), w: img.w, h: img.h, roll: false };
+  },
+  library: SHAPE_TYPES.map((ty) => ({ id: `shape.${ty}`, title: () => shapeName(ty), icon: (size) => shapeIcon(ty, size), data: () => newShape(ty) })),
+});

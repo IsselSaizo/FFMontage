@@ -6,8 +6,11 @@
 //   strokeWidth, shadow*, box* — в долях размера шрифта (em).
 // Рисует текст js/textRender.js (холст) — и в плеере, и для экспорта (решение D2: PNG + overlay).
 // Без DOM: модуль используется окном, экспортом, реестром стилей и автотестами.
+// Вид графического клипа 'text' (graphics.js): модель — здесь, рисунок и экспорт — textRender.js, интерфейс — graphicsUi.js.
+import { registerGraphic, GRAPHIC_MAX } from './graphics.js';
+import { t } from './i18n.js';
 
-export const TEXT_MAX = 24 * 3600;   // наибольшая длина текстового клипа, с
+export const TEXT_MAX = GRAPHIC_MAX;   // наибольшая длина текстового (и любого графического) клипа, с
 export const TEXT_DEFAULT_DUR = 5;
 export const BUILTIN_FONTS = Object.freeze(['Inter', 'Open Sans']);
 
@@ -66,9 +69,7 @@ const STYLE_RE = /^[a-z0-9][a-z0-9_.-]{0,80}$/i;
 export const MAX_TEXT_LEN = 5000;
 
 export const isText = (c) => !!c && c.kind === 'text';
-// Клип без файла (текст или фигура, 0.5.0): звука, скорости и кадров файла нет, длина — любая до TEXT_MAX
-export const isGraphic = (c) => !!c && (c.kind === 'text' || c.kind === 'shape' || c.kind === 'timer');
-export const GRAPHIC_KINDS = Object.freeze(['text', 'shape', 'timer']);
+// Клипы без файла (текст, фигура, таймер…) — реестр graphics.js: isGraphic / graphicOf из graphicKinds.js
 export const isFontName = (s) => typeof s === 'string' && FONT_RE.test(s.trim());
 
 const round = (v, d) => Math.round(v * 10 ** d) / 10 ** d;
@@ -122,6 +123,15 @@ export function textTitle(c) {
   const s = (c && c.text && typeof c.text.content === 'string' ? c.text.content : '').split('\n').map((x) => x.trim()).find(Boolean) || '';
   return s.length > 60 ? `${s.slice(0, 57)}…` : s;
 }
+
+registerGraphic('text', {
+  field: 'text',
+  title: () => t('Текст'),
+  clean: cleanText,
+  defaultDur: TEXT_DEFAULT_DUR,
+  name: (c) => textTitle(c) || t('Текст'),
+  describe: textDiff,
+});
 
 /** Шрифты, которые использует проект (тексты всех эпизодов и стили субтитров) */
 export function usedFonts(project) {

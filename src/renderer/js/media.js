@@ -3,6 +3,10 @@ import { store } from './store.js';
 import { h, $, fmtTime, toast, iconEl, confirmDialog, fmtBytes, errText } from './util.js';
 import { rebuildDerived } from './fx.js';
 import { t } from './i18n.js';
+import { getPref, setPref } from './prefs.js';
+import { renderLibrary } from './library.js';
+import { onFontsChange } from './fonts.js';
+import { dragPoint } from './uidoc.js';
 
 const api = window.api;
 
@@ -282,14 +286,29 @@ let onAddToTimeline = null;
 export function initMediaPanel({ addToTimeline }) {
   onAddToTimeline = addToTimeline;
   const panel = $('#media-panel');
-  panel.append(
-    h('div', { class: 'panel-head' }, h('h2', {}, t('Ваши медиа'))),
+  // Вкладки (как у правой колонки): «Ваши медиа» — файлы проекта, «Библиотека» — фигуры, таймеры… (library.js)
+  const TABS = [{ id: 'media', name: t('Ваши медиа') }, { id: 'library', name: t('Библиотека') }];
+  const tabs = h('div', { class: 'rp-tabs mp-tabs', id: 'mp-tabs' });
+  const mediaPane = h('div', { class: 'mp-pane', id: 'media-pane' },
     h('button', { class: 'btn primary wide', id: 'btn-import', onclick: () => pickAndImport() },
       iconEl('upload', 18), t('Импорт медиа')),
-    h('div', { class: 'media-grid', id: 'media-grid' }),
-  );
+    h('div', { class: 'media-grid', id: 'media-grid' }));
+  const libPane = h('div', { class: 'mp-pane', id: 'library', hidden: true });
+  const show = (id) => {
+    if (!TABS.some((x) => x.id === id)) id = 'media';
+    setPref('ui.mediaTab', id);
+    mediaPane.hidden = id !== 'media';
+    libPane.hidden = id !== 'library';
+    for (const b of tabs.querySelectorAll('[data-mtab]')) b.classList.toggle('on', b.dataset.mtab === id);
+    if (id === 'library') renderLibrary(libPane);
+  };
+  for (const tab of TABS) tabs.append(h('button', { class: 'rp-tab', dataset: { mtab: tab.id }, onclick: () => show(tab.id) }, tab.name));
+  panel.append(h('div', { class: 'panel-head' }, tabs), mediaPane, libPane);
+  show(getPref('ui.mediaTab', 'media'));
   store.on('project', renderGrid);
   store.on('media', renderGrid);
+  // Миниатюры библиотеки рисуются шрифтами проекта (цифры таймера — Inter)
+  onFontsChange(() => { if (!libPane.hidden) renderLibrary(libPane); });
   renderGrid();
 }
 
@@ -358,20 +377,26 @@ function card(m) {
 function startMediaDrag(e, m, rt) {
   if (e.button !== 0 || e.target.closest('button')) return;
   const x0 = e.clientX; const y0 = e.clientY;
+  // Медиафайлы могут быть в отдельном окне (popout.js): «призрак» — в окне, где нажали (координаты событий — его),
+  // точка для таймлайна — через uidoc.dragPoint (таймлайн может быть в другом окне)
+  const doc = e.currentTarget.ownerDocument || document;
   let ghost = null;
   const tl = () => window.__ffm && window.__ffm.timeline;
+  const tlDoc = () => (tl() && tl().scroll ? tl().scroll.ownerDocument : document);
   const move = (ev) => {
     if (!ghost) {
       if (Math.hypot(ev.clientX - x0, ev.clientY - y0) < 5) return;
       const img = m.hasVideo && rt.thumbs && rt.thumbs.urls.length ? h('img', { src: rt.thumbs.urls[Math.floor(rt.thumbs.urls.length * 0.15)] }) : null;
       ghost = h('div', { class: 'media-ghost' }, img, h('span', {}, m.name));
-      document.body.append(ghost);
-      document.body.classList.add('dragging-media');
+      doc.body.append(ghost);
+      doc.body.classList.add('dragging-media');
       window.__ffmDragMedia = m.id;
     }
     ghost.style.left = `${ev.clientX}px`;
     ghost.style.top = `${ev.clientY}px`;
-    if (tl()) tl().dragHover(ev.clientX, ev.clientY, m.id);
+    if (!tl()) return;
+    const p = dragPoint(ev, tlDoc());
+    if (p) tl().dragHover(p[0], p[1], m.id); else tl().dragLeave();
   };
   const up = (ev) => {
     window.removeEventListener('pointermove', move);
@@ -379,10 +404,11 @@ function startMediaDrag(e, m, rt) {
     window.removeEventListener('pointercancel', up);
     if (!ghost) return;
     ghost.remove();
-    document.body.classList.remove('dragging-media');
+    doc.body.classList.remove('dragging-media');
     window.__ffmDragMedia = null;
     if (tl()) {
-      if (ev.type === 'pointerup') tl().dropAt(ev.clientX, ev.clientY, { ids: [m.id], alt: ev.altKey });
+      const p = ev.type === 'pointerup' ? dragPoint(ev, tlDoc()) : null;
+      if (p) tl().dropAt(p[0], p[1], { ids: [m.id], alt: ev.altKey });
       else tl().dragLeave();
     }
   };

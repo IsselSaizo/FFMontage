@@ -7,6 +7,15 @@
 # SHA256SUMS верна (открытый ключ зашит в update.rs) и SHA-256 архива совпадает.
 # Нужен секрет FFM_SIGNING_KEY (закрытый ключ ed25519, PEM) — без него релиз не публикуется.
 # Выпустить релиз: git tag v0.4.0 && git push origin v0.4.0  (или Actions → Release → Run workflow)
+#
+# Хотфикс — исправления до следующего релиза: версия X.Y.Z-hotfix.N, где X.Y.Z — СЛЕДУЮЩИЙ патч (после 0.5.0 —
+# 0.5.1-hotfix.1, 0.5.1-hotfix.2…; порядок 0.5.0 < 0.5.1-hotfix.1 < 0.5.1-hotfix.2 < 0.5.1).
+#   1. Версия X.Y.Z-hotfix.N в src-tauri/Cargo.toml, src-tauri/Cargo.lock (пакет ff-montage), src-tauri/tauri.conf.json,
+#      package.json; проверка — node tools/check-version.mjs vX.Y.Z-hotfix.N
+#   2. git tag vX.Y.Z-hotfix.N && git push origin vX.Y.Z-hotfix.N
+# Сборка и подпись те же, публикуется как пре-релиз (prerelease, не «Latest»). Программа предлагает его, если в окне
+# обновлений включено «Получать хотфиксы» (settings.json → update.hotfixes). Другие суффиксы (rc, beta…) не проходят
+# tools/check-version.mjs.
 name: Release
 on:
   push:
@@ -14,7 +23,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Тег релиза (например v0.4.0)'
+        description: 'Тег релиза (например v0.4.0 или хотфикс v0.4.1-hotfix.1)'
         required: true
 
 permissions:
@@ -27,6 +36,8 @@ jobs:
   # Тег = версия в Cargo.toml / Cargo.lock / tauri.conf.json / package.json; иначе программа не предложит обновление
   version:
     runs-on: ubuntu-22.04
+    outputs:
+      hotfix: ${{ steps.kind.outputs.hotfix }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -35,6 +46,10 @@ jobs:
         with:
           node-version: 22
       - run: node tools/check-version.mjs "$TAG"
+      # vX.Y.Z-hotfix.N — хотфикс (пре-релиз); check-version.mjs уже отсеял прочие теги
+      - id: kind
+        run: |
+          if [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-hotfix\.[1-9][0-9]*$ ]]; then echo "hotfix=true"; else echo "hotfix=false"; fi >> "$GITHUB_OUTPUT"
 
   build:
     needs: version
@@ -113,7 +128,7 @@ jobs:
   # Все файлы релиза → SHA256SUMS → подпись ed25519 (tools/sign-release.mjs) → GitHub Release.
   # Упавший AppImage останавливает релиз: иначе у пользователей AppImage обновление молча пропало бы.
   publish:
-    needs: [build, appimage]
+    needs: [version, build, appimage]
     if: ${{ !cancelled() && needs.build.result == 'success' && (needs.appimage.result == 'success' || needs.appimage.result == 'skipped') }}
     runs-on: ubuntu-22.04
     steps:
@@ -135,20 +150,39 @@ jobs:
           ls -la dist
           node tools/sign-release.mjs sign dist
           node tools/sign-release.mjs verify dist
+      # Текст релиза — вне dist/ (files: dist/* уходит в релиз целиком)
+      - name: Текст хотфикса
+        if: needs.version.outputs.hotfix == 'true'
+        run: |
+          cat > release-body.md <<'EOF'
+          **Хотфикс** — предварительный выпуск с исправлениями, которые войдут в следующий релиз. Программа предлагает его в «Проверить обновления…», если включено «Получать хотфиксы»; проверка та же, что у релизов: подпись `SHA256SUMS.sig` и SHA-256 архива.
+
+          Файлы те же, что у релиза: `FF-Montage-…-windows-x64.zip`, `FF-Montage-…-linux-x86_64.AppImage`, `FF-Montage-…-linux-x86_64.tar.gz`. Что исправлено — в [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/${{ env.TAG }}/CHANGELOG.md).
+
+          Проверка файлов: `sha256sum -c SHA256SUMS --ignore-missing`.
+          EOF
+      - name: Текст релиза
+        if: needs.version.outputs.hotfix != 'true'
+        run: |
+          cat > release-body.md <<'EOF'
+          **Windows:** скачайте `FF-Montage-…-windows-x64.zip`, распакуйте и запустите `FF Montage.exe`. Ничего ставить не нужно — FFmpeg уже внутри.
+          **Linux / Steam Deck:** `FF-Montage-…-linux-x86_64.AppImage` — `chmod +x`, затем запустить; всё внутри (окно, GStreamer, FFmpeg). Как добавить в Steam — в [README](https://github.com/${{ github.repository }}/blob/${{ env.TAG }}/README.md#linux-и-steam-deck-appimage).
+          **Linux (архив):** `FF-Montage-…-linux-x86_64.tar.gz`, затем `./ff-montage` (нужны WebKitGTK 4.1 и GStreamer good).
+
+          **Обновление с 0.3.0:** «Проверить обновления…» в программе находит и ставит эту версию само; вручную — распакуйте архив поверх старой папки (настройки и проекты останутся). Подробности — в разделе «Обновление с 0.3.0» CHANGELOG.
+
+          Что нового — в [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/${{ env.TAG }}/CHANGELOG.md).
+
+          Проверка файлов: `sha256sum -c SHA256SUMS --ignore-missing`. `SHA256SUMS.sig` — подпись ed25519; программа проверяет её сама перед обновлением.
+
+          FFmpeg — сборка [BtbN](https://github.com/BtbN/FFmpeg-Builds) под лицензией GPL, исходники: https://github.com/FFmpeg/FFmpeg
+          EOF
+      # Хотфикс — пре-релиз и не «Latest»: /releases/latest и кнопка «Latest» на GitHub остаются у обычного релиза
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.TAG }}
           name: FF Montage ${{ env.TAG }}
           files: dist/*
-          body: |
-            **Windows:** скачайте `FF-Montage-…-windows-x64.zip`, распакуйте и запустите `FF Montage.exe`. Ничего ставить не нужно — FFmpeg уже внутри.
-            **Linux / Steam Deck:** `FF-Montage-…-linux-x86_64.AppImage` — `chmod +x`, затем запустить; всё внутри (окно, GStreamer, FFmpeg). Как добавить в Steam — в [README](https://github.com/${{ github.repository }}/blob/${{ env.TAG }}/README.md#linux-и-steam-deck-appimage).
-            **Linux (архив):** `FF-Montage-…-linux-x86_64.tar.gz`, затем `./ff-montage` (нужны WebKitGTK 4.1 и GStreamer good).
-
-            **Обновление с 0.3.0:** «Проверить обновления…» в программе находит и ставит эту версию само; вручную — распакуйте архив поверх старой папки (настройки и проекты останутся). Подробности — в разделе «Обновление с 0.3.0» CHANGELOG.
-
-            Что нового — в [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/${{ env.TAG }}/CHANGELOG.md).
-
-            Проверка файлов: `sha256sum -c SHA256SUMS --ignore-missing`. `SHA256SUMS.sig` — подпись ed25519; программа проверяет её сама перед обновлением.
-
-            FFmpeg — сборка [BtbN](https://github.com/BtbN/FFmpeg-Builds) под лицензией GPL, исходники: https://github.com/FFmpeg/FFmpeg
+          body_path: release-body.md
+          prerelease: ${{ needs.version.outputs.hotfix == 'true' }}
+          make_latest: ${{ needs.version.outputs.hotfix == 'true' && 'false' || 'true' }}

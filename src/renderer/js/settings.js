@@ -12,6 +12,7 @@ import {
 import { foldersForm } from './folders.js';
 import { store } from './store.js';
 import { renderPaths } from './vst.js';
+import { experimentalOn, setExperimental } from './popout.js';
 
 const api = window.api;
 // Действия главного окна: перезагрузка с сохранением проекта, обновления, диалог MCP, сохранение перед перезапуском
@@ -117,6 +118,28 @@ function renderGeneral(body) {
         class: `chip${l.id === getLang() ? ' on' : ''}`, dataset: { lang: l.id }, onclick: () => switchLang(l.id),
       }, l.name)))),
     h('label', { class: 'check-row' }, restore, t('При запуске открывать проект, с которым работали в прошлый раз')));
+
+  // Экспериментальные функции (0.5.0): пока — панели в отдельных окнах (popout.js). По умолчанию выключены.
+  const exp = h('input', { type: 'checkbox', id: 'set-experimental' });
+  exp.checked = experimentalOn();
+  exp.addEventListener('change', async () => {
+    if (exp.checked) {
+      const yes = await confirmDialog(t('Включить экспериментальные функции?'),
+        t('Сейчас это панели в отдельных окнах (кнопка ⧉ у медиафайлов, плеера, свойств и таймлайна). Функция не доделана: перетаскивание между окнами может работать неточно (особенно на мониторах с разным масштабом), на Linux и Steam Deck окна ведут себя непредсказуемо. Если что-то пошло не так — выключите эту галочку: все панели вернутся в главное окно.'),
+        t('Включить'));
+      if (!yes) { exp.checked = false; return; }
+      setExperimental(true);
+      toast(t('Экспериментальные функции включены: кнопка ⧉ — у панелей'), 'info', 3500);
+    } else {
+      const r = setExperimental(false);
+      if (r.ok) toast(t('Экспериментальные функции выключены, все панели — в главном окне'), 'info', 3000);
+      else toast(t('Не все панели вернулись в главное окно — перезапустите программу'), 'error', 6000);
+    }
+  });
+  body.append(h('div', { class: 'set-row', dataset: { set: 'experimental' } },
+    h('div', { class: 'set-label' }, h('b', {}, t('Экспериментальные функции')),
+      h('span', { class: 'muted small' }, t('Панели в отдельных окнах (второй монитор). Не доделано — может работать с ошибками.'))),
+    h('label', { class: 'check-row' }, exp, t('Включить'))));
 }
 
 // --- Горячие клавиши ---

@@ -4,8 +4,6 @@
 // Музыка — отдельные <audio>, громкость (можно > 100%) и затухания — через Web Audio.
 import { store, MAIN_LANE } from './store.js';
 import { cssTransform, contentAspect, tfOf } from './transform.js';
-import { isShape, drawShape } from './shapes.js';
-import { isTimer, drawTimer } from './timer.js';
 import { borderOf, borderPx } from './border.js';
 import { playUrl, audioUrl, channelUrl, channelState, playbackFailed } from './media.js';
 import { layoutOf, routeOf, routeMatrix, downmixMatrix, channelLabels, clipChannel } from './audioLayout.js';
@@ -17,8 +15,8 @@ import { speedOf, tlLen, clipEnd, srcAt, tlAt } from './clipTime.js';
 import { activeFx, webAudioChain } from './audioFx.js';
 import { onRegistryChange } from './registry.js';
 import { t } from './i18n.js';
-import { isGraphic } from './textModel.js';
-import { drawText } from './textRender.js';
+import { isGraphic, graphicOf, graphicsVersion, onGraphicsChange } from './graphicKinds.js';
+import './textRender.js';   // рисунок текста (graphics.js)
 import { fontsVersion, onFontsChange } from './fonts.js';
 import { getPref, setPref } from './prefs.js';
 import * as vst from './vst.js';
@@ -85,6 +83,8 @@ export class Preview {
     store.on('media', () => { if (!this.playing) this.seek(store.time); });
     // Загрузились/добавились шрифты — перерисовать тексты
     onFontsChange(() => { if (!this.playing) this.present(store.time, true); });
+    // Картинки графических клипов догрузились (слои таймера) — перерисовать кадр
+    onGraphicsChange(() => { if (!this.playing) this.present(store.time, true); });
     // Плагин добавил/убрал эффект или переход — пересобрать цепочки Web Audio и перерисовать кадр
     onRegistryChange(() => {
       for (const r of this.routes.values()) r.sig = '';
@@ -575,20 +575,16 @@ export class Preview {
     if (!this.override) this.preload(v, lane, t);
   }
 
-  // Текст на холсте слоя: размер холста = «экран» × devicePixelRatio; перерисовка — только если что-то изменилось
+  // Графический клип (текст, фигура, таймер — graphics.js) на холсте слоя: размер холста = «экран» × devicePixelRatio;
+  // перерисовка — только если что-то изменилось (у анимированных видов — и время, до 1/120 с)
   drawTextSlot(el, clip, t) {
+    const g = graphicOf(clip);
+    if (!g || !g.draw) return;
     const dpr = window.devicePixelRatio || 1;
     const W = Math.max(2, Math.round(this.stage.clientWidth * dpr));
     const H = Math.max(2, Math.round(this.stage.clientHeight * dpr));
-    const shape = isShape(clip);
-    const timer = isTimer(clip);
-    const roll = !shape && !timer && clip.text && clip.text.motion === 'roll';
-    // Титры и таймер зависят от времени (таймер — до 1/60 с)
-    const local = roll ? Math.round((t - clip.start) * 120) / 120 : timer ? Math.round((t - clip.start) * 60) / 60 : 0;
-    const sig = shape
-      ? `${W}x${H}|shape|${JSON.stringify(clip.shape)}|${JSON.stringify(clip.transform || null)}`
-      : timer ? `${W}x${H}|timer|${local}|${fontsVersion()}|${JSON.stringify(clip.timer)}|${JSON.stringify(clip.transform || null)}`
-        : `${W}x${H}|${local}|${fontsVersion()}|${clip.out}|${JSON.stringify(clip.text)}|${JSON.stringify(clip.transform || null)}`;
+    const local = g.animated && g.animated(clip) ? Math.round((t - clip.start) * 120) / 120 : 0;
+    const sig = `${W}x${H}|${clip.kind}|${local}|${fontsVersion()}|${graphicsVersion()}|${clip.out}|${JSON.stringify(clip[g.field])}|${JSON.stringify(clip.transform || null)}`;
     if (el.dataset.sig === sig) return;
     el.dataset.sig = sig;
     if (el.width !== W) el.width = W;
@@ -596,9 +592,8 @@ export class Preview {
     const ctx = el.getContext('2d');
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, W, H);
-    if (shape) drawShape(ctx, clip, W, H);
-    else if (timer) drawTimer(ctx, clip, W, H, local);
-    else drawText(ctx, clip, W, H, { local });
+    // false — картинки вида ещё грузятся: нарисовать заново, когда будут готовы
+    if (g.draw(ctx, clip, W, H, local) === false) delete el.dataset.sig;
   }
 
   // Обводка и скругление углов клипа (border.js): скругление — clip-path самого слоя, обводка — рамка-div
