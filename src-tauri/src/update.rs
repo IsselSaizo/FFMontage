@@ -903,18 +903,18 @@ mod tests {
     #[test]
     fn drive_hotfix_choice() {
         let root = parse_drive_listing(DRIVE_HTML);
-        let p = drive_plan(&[root.clone()], "0.5.0", "windows", "x86_64", false).unwrap();
+        let p = drive_plan(std::slice::from_ref(&root), "0.5.0", "windows", "x86_64", false).unwrap();
         assert_eq!(p.version, "0.5.1");
         assert_eq!(p.source, "drive");
         assert_eq!(p.url, "https://drive.usercontent.google.com/download?id=1AbC_dEf-123&export=download&confirm=t");
         assert!(p.sums_url.contains("id=SUMS1") && p.sig_url.contains("id=SIG1"));
         // Уже стоит эта или более новая — не предлагается; Linux-сборки в папке нет
-        assert_eq!(drive_plan(&[root.clone()], "0.5.1", "windows", "x86_64", false), Err(Skip::NotNewer));
-        assert_eq!(drive_plan(&[root.clone()], "0.6.0", "windows", "x86_64", false), Err(Skip::NotNewer));
-        assert_eq!(drive_plan(&[root.clone()], "0.5.0", "linux", "x86_64", false), Err(Skip::NotNewer));
+        assert_eq!(drive_plan(std::slice::from_ref(&root), "0.5.1", "windows", "x86_64", false), Err(Skip::NotNewer));
+        assert_eq!(drive_plan(std::slice::from_ref(&root), "0.6.0", "windows", "x86_64", false), Err(Skip::NotNewer));
+        assert_eq!(drive_plan(std::slice::from_ref(&root), "0.5.0", "linux", "x86_64", false), Err(Skip::NotNewer));
         // Без подписи — не ставится
         let unsigned: Vec<DriveEntry> = root.iter().filter(|e| e.name != SIG).cloned().collect();
-        assert_eq!(drive_plan(&[unsigned.clone()], "0.5.0", "windows", "x86_64", false), Err(Skip::Unsigned));
+        assert_eq!(drive_plan(std::slice::from_ref(&unsigned), "0.5.0", "windows", "x86_64", false), Err(Skip::Unsigned));
         // Подпапка с более новой версией и своим SHA256SUMS выигрывает; новее, но без подписи — берётся следующая подписанная
         let f = |id: &str, n: &str| DriveEntry { id: id.into(), name: n.into(), folder: false };
         let sub = vec![f("Z2", "FF-Montage-0.5.2-windows-x64.zip"), f("S2", SUMS), f("G2", SIG)];
