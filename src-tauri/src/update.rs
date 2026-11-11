@@ -6,6 +6,9 @@
 //    ассет строго своей ОС и архитектуры → SHA256SUMS с подписью ed25519 (ключ — UPDATE_PUBKEY) →
 //    SHA-256 скачанного архива сверяется с SHA256SUMS → только после этого замена программы и перезапуск.
 //    Любая ошибка проверки — ничего не устанавливается. Подпись делает tools/sign-release.mjs в release-workflow.
+//    Сеть (0.5.1-hotfix.1): файл качается по очереди путями из routes — прямая ссылка github.com, тот же ассет через
+//    api.github.com (у части провайдеров github.com недоступен, а API открывается) и, если в Windows включён системный
+//    прокси, прямая ссылка через него (curl сам системный прокси не берёт). Подпись и SHA-256 проверяются как раньше.
 use crate::{ff, paths, tr};
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -147,14 +150,23 @@ pub fn current_asset(version: &str) -> Option<String> {
     asset_name(version, std::env::consts::OS, std::env::consts::ARCH, appimage_path().is_some())
 }
 
-/// Ссылка на ассет релиза по точному имени
-fn asset_url(rel: &Value, name: &str) -> Option<String> {
+/// Где лежит ассет релиза: прямая ссылка (github.com/…/releases/download/…) и тот же файл через API
+/// (api.github.com/repos/…/releases/assets/<id> с «Accept: application/octet-stream» — редирект на тот же файл)
+#[derive(Debug, PartialEq, Clone)]
+struct Link {
+    web: String,
+    api: Option<String>,
+}
+
+/// Ссылки на ассет релиза по точному имени
+fn asset_url(rel: &Value, name: &str) -> Option<Link> {
     rel["assets"].as_array()?.iter().find_map(|a| {
-        if a["name"].as_str()? == name {
-            a["browser_download_url"].as_str().map(str::to_string)
-        } else {
-            None
+        if a["name"].as_str()? != name {
+            return None;
         }
+        let web = a["browser_download_url"].as_str()?.to_string();
+        let api = a["url"].as_str().filter(|u| u.starts_with("https://api.github.com/")).map(str::to_string);
+        Some(Link { web, api })
     })
 }
 
@@ -163,9 +175,9 @@ fn asset_url(rel: &Value, name: &str) -> Option<String> {
 struct Plan {
     version: String,
     name: String,
-    url: String,
-    sums_url: String,
-    sig_url: String,
+    url: Link,
+    sums_url: Link,
+    sig_url: Link,
     /// Хотфикс (пре-релиз GitHub vX.Y.Z-hotfix.N), а не обычный релиз
     hotfix: bool,
 }
@@ -358,56 +370,220 @@ fn verify_signature(msg: &[u8], sig_text: &str, pubkey: &str) -> Result<(), Stri
 // ---------------------------------------------------------------------------
 // Сеть
 // ---------------------------------------------------------------------------
-/// Последние релизы и пре-релизы (новые сверху)
-async fn releases() -> Result<Vec<Value>, String> {
-    let curl = which("curl").ok_or(tr!("curl не найден", "curl not found"))?;
-    let mut c = ff::command(&curl);
-    c.args([
-        "-sL",
-        "--max-time",
-        "30",
-        "-H",
-        "Accept: application/vnd.github+json",
-        "-H",
-        "User-Agent: FF-Montage",
-        &format!("https://api.github.com/repos/{REPO}/releases?per_page=20"),
-    ]);
-    let out = c.output().await.map_err(|e| e.to_string())?;
-    let v: Value = serde_json::from_slice(&out.stdout).map_err(|_| tr!("GitHub не ответил", "GitHub did not respond").to_string())?;
-    match v {
-        Value::Array(list) if !list.is_empty() => Ok(list),
-        Value::Array(_) => Err(tr!("Релизов пока нет", "No releases yet").into()),
-        // Ошибка API (лимит запросов и т. п.) — объект с message
-        v => Err(v["message"].as_str().unwrap_or(tr!("GitHub не ответил", "GitHub did not respond")).to_string()),
+/// Подключение к серверу: дольше не ждём (без него curl на Windows ждёт ~21 с на каждый адрес), дальше — другой путь
+const CONNECT_SECS: &str = "20";
+
+/// Совет, когда GitHub не открылся ни одним путём
+fn offline_hint() -> String {
+    tr!(
+        "Похоже, GitHub недоступен из этой сети (провайдер, VPN или прокси). Повторите позже или через другое подключение. \
+         Вручную: скачайте архив со страницы https://github.com/{}/releases и распакуйте поверх папки программы — \
+         настройки и проекты останутся.",
+        "GitHub seems to be unreachable from this network (ISP, VPN or proxy). Try again later or over another connection. \
+         By hand: download the archive from https://github.com/{}/releases and unpack it over the program folder — \
+         settings and projects are kept.",
+        REPO
+    )
+}
+
+/// curl сам берёт прокси из переменных окружения — тогда системный не подставляем
+fn proxy_in_env() -> bool {
+    ["https_proxy", "HTTPS_PROXY", "all_proxy", "ALL_PROXY"].iter().any(|k| std::env::var_os(k).is_some_and(|v| !v.is_empty()))
+}
+
+/// Строка ProxyServer из настроек Windows → адрес для curl --proxy.
+/// «host:port» — один HTTP-прокси на всё; «http=h:p;https=h:p;socks=h:p» — по протоколам (берём https, затем http,
+/// затем socks — у Windows это SOCKS4).
+fn parse_proxy_server(s: &str) -> Option<String> {
+    let s = s.trim();
+    let pick = if s.contains('=') {
+        let parts: Vec<(String, &str)> = s
+            .split(';')
+            .filter_map(|p| p.split_once('=').map(|(k, v)| (k.trim().to_ascii_lowercase(), v.trim())))
+            .filter(|(_, v)| !v.is_empty())
+            .collect();
+        let get = |k: &str| parts.iter().find(|(n, _)| n == k).map(|(_, v)| *v);
+        match (get("https").or_else(|| get("http")), get("socks")) {
+            (Some(v), _) => v.to_string(),
+            (None, Some(v)) if !v.contains("://") => format!("socks4a://{v}"),
+            (None, Some(v)) => v.to_string(),
+            (None, None) => return None,
+        }
+    } else {
+        s.split(';').next().unwrap_or("").trim().to_string()
+    };
+    if pick.is_empty() || pick.starts_with('-') || pick.chars().any(char::is_whitespace) {
+        return None;
+    }
+    Some(if pick.contains("://") { pick } else { format!("http://{pick}") })
+}
+
+/// Системный прокси Windows (Параметры → Сеть → Прокси; его ставят и VPN-клиенты в режиме «системный прокси»).
+/// Браузер и окно программы ходят через него, а curl — нет. PAC-скрипты (AutoConfigURL) не поддерживаются.
+#[cfg(windows)]
+fn system_proxy() -> Option<String> {
+    use windows::core::HSTRING;
+    use windows::Win32::Foundation::ERROR_SUCCESS;
+    use windows::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_DWORD, RRF_RT_REG_SZ};
+    if proxy_in_env() {
+        return None;
+    }
+    let key = HSTRING::from("Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings");
+    let mut on: u32 = 0;
+    let mut size = std::mem::size_of::<u32>() as u32;
+    let r = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            &key,
+            &HSTRING::from("ProxyEnable"),
+            RRF_RT_REG_DWORD,
+            None,
+            Some(&mut on as *mut u32 as *mut _),
+            Some(&mut size),
+        )
+    };
+    if r != ERROR_SUCCESS || on == 0 {
+        return None;
+    }
+    let mut buf = [0u16; 2048];
+    let mut size = std::mem::size_of_val(&buf) as u32;
+    let r = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            &key,
+            &HSTRING::from("ProxyServer"),
+            RRF_RT_REG_SZ,
+            None,
+            Some(buf.as_mut_ptr() as *mut _),
+            Some(&mut size),
+        )
+    };
+    if r != ERROR_SUCCESS {
+        return None;
+    }
+    let end = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+    parse_proxy_server(&String::from_utf16_lossy(&buf[..end]))
+}
+
+/// На Linux curl и так берёт https_proxy / all_proxy из окружения
+#[cfg(not(windows))]
+fn system_proxy() -> Option<String> {
+    None
+}
+
+/// Один путь до файла
+#[derive(Debug, PartialEq)]
+struct Route {
+    url: String,
+    /// Адрес ассета в API: нужен заголовок «Accept: application/octet-stream», иначе придёт JSON с описанием
+    api: bool,
+    proxy: Option<String>,
+}
+
+impl Route {
+    /// «github.com», «api.github.com», «github.com через прокси http://127.0.0.1:8080» — для журнала и ошибки
+    fn describe(&self) -> String {
+        let host = self.url.split("://").nth(1).and_then(|r| r.split('/').next()).unwrap_or(&self.url);
+        match &self.proxy {
+            Some(p) => tr!("{} через прокси {}", "{} via proxy {}", host, p),
+            None => host.to_string(),
+        }
     }
 }
 
-/// Скачать по HTTPS (и редиректы только HTTPS)
-async fn download(url: &str, to: &Path, max_secs: u32) -> Result<(), String> {
-    let curl = which("curl").ok_or(tr!("curl не найден", "curl not found"))?;
-    let out = ff::command(&curl)
-        .args([
-            "-sSL",
-            "--fail",
-            "--proto",
-            "=https",
-            "--proto-redir",
-            "=https",
-            "--max-time",
-            &max_secs.to_string(),
-            "-H",
-            "User-Agent: FF-Montage",
-            "-o",
-            &s(to),
-            url,
-        ])
-        .output()
-        .await
-        .map_err(|e| e.to_string())?;
-    if !out.status.success() {
-        return Err(tr!("Не удалось скачать {}: {}", "Cannot download {}: {}", url, String::from_utf8_lossy(&out.stderr).trim()));
+/// Пути по очереди: прямая ссылка → через API → прямая ссылка через системный прокси
+fn routes(link: &Link, proxy: Option<&str>) -> Vec<Route> {
+    let mut r = vec![Route { url: link.web.clone(), api: false, proxy: None }];
+    if let Some(a) = &link.api {
+        r.push(Route { url: a.clone(), api: true, proxy: None });
     }
-    Ok(())
+    if let Some(p) = proxy {
+        r.push(Route { url: link.web.clone(), api: false, proxy: Some(p.to_string()) });
+    }
+    r
+}
+
+/// Аргументы curl для скачивания по одному пути: только HTTPS (и редиректы тоже), обрыв при подключении дольше
+/// CONNECT_SECS и при скорости ниже 1 КБ/с дольше минуты (зависшее соединение), общий предел max_secs
+fn curl_args(r: &Route, to: &Path, max_secs: u32) -> Vec<String> {
+    let mut a: Vec<String> = [
+        "-sSL",
+        "--fail",
+        "--proto",
+        "=https",
+        "--proto-redir",
+        "=https",
+        "--connect-timeout",
+        CONNECT_SECS,
+        "--speed-limit",
+        "1024",
+        "--speed-time",
+        "60",
+        "--max-time",
+        &max_secs.to_string(),
+        "-H",
+        "User-Agent: FF-Montage",
+    ]
+    .iter()
+    .map(|x| x.to_string())
+    .collect();
+    if r.api {
+        a.extend(["-H".into(), "Accept: application/octet-stream".into()]);
+    }
+    if let Some(p) = &r.proxy {
+        a.extend(["--proxy".into(), p.clone()]);
+    }
+    a.extend(["-o".into(), s(to), r.url.clone()]);
+    a
+}
+
+/// Последние релизы и пре-релизы (новые сверху). Напрямую, а если не ответил — через системный прокси.
+async fn releases() -> Result<Vec<Value>, String> {
+    let curl = which("curl").ok_or(tr!("curl не найден", "curl not found"))?;
+    let url = format!("https://api.github.com/repos/{REPO}/releases?per_page=20");
+    let mut errs: Vec<String> = vec![];
+    for proxy in std::iter::once(None).chain(system_proxy().map(Some)) {
+        let mut c = ff::command(&curl);
+        c.args(["-sSL", "--connect-timeout", CONNECT_SECS, "--max-time", "30"]);
+        c.args(["-H", "Accept: application/vnd.github+json", "-H", "User-Agent: FF-Montage"]);
+        if let Some(p) = &proxy {
+            c.args(["--proxy", p]);
+        }
+        c.arg(&url);
+        let out = c.output().await.map_err(|e| e.to_string())?;
+        let Ok(v) = serde_json::from_slice::<Value>(&out.stdout) else {
+            let r = Route { url: url.clone(), api: true, proxy };
+            errs.push(format!("{}: {}", r.describe(), String::from_utf8_lossy(&out.stderr).trim()));
+            continue;
+        };
+        return match v {
+            Value::Array(list) if !list.is_empty() => Ok(list),
+            Value::Array(_) => Err(tr!("Релизов пока нет", "No releases yet").into()),
+            // Ошибка API (лимит запросов и т. п.) — объект с message
+            v => Err(v["message"].as_str().unwrap_or(tr!("GitHub не ответил", "GitHub did not respond")).to_string()),
+        };
+    }
+    Err(format!("{}\n{}\n\n{}", tr!("GitHub не ответил", "GitHub did not respond"), errs.join("\n"), offline_hint()))
+}
+
+/// Скачать файл релиза: пути из routes по очереди, до первого удачного. В окне обновления видно, какой путь пробуется.
+async fn download(app: &AppHandle, link: &Link, to: &Path, max_secs: u32) -> Result<(), String> {
+    let curl = which("curl").ok_or(tr!("curl не найден", "curl not found"))?;
+    let mut errs: Vec<String> = vec![];
+    for (i, r) in routes(link, system_proxy().as_deref()).iter().enumerate() {
+        if i > 0 {
+            emit(app, &tr!("Не получилось, пробую через {}…", "Failed, trying via {}…", r.describe()));
+        }
+        let _ = std::fs::remove_file(to);
+        let out = ff::command(&curl).args(curl_args(r, to, max_secs)).output().await.map_err(|e| e.to_string())?;
+        if out.status.success() {
+            return Ok(());
+        }
+        errs.push(format!("{}: {}", r.describe(), String::from_utf8_lossy(&out.stderr).trim()));
+    }
+    let _ = std::fs::remove_file(to);
+    let name = link.web.rsplit('/').next().unwrap_or(&link.web);
+    Err(tr!("Не удалось скачать {}:\n{}\n\n{}", "Cannot download {}:\n{}\n\n{}", name, errs.join("\n"), offline_hint()))
 }
 
 #[tauri::command]
@@ -447,7 +623,7 @@ pub async fn update_check(app: AppHandle) -> Result<Value, String> {
         "reason": reason, "message": message,
         "url": subject["html_url"], "notes": subject["body"],
         "asset": p.as_ref().ok().map(|p| json!({
-            "name": p.name, "url": p.url, "version": p.version, "hotfix": p.hotfix,
+            "name": p.name, "url": p.url.web, "version": p.version, "hotfix": p.hotfix,
             "source": if p.hotfix { "hotfix" } else { "release" },
         })),
         "hotfixes": { "enabled": hotfixes },
@@ -605,8 +781,8 @@ pub async fn update_apply(app: AppHandle) -> Result<Value, String> {
 async fn download_verified(app: &AppHandle, p: &Plan, tmp: &Path) -> Result<PathBuf, String> {
     emit(app, tr!("Проверяю подпись релиза…", "Checking the release signature…"));
     let (sums_file, sig_file) = (tmp.join(SUMS), tmp.join(SIG));
-    download(&p.sums_url, &sums_file, 60).await?;
-    download(&p.sig_url, &sig_file, 60).await?;
+    download(app, &p.sums_url, &sums_file, 60).await?;
+    download(app, &p.sig_url, &sig_file, 60).await?;
     let sums = std::fs::read(&sums_file).map_err(|e| e.to_string())?;
     let sig = std::fs::read_to_string(&sig_file).map_err(|e| e.to_string())?;
     verify_signature(&sums, &sig, UPDATE_PUBKEY)?;
@@ -614,7 +790,7 @@ async fn download_verified(app: &AppHandle, p: &Plan, tmp: &Path) -> Result<Path
     let want = list.get(&p.name).ok_or_else(|| tr!("В SHA256SUMS нет {}", "SHA256SUMS does not list {}", p.name))?.clone();
     emit(app, &tr!("Скачиваю {}…", "Downloading {}…", p.name));
     let archive = tmp.join(&p.name);
-    download(&p.url, &archive, 3600).await?;
+    download(app, &p.url, &archive, 3600).await?;
     let a = archive.clone();
     let got = tokio::task::spawn_blocking(move || sha256_file(&a)).await.map_err(|e| e.to_string())?.map_err(|e| e.to_string())?;
     if got != want {
@@ -814,7 +990,83 @@ mod tests {
     }
 
     fn release(tag: &str, names: &[&str]) -> Value {
-        json!({ "tag_name": tag, "assets": names.iter().map(|n| json!({ "name": n, "browser_download_url": format!("https://example/{n}") })).collect::<Vec<_>>() })
+        let asset = |n: &&str| json!({ "name": n, "browser_download_url": format!("https://example/{n}"), "url": format!("https://api.github.com/repos/x/releases/assets/{n}") });
+        json!({ "tag_name": tag, "assets": names.iter().map(asset).collect::<Vec<_>>() })
+    }
+
+    #[test]
+    fn asset_links() {
+        let rel = json!({ "assets": [
+            { "name": "a.zip", "browser_download_url": "https://github.com/x/releases/download/v1/a.zip",
+              "url": "https://api.github.com/repos/x/releases/assets/1" },
+            // Адрес API не с api.github.com (или не https) — не берём, остаётся только прямая ссылка
+            { "name": "b.zip", "browser_download_url": "https://github.com/x/releases/download/v1/b.zip", "url": "http://api.github.com/x" },
+            { "name": "c.zip", "browser_download_url": "https://github.com/x/releases/download/v1/c.zip" },
+            { "name": "d.zip", "url": "https://api.github.com/repos/x/releases/assets/4" },
+        ]});
+        assert_eq!(asset_url(&rel, "a.zip").unwrap().api.as_deref(), Some("https://api.github.com/repos/x/releases/assets/1"));
+        assert_eq!(asset_url(&rel, "b.zip").unwrap(), Link { web: "https://github.com/x/releases/download/v1/b.zip".into(), api: None });
+        assert_eq!(asset_url(&rel, "c.zip").unwrap().api, None);
+        // Без прямой ссылки ассет не считается найденным
+        assert_eq!(asset_url(&rel, "d.zip"), None);
+        assert_eq!(asset_url(&rel, "e.zip"), None);
+    }
+
+    #[test]
+    fn download_routes() {
+        let link = Link {
+            web: "https://github.com/x/releases/download/v1/a.zip".into(),
+            api: Some("https://api.github.com/repos/x/releases/assets/1".into()),
+        };
+        let r = routes(&link, None);
+        assert_eq!(
+            r.iter().map(|r| (r.url.as_str(), r.api, r.proxy.is_some())).collect::<Vec<_>>(),
+            [
+                ("https://github.com/x/releases/download/v1/a.zip", false, false),
+                ("https://api.github.com/repos/x/releases/assets/1", true, false)
+            ]
+        );
+        assert_eq!(r[0].describe(), "github.com");
+        assert_eq!(r[1].describe(), "api.github.com");
+        let r = routes(&link, Some("http://127.0.0.1:8080"));
+        assert_eq!(r.len(), 3);
+        assert_eq!((r[2].url.as_str(), r[2].api, r[2].proxy.as_deref()), (link.web.as_str(), false, Some("http://127.0.0.1:8080")));
+        assert!(r[2].describe().starts_with("github.com ") && r[2].describe().ends_with(" http://127.0.0.1:8080"));
+        // Без адреса API — прямая ссылка и прокси
+        let only = Link { web: link.web.clone(), api: None };
+        assert_eq!(routes(&only, None).len(), 1);
+        assert_eq!(routes(&only, Some("http://p:1")).len(), 2);
+
+        // Аргументы curl: HTTPS-only, тайм-аут подключения, Accept только для API, --proxy только у пути через прокси
+        let to = Path::new("out.bin");
+        let r = routes(&link, Some("http://127.0.0.1:8080"));
+        let a: Vec<Vec<String>> = r.iter().map(|r| curl_args(r, to, 60)).collect();
+        for x in &a {
+            for need in ["--fail", "--proto", "=https", "--proto-redir", "--connect-timeout", "--max-time"] {
+                assert!(x.iter().any(|y| y == need), "{need} in {x:?}");
+            }
+            assert_eq!(x[x.len() - 3..], ["-o".to_string(), "out.bin".into(), x.last().unwrap().clone()]);
+        }
+        let has = |x: &Vec<String>, s: &str| x.iter().any(|y| y == s);
+        assert!(!has(&a[0], "Accept: application/octet-stream") && has(&a[1], "Accept: application/octet-stream"));
+        assert!(!has(&a[0], "--proxy") && !has(&a[1], "--proxy") && has(&a[2], "--proxy"));
+        assert_eq!(a[1].last().unwrap(), "https://api.github.com/repos/x/releases/assets/1");
+    }
+
+    #[test]
+    fn proxy_server_setting() {
+        let p = |s: &str| parse_proxy_server(s);
+        assert_eq!(p("127.0.0.1:10809").as_deref(), Some("http://127.0.0.1:10809"));
+        assert_eq!(p(" proxy.local:3128 ").as_deref(), Some("http://proxy.local:3128"));
+        assert_eq!(p("http://127.0.0.1:8080").as_deref(), Some("http://127.0.0.1:8080"));
+        assert_eq!(p("http=h1:1;https=h2:2;socks=h3:3").as_deref(), Some("http://h2:2"));
+        assert_eq!(p("HTTP=h1:1;ftp=h4:4").as_deref(), Some("http://h1:1"));
+        assert_eq!(p("socks=127.0.0.1:1080").as_deref(), Some("socks4a://127.0.0.1:1080"));
+        assert_eq!(p("socks=socks5h://127.0.0.1:1080").as_deref(), Some("socks5h://127.0.0.1:1080"));
+        assert_eq!(p("https=;http=h1:1").as_deref(), Some("http://h1:1"));
+        for bad in ["", "  ", "ftp=h4:4", "https=", "-x", "a b:1"] {
+            assert_eq!(p(bad), None, "{bad}");
+        }
     }
     const ALL: [&str; 5] = [
         "FF-Montage-0.4.0-windows-x64.zip",
@@ -831,8 +1083,9 @@ mod tests {
         assert_eq!(plan(&rel, "0.3.1", "linux", "x86_64", false).unwrap().name, "FF-Montage-0.4.0-linux-x86_64.tar.gz");
         let p = plan(&rel, "0.3.1", "linux", "x86_64", true).unwrap();
         assert_eq!(p.name, "FF-Montage-0.4.0-linux-x86_64.AppImage");
-        assert_eq!(p.sums_url, "https://example/SHA256SUMS");
-        assert_eq!(p.sig_url, "https://example/SHA256SUMS.sig");
+        assert_eq!(p.sums_url.web, "https://example/SHA256SUMS");
+        assert_eq!(p.sig_url.web, "https://example/SHA256SUMS.sig");
+        assert_eq!(p.url.api.as_deref(), Some("https://api.github.com/repos/x/releases/assets/FF-Montage-0.4.0-linux-x86_64.AppImage"));
         assert_eq!(p.version, "0.4.0");
         // macOS и ARM — готовой сборки нет (раньше на macOS выбирался Linux-архив)
         assert_eq!(plan(&rel, "0.3.1", "macos", "aarch64", false), Err(Skip::NoBuild));

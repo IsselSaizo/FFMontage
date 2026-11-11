@@ -1,7 +1,7 @@
 {
   "name": "ffmontage",
   "productName": "FF Montage",
-  "version": "0.5.0",
+  "version": "0.5.1-hotfix.1",
   "description": "Видеоредактор в стиле Clipchamp с FFmpeg под капотом (Tauri)",
   "private": true,
   "scripts": {

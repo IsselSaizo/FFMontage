@@ -120,6 +120,7 @@ async function checkUpdates() {
   const closeBtn = h('button', { class: 'btn ghost', onclick: close }, t('Закрыть'));
   let r;
   try { r = await api.updateCheck(); } catch (e) {
+    console.warn('update: проверка не удалась —', String(e));
     body.innerHTML = '';
     body.append(h('p', {}, t('Не удалось проверить обновления.')), h('pre', { class: 'error-box' }, String(e)));
     foot.append(closeBtn);
@@ -137,6 +138,8 @@ async function checkUpdates() {
       const res = await api.updateApply();
       logBox.textContent += `${res.message || t('Готово.')}\n`;
     } catch (e) {
+      // В журнал — вместе с шагами из окна: по renderer.log видно, на каком шаге и каким путём не скачалось
+      console.warn(`update: ${r.current} → ${(r.asset && r.asset.version) || r.latest} не установлено\n${logBox.textContent}${String(e)}`);
       logBox.textContent += `${t('Ошибка: {e}', { e })}\n`;
     }
     off(); closeBtn.disabled = false;
