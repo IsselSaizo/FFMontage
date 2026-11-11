@@ -27,7 +27,7 @@ trap 'flush_notes; rm -rf "$W"' EXIT
 [ -f "$A" ] || { err "нет файла $1"; exit 1; }
 [ -x "$A" ] || err "файл не исполняемый (chmod +x)"
 NAME="$(basename "$A")"
-[[ "$NAME" =~ ^FF-Montage-[0-9]+\.[0-9]+\.[0-9]+-linux-x86_64\.AppImage$ ]] || err "имя «$NAME» не FF-Montage-<версия>-linux-x86_64.AppImage (update.rs его не найдёт)"
+[[ "$NAME" =~ ^FF-Montage-[0-9]+\.[0-9]+\.[0-9]+(-hotfix\.[1-9][0-9]*)?-linux-x86_64\.AppImage$ ]] || err "имя «$NAME» не FF-Montage-<версия>-linux-x86_64.AppImage (update.rs его не найдёт)"
 note "$NAME: $(du -h "$A" | cut -f1), $(file -b "$A" | cut -c1-80)"
 
 # --- 1. Содержимое образа ---------------------------------------------------------------------------

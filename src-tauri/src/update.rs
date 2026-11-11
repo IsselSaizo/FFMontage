@@ -387,13 +387,15 @@ fn offline_hint() -> String {
 }
 
 /// curl сам берёт прокси из переменных окружения — тогда системный не подставляем
+#[cfg_attr(not(windows), allow(dead_code))]
 fn proxy_in_env() -> bool {
     ["https_proxy", "HTTPS_PROXY", "all_proxy", "ALL_PROXY"].iter().any(|k| std::env::var_os(k).is_some_and(|v| !v.is_empty()))
 }
 
 /// Строка ProxyServer из настроек Windows → адрес для curl --proxy.
 /// «host:port» — один HTTP-прокси на всё; «http=h:p;https=h:p;socks=h:p» — по протоколам (берём https, затем http,
-/// затем socks — у Windows это SOCKS4).
+/// затем socks — у Windows это SOCKS4). Системный прокси читается только на Windows (на Linux — тесты).
+#[cfg_attr(not(windows), allow(dead_code))]
 fn parse_proxy_server(s: &str) -> Option<String> {
     let s = s.trim();
     let pick = if s.contains('=') {

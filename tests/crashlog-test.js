@@ -20,7 +20,7 @@ const ok = (cond, msg) => { console.log(`${cond ? 'ok  ' : 'FAIL'} ${msg}`); if 
   ok(!!panic, `паника → отчёт (${panic || fresh.join(', ') || 'нет новых'})`);
   if (panic) {
     const text = fs.readFileSync(path.join(after.dir, panic), 'utf8');
-    ok(/^FF Montage \d+\.\d+\.\d+ \(/.test(text), 'в отчёте версия и ОС');
+    ok(/^FF Montage \d+\.\d+\.\d+(-hotfix\.[1-9]\d*)? \(/.test(text), 'в отчёте версия и ОС');
     ok(text.includes('crash-test: intentional panic'), 'в отчёте текст паники');
     ok(/thread: crash-test/.test(text), 'в отчёте имя потока');
     ok(/Kind: panic/.test(text), 'в отчёте вид');
