@@ -42,7 +42,7 @@ mit Untertiteln, Sendemaster.
 **Auch für Maschinen:** Ein eingebauter MCP-Server lässt Claude, Cursor und andere KI-Assistenten für dich schneiden,
 und über eine Plugin-API in einer Sandbox kann jeder Effekte, Übergänge, Panels und Presets ergänzen.
 
-Version 0.4.7. Neuigkeiten: [CHANGELOG.md](../../CHANGELOG.md) (auf Russisch).
+Version 0.6.0. Neuigkeiten: [CHANGELOG.md](../../CHANGELOG.md) (auf Russisch). Was als Nächstes kommt: [ROADMAP](../Works/ROADMAP.md) (auf Russisch).
 
 ## Highlights
 
@@ -55,6 +55,7 @@ Version 0.4.7. Neuigkeiten: [CHANGELOG.md](../../CHANGELOG.md) (auf Russisch).
 - 📝 **Titel und Untertitel.** Text, der in der Vorschau und im Export gleich aussieht; Import und Export von SRT / VTT / ASS.
 - 🎚️ **Ordentlicher Ton.** EQ, Kompressor, Rauschunterdrückung, VST3- und CLAP-Plugins, Pegelanzeigen, Lautheitsnormalisierung in zwei Durchgängen, 5.1 / 7.1 / N Monokanäle.
 - 📤 **Viele Formate.** MP4, MKV, MOV, GIF, MP3, M4A, WAV, OGG sowie ProRes- / DNxHR- / XDCAM-Master mit Timecode.
+- 🩹 **Rettet deine Aufnahmen.** Eingebaute Stabilisierung, Video-Rauschunterdrückung und Vignette, mit einem Vorher-/Nachher-Schieber direkt im Player.
 - 🧩 **Plugins.** Effekte, Übergänge, Textstile, Export- und Hotkey-Presets, Aktionen und Panels – alles in einer Sandbox.
 - 🤖 **KI-Assistent (MCP).** Bitte Claude, die Pausen herauszuschneiden, Musik unter das Video zu legen und es in 1080p zu exportieren.
 - ⌨️ **Deine Tastenkürzel.** Presets für Premiere Pro, DaVinci Resolve und CapCut plus eigene Kürzel; Gamepad und Touch auf dem Steam Deck.
@@ -93,12 +94,21 @@ Version 0.4.7. Neuigkeiten: [CHANGELOG.md](../../CHANGELOG.md) (auf Russisch).
 - **Geschwindigkeit** ×0,1–×16 (die Tonhöhe bleibt erhalten), Rückwärts, Standbild.
 - **20 Übergänge** (0,1–3 s), **Filter** (Schwarzweiß, Sepia, Kontrast, Weichzeichner…), **Bildformate** 16:9, 9:16,
   1:1, 3:4 mit Hintergrund, Einpassen / Füllen / Strecken.
+- **Border and corners** (Rahmen und abgerundete Ecken) für Videos und Bilder (dünn, mittel, dick, „Karte“) – praktisch für Bild-in-Bild.
+- **Eingebaute Plugins**: **Stabilization** („fast“ mit `deshake` oder `vidstab` „balanced“ / „maximum“ mit Analyse
+  im Hintergrund, ohne schwarze Ränder), **Recording restore** (Video-Rauschunterdrückung: Kompressionsblöcke, Körnung,
+  Rauschen zwischen Frames; ein langsamer, hochwertiger `nlmeans`-Modus) und **Vignette**. Effekte, die der Player
+  nicht ehrlich zeigen kann, haben eine Schaltfläche **Compare**: FFmpeg rendert den aktuellen Frame vorher und nachher,
+  im Player als verschiebbare Teilung.
+- Tab **Library** neben deinen Medien: **Formen** (Rechteck, Rechteck mit abgeschrägten Ecken, Dreieck, Oval) und
+  **Timer** in drei Stilen (klassisch, digital mit Ring, Retro-Küchenwecker) mit transparentem Hintergrund.
 - Tab **Animations**: das Preset „Rain“ mit Live-Vorschau, gerendert in ein WebM mit Transparenz.
 - Bild-in-Bild und Raster-Layouts – das Beispiel-Plugin `examples/plugins/layouts`.
 
 ### Text und Untertitel
 - Titel, Bauchbinde, Bildunterschrift, Rolltitel (Abspann), einfacher Text. Schrift, Farbe, Kontur, Schatten,
   Hintergrundfläche, Ausrichtung.
+- **Farbe, Fett und Kursiv für markierte Wörter**: Die Formatierung bleibt beim Bearbeiten des Textes an ihren Wörtern.
 - Inter und Open Sans sind eingebaut (mit Kyrillisch); eigene `.ttf`-/`.otf`-Schriften fügst du im Programm hinzu.
   **Der Text sieht im Player und im fertigen Video gleich aus.**
 - **Untertitelspuren**: SRT / VTT / ASS importieren und speichern (Kodierung laut BOM, sonst UTF-8, sonst cp1251),
@@ -120,6 +130,10 @@ Version 0.4.7. Neuigkeiten: [CHANGELOG.md](../../CHANGELOG.md) (auf Russisch).
 - Video: **MP4, MKV, MOV, GIF**; nur Audio: **MP3, M4A, WAV, OGG**. Auflösung von 480p bis zur Quellauflösung,
   Fortschrittsanzeige und Abbrechen, der vollständige FFmpeg-Befehl in `<cache>/app/logs/last-export.log`.
 - **AV1, HEVC, H.264** über NVIDIA NVENC, Intel QSV, AMD AMF, VA-API oder auf der CPU (SVT-AV1, x265, x264).
+- **Hardware-Dekodierung** (NVIDIA CUDA, Direct3D 11 bei anderen Grafikkarten unter Windows): Projekte mit Titeln und
+  schwerem Material exportieren 2–3× schneller; scheitert die Grafikkarte, wiederholt sich der Export von selbst auf
+  der CPU. **Settings → Performance**: FFmpeg-Priorität, Hardware-Dekodierung an / aus, wie viele FFmpeg-Hintergrundjobs
+  gleichzeitig laufen.
 - MKV und MOV können **jede Audiospur als eigenen Stream** enthalten (zuerst der Mix, dann jede Spur mit ihrem Namen).
 - **Master file** (Masterdatei): Apple ProRes 422 / HQ / 4444, Avid DNxHR SQ / HQ / HQX, Sony XDCAM HD422 (MXF),
   24-Bit-PCM, Start-**Timecode** (bei Bedarf Drop-Frame).
@@ -142,7 +156,9 @@ Version 0.4.7. Neuigkeiten: [CHANGELOG.md](../../CHANGELOG.md) (auf Russisch).
   Konfliktsuche, JSON-Export und -Import – die vollständige Tabelle steht in [docs/Guides/HOTKEYS.md](../Guides/HOTKEYS.md).
 - **Steam Deck**: Gamepad-Steuerung (A — Wiedergabe, X — Teilen, B — Rückgängig, LB / RB — Frames, LT / RT —
   Shuttle…), touchfreundliche Griffe, ein Layout für 1280×800.
-- Autosave, Projekte in einer einzigen `.ffproj`-Datei, portabler Modus, signierte Updates direkt aus dem Programm.
+- Autosave, Projekte in einer einzigen `.ffproj`-Datei, portabler Modus, signierte Updates direkt aus dem Programm –
+  und auf Wunsch **Hotfixes** (Vorabversionen mit Korrekturen für die nächste Version, genauso signiert).
+- **Experimentell** (Settings → General, standardmäßig aus): Panels in eigenen Fenstern für einen zweiten Monitor.
 - **Absturzberichte** bleiben auf deiner Festplatte (`logs/reports`), nichts wird irgendwohin gesendet.
 
 ## Herunterladen
@@ -356,7 +372,8 @@ englischen Übersetzungen liegen in `src/renderer/js/i18n/en/*.js`, in Rust — 
 liegen in [`docs/ReadMEs`](.).
 
 **Release:** Erhöhe die Version in `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json`, `package.json` (und
-`Cargo.lock`), ergänze `CHANGELOG.md`, dann `git tag v0.4.7 && git push origin v0.4.7`. Der Workflow prüft, ob der Tag
+`Cargo.lock`), ergänze `CHANGELOG.md`, dann `git tag vX.Y.Z && git push origin vX.Y.Z` (ein Hotfix: Version und Tag `X.Y.Z-hotfix.N`, erscheint als
+Vorabversion). Der Workflow prüft, ob der Tag
 zur Version passt, baut die Archive, berechnet `SHA256SUMS` und signiert die Datei mit dem Schlüssel aus dem Secret
 `FFM_SIGNING_KEY` (`tools/sign-release.mjs`). Ohne gültige Signatur installiert das Programm kein Update.
 

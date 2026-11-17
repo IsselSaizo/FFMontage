@@ -35,7 +35,7 @@ FF Montage 是一款适用于 Windows、Linux 和 Steam Deck 的免费开源视�
 
 **也适用于机器：** 内置的 MCP 服务器让 Claude、Cursor 和其他 AI 助手可以替你剪辑，而沙箱化的插件 API 让任何人都能添加效果、转场、面板和预设。
 
-版本 0.4.7。更新内容：[CHANGELOG.md](../../CHANGELOG.md)（俄文）。
+版本 0.6.0。更新内容：[CHANGELOG.md](../../CHANGELOG.md)（俄文）。后续计划：[ROADMAP](../Works/ROADMAP.md)（俄文）。
 
 ## 亮点
 
@@ -48,6 +48,7 @@ FF Montage 是一款适用于 Windows、Linux 和 Steam Deck 的免费开源视�
 - 📝 **标题与字幕。** 文字在预览和导出中效果完全一致；支持 SRT / VTT / ASS 导入与导出。
 - 🎚️ **专业的声音处理。** 均衡器、压缩器、降噪、VST3 和 CLAP 插件、电平表、两遍响度标准化、5.1 / 7.1 / N 个单声道声道。
 - 📤 **多种格式。** MP4、MKV、MOV、GIF、MP3、M4A、WAV、OGG，以及带时间码的 ProRes / DNxHR / XDCAM 母版。
+- 🩹 **拯救你的录像。** 内置防抖、视频降噪和暗角，可直接在播放器中用“前 / 后”分割条对比。
 - 🧩 **插件。** 效果、转场、文字样式、导出与快捷键预设、操作和面板，全部运行在沙箱中。
 - 🤖 **AI 助手（MCP）。** 让 Claude 剪掉停顿、给视频配上音乐并以 1080p 导出。
 - ⌨️ **你的快捷键。** Premiere Pro、DaVinci Resolve 和 CapCut 预设，外加自定义快捷键；在 Steam Deck 上支持手柄和触控。
@@ -75,11 +76,15 @@ FF Montage 是一款适用于 Windows、Linux 和 Steam Deck 的免费开源视�
 - **变换**：位置、缩放、旋转、不透明度——可直接在播放器中用控制手柄调整（会吸附到中心和边缘），也可在检查器中输入数值。在播放器中拖动边框进行**裁剪**。
 - **速度** ×0.1–×16（保持音高）、倒放、定格帧。
 - **20 种转场**（0.1–3 秒）、**滤镜**（黑白、棕褐色、对比度、模糊……）、**画幅** 16:9、9:16、1:1、3:4，可带背景，支持适应 / 填充 / 拉伸。
+- **Border and corners**（边框与圆角）：为视频和图片添加彩色边框和圆角（细、中、粗、“卡片”），适合画中画。
+- **内置插件**：**Stabilization**（防抖：“fast” 使用 `deshake`，或使用 `vidstab` 的 “balanced” / “maximum”，在后台分析运动，没有黑边）、**Recording restore**（录像修复：视频降噪，去除压缩块、颗粒和帧间噪点；另有较慢的高质量 `nlmeans` 模式）以及 **Vignette**（暗角）。对于播放器无法如实显示的效果，提供 **Compare**（对比）按钮：FFmpeg 渲染当前帧应用效果前后的画面，在播放器中以可拖动的分割条显示。
+- 媒体旁边的 **Library**（素材库）选项卡：**形状**（矩形、斜角矩形、三角形、椭圆）和三种风格的**计时器**（经典、数字圆环、复古厨房计时器），背景透明。
 - **Animations**（动画）选项卡：“Rain”（雨）预设，带实时预览，烘焙为带透明通道的 WebM。
 - 画中画和网格布局——见示例插件 `examples/plugins/layouts`。
 
 ### 文字与字幕
 - 标题、下方字幕条、说明文字、滚动字幕、纯文本。字体、颜色、描边、阴影、背景板、对齐方式。
+- **为选中的文字设置颜色、粗体和斜体**：编辑文字时，样式会保留在原来的词上。
 - 内置 Inter 和 Open Sans 字体（含西里尔字母）；可在程序中添加你自己的 `.ttf` / `.otf` 字体。**文字在播放器中和成片中的效果完全一致。**
 - **字幕轨道**：导入和保存 SRT / VTT / ASS（编码依据 BOM 判断，否则为 UTF-8，再否则为 cp1251），在时间线上编辑字幕行。导出：烧录到画面中（libass）或作为单独的流。
 
@@ -93,6 +98,7 @@ FF Montage 是一款适用于 Windows、Linux 和 Steam Deck 的免费开源视�
 ### 导出
 - 视频：**MP4、MKV、MOV、GIF**；仅音频：**MP3、M4A、WAV、OGG**。分辨率从 480p 到源分辨率，显示进度并可取消，完整的 FFmpeg 命令保存在 `<cache>/app/logs/last-export.log`。
 - **AV1、HEVC、H.264**，可使用 NVIDIA NVENC、Intel QSV、AMD AMF、VA-API 编码，或使用 CPU（SVT-AV1、x265、x264）。
+- **硬件解码**（NVIDIA 使用 CUDA，Windows 上的其他显卡使用 Direct3D 11）：带文字和高负载素材的项目导出速度提高 2–3 倍；如果显卡出错，导出会自动改用 CPU 重试。**Settings → Performance**（设置 → 性能）：FFmpeg 优先级、硬件解码开 / 关、同时运行的后台 FFmpeg 任务数量。
 - MKV 和 MOV 可以把**每条音轨作为独立的流**写入（先是混音，然后按名称依次是各条轨道）。
 - **Master file**（母版文件）：Apple ProRes 422 / HQ / 4444、Avid DNxHR SQ / HQ / HQX、Sony XDCAM HD422（MXF）、24 位 PCM，起始**时间码**（需要时使用丢帧时间码）。
 - 每条 FFmpeg 命令在运行前都会经过 Rust 检查：输入只能来自项目，输出只能写入你选择的文件。
@@ -105,7 +111,8 @@ FF Montage 是一款适用于 Windows、Linux 和 Steam Deck 的免费开源视�
 ### 其他
 - **快捷键**：提供 “Default / DaVinci Resolve / Premiere Pro / CapCut” 预设，可在其基础上添加自定义快捷键，支持冲突搜索、JSON 导出与导入——完整列表见 [docs/Guides/HOTKEYS.md](../Guides/HOTKEYS.md)。
 - **Steam Deck**：手柄操作（A——播放，X——分割，B——撤销，LB / RB——逐帧，LT / RT——穿梭……），便于触控的拖动手柄，1280×800 布局。
-- 自动保存，项目保存为单个 `.ffproj` 文件，便携模式，可在程序内进行签名验证的更新。
+- 自动保存，项目保存为单个 `.ffproj` 文件，便携模式，可在程序内进行签名验证的更新；还可选择接收**热修复**（包含下一版本修复内容的预发布版本，同样经过签名）。
+- **实验性功能**（Settings → General，默认关闭）：面板可放到单独的窗口中，用于第二台显示器。
 - **崩溃报告**只保存在你的磁盘上（`logs/reports`），不会发送到任何地方。
 
 ## 下载
@@ -260,7 +267,7 @@ docs/           Guides (PLUGINS.md, HOTKEYS.md), Works (ROADMAP, audits), ReadME
 
 **翻译：** 源语言是俄语；代码中的字符串本身就是键（`t('Новый проект')`），英文翻译位于 `src/renderer/js/i18n/en/*.js`，在 Rust 中为 `tr!("…", "…")`。翻译后的 README 位于 [`docs/ReadMEs`](.)。
 
-**发布：** 在 `src-tauri/Cargo.toml`、`src-tauri/tauri.conf.json`、`package.json`（以及 `Cargo.lock`）中提升版本号，补充 `CHANGELOG.md`，然后执行 `git tag v0.4.7 && git push origin v0.4.7`。工作流会检查标签是否与版本一致，构建压缩包，计算 `SHA256SUMS`，并用 `FFM_SIGNING_KEY` 机密中的密钥对其签名（`tools/sign-release.mjs`）。没有有效签名，程序就不会安装更新。
+**发布：** 在 `src-tauri/Cargo.toml`、`src-tauri/tauri.conf.json`、`package.json`（以及 `Cargo.lock`）中提升版本号，补充 `CHANGELOG.md`，然后执行 `git tag vX.Y.Z && git push origin vX.Y.Z`（热修复：版本号和标签为 `X.Y.Z-hotfix.N`，以预发布版本发布）。工作流会检查标签是否与版本一致，构建压缩包，计算 `SHA256SUMS`，并用 `FFM_SIGNING_KEY` 机密中的密钥对其签名（`tools/sign-release.mjs`）。没有有效签名，程序就不会安装更新。
 
 **AppImage**（`.github/workflows/appimage.yml`）会在每次推送到 `main` 以及每次发布时构建：使用 tauri-cli 和额外配置 `.github/appimage.conf.json`（`bundleMediaFramework`——内含 GStreamer，BtbN FFmpeg 按 SHA-256 固定版本，位于 `usr/bin/ffmpeg/bin`），然后进行冒烟测试，并在 xvfb 下测试窗口。如果 AppImage 构建因外部工具（linuxdeploy）而失败，可以通过仓库变量 `FFM_APPIMAGE=0` 在不包含 AppImage 的情况下发布。在 Linux 上，`<video>` / `<audio>` 通过 HTTP 从 127.0.0.1 获取文件（随机端口和令牌，`protocol.rs`）：WebKitGTK 中的 GStreamer 无法打开 `media://` 之类的自定义协议。
 

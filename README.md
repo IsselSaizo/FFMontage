@@ -42,7 +42,7 @@ broadcast masters.
 **Also for machines:** a built-in MCP server lets Claude, Cursor and other AI assistants edit for you, and a
 sandboxed plugin API lets anyone add effects, transitions, panels and presets.
 
-Version 0.4.7. What's new: [CHANGELOG.md](CHANGELOG.md) (in Russian).
+Version 0.6.0. What's new: [CHANGELOG.md](CHANGELOG.md) (in Russian). What's next: [ROADMAP](docs/Works/ROADMAP.md) (in Russian).
 
 ## Highlights
 
@@ -55,6 +55,7 @@ Version 0.4.7. What's new: [CHANGELOG.md](CHANGELOG.md) (in Russian).
 - 📝 **Titles and subtitles.** Text that looks the same in the preview and the export; SRT / VTT / ASS import and export.
 - 🎚️ **Proper sound.** EQ, compressor, denoise, VST3 and CLAP plugins, level meters, two-pass loudness normalisation, 5.1 / 7.1 / N mono channels.
 - 📤 **Many formats.** MP4, MKV, MOV, GIF, MP3, M4A, WAV, OGG, plus ProRes / DNxHR / XDCAM masters with timecode.
+- 🩹 **Rescue your recordings.** Built-in stabilisation, video denoise and vignette, with a before / after slider right in the player.
 - 🧩 **Plugins.** Effects, transitions, text styles, export and hotkey presets, actions and panels, all in a sandbox.
 - 🤖 **AI assistant (MCP).** Ask Claude to cut out the pauses, put music under the video and export it in 1080p.
 - ⌨️ **Your hotkeys.** Presets for Premiere Pro, DaVinci Resolve and CapCut, plus your own shortcuts; gamepad and touch on the Steam Deck.
@@ -89,11 +90,19 @@ Version 0.4.7. What's new: [CHANGELOG.md](CHANGELOG.md) (in Russian).
 - **Speed** ×0.1–×16 (the pitch is kept), reverse, freeze frame.
 - **20 transitions** (0.1–3 s), **filters** (black & white, sepia, contrast, blur…), **frame formats** 16:9, 9:16, 1:1,
   3:4 with a background, fit / fill / stretch.
+- **Border and corners** for videos and pictures: a coloured border and rounded corners (thin, medium, thick, “card”) — handy for picture-in-picture.
+- **Built-in plugins**: **Stabilization** (“fast” with `deshake`, or `vidstab` “balanced” / “maximum” analysed in the
+  background, no black edges), **Recording restore** (video denoise: compression blocks, grain, temporal noise; a slow
+  high-quality `nlmeans` mode) and **Vignette**. Effects the player cannot show honestly get a **Compare** button:
+  FFmpeg renders the current frame before and after, shown as a draggable split in the player.
+- **Library** tab next to your media: **shapes** (rectangle, bevelled rectangle, triangle, oval) and **timers** in three
+  styles (classic, digital ring, retro kitchen timer) with a transparent background.
 - **Animations** tab: the “Rain” preset with a live preview, baked into a WebM with transparency.
 - Picture-in-picture and grid layouts — the example plugin `examples/plugins/layouts`.
 
 ### Text and subtitles
 - Title, lower third, caption, rolling credits, plain text. Font, colour, outline, shadow, background plate, alignment.
+- **Colour, bold and italic for selected words**: the styling stays on its words while you edit the text.
 - Inter and Open Sans are built in (with Cyrillic); your own `.ttf` / `.otf` fonts are added in the program.
   **The text looks the same in the player and in the finished video.**
 - **Subtitle tracks**: import and save SRT / VTT / ASS (encoding from the BOM, else UTF-8, else cp1251), edit lines on
@@ -112,6 +121,9 @@ Version 0.4.7. What's new: [CHANGELOG.md](CHANGELOG.md) (in Russian).
 - Video: **MP4, MKV, MOV, GIF**; audio only: **MP3, M4A, WAV, OGG**. Resolution from 480p up to the source,
   progress and cancel, the full FFmpeg command in `<cache>/app/logs/last-export.log`.
 - **AV1, HEVC, H.264** on NVIDIA NVENC, Intel QSV, AMD AMF, VA-API, or on the CPU (SVT-AV1, x265, x264).
+- **Hardware decoding** (NVIDIA CUDA, Direct3D 11 on other Windows GPUs): projects with titles and heavy footage export
+  2–3× faster; if the GPU fails, the export retries on the CPU by itself. **Settings → Performance**: FFmpeg priority,
+  hardware decoding on / off, how many background FFmpeg jobs run at once.
 - MKV and MOV can carry **every audio track as its own stream** (the mix first, then each track by name).
 - **Master file**: Apple ProRes 422 / HQ / 4444, Avid DNxHR SQ / HQ / HQX, Sony XDCAM HD422 (MXF), 24-bit PCM,
   start **timecode** (drop-frame where needed).
@@ -130,7 +142,9 @@ Version 0.4.7. What's new: [CHANGELOG.md](CHANGELOG.md) (in Russian).
   search, JSON export and import — full table in [docs/Guides/HOTKEYS.md](docs/Guides/HOTKEYS.md).
 - **Steam Deck**: gamepad controls (A — play, X — split, B — undo, LB / RB — frames, LT / RT — shuttle…), touch-friendly
   handles, a 1280×800 layout.
-- Autosave, projects in a single `.ffproj` file, portable mode, signed updates from inside the program.
+- Autosave, projects in a single `.ffproj` file, portable mode, signed updates from inside the program — and, if you
+  opt in, **hotfixes** (pre-releases with fixes for the next version, signed the same way).
+- **Experimental** (Settings → General, off by default): panels in separate windows for a second monitor.
 - **Crash reports** stay on your disk (`logs/reports`), nothing is sent anywhere.
 
 ## Download
@@ -332,7 +346,8 @@ translations live in `src/renderer/js/i18n/en/*.js`, in Rust — `tr!("…", "�
 [`docs/ReadMEs`](docs/ReadMEs).
 
 **Releasing:** bump the version in `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json`, `package.json` (and
-`Cargo.lock`), extend `CHANGELOG.md`, then `git tag v0.4.7 && git push origin v0.4.7`. The workflow checks that the
+`Cargo.lock`), extend `CHANGELOG.md`, then `git tag vX.Y.Z && git push origin vX.Y.Z` (a hotfix: version and tag
+`X.Y.Z-hotfix.N`, published as a pre-release). The workflow checks that the
 tag matches the version, builds the archives, computes `SHA256SUMS` and signs it with the key from the
 `FFM_SIGNING_KEY` secret (`tools/sign-release.mjs`). Without a valid signature the program will not install an update.
 

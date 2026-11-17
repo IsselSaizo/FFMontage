@@ -166,7 +166,7 @@ jobs:
         run: |
           cat > release-body.md <<'EOF'
           **Windows:** скачайте `FF-Montage-…-windows-x64.zip`, распакуйте и запустите `FF Montage.exe`. Ничего ставить не нужно — FFmpeg уже внутри.
-          **Linux / Steam Deck:** `FF-Montage-…-linux-x86_64.AppImage` — `chmod +x`, затем запустить; всё внутри (окно, GStreamer, FFmpeg). Как добавить в Steam — в [README](https://github.com/${{ github.repository }}/blob/${{ env.TAG }}/README.md#linux-и-steam-deck-appimage).
+          **Linux / Steam Deck:** `FF-Montage-…-linux-x86_64.AppImage` — `chmod +x`, затем запустить; всё внутри (окно, GStreamer, FFmpeg). Как добавить в Steam — в [README](https://github.com/${{ github.repository }}/blob/${{ env.TAG }}/README.md#linux-and-steam-deck-appimage).
           **Linux (архив):** `FF-Montage-…-linux-x86_64.tar.gz`, затем `./ff-montage` (нужны WebKitGTK 4.1 и GStreamer good).
 
           **Обновление с 0.3.0:** «Проверить обновления…» в программе находит и ставит эту версию само; вручную — распакуйте архив поверх старой папки (настройки и проекты останутся). Подробности — в разделе «Обновление с 0.3.0» CHANGELOG.
