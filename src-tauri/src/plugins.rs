@@ -39,8 +39,12 @@ fn s(p: &Path) -> String {
 // ---------------------------------------------------------------------------
 /// Имена в одинарных кавычках между `// BEGIN-FILTERS` и `// END-FILTERS` (комментарии `//` пропускаются)
 fn parse_safe(src: &str) -> Vec<String> {
-    let start = src.find("// BEGIN-FILTERS").map(|i| i + "// BEGIN-FILTERS".len()).unwrap_or(src.len());
-    let end = src[start..].find("// END-FILTERS").map(|i| start + i).unwrap_or(start);
+    parse_list(src, "// BEGIN-FILTERS", "// END-FILTERS")
+}
+
+fn parse_list(src: &str, begin: &str, finish: &str) -> Vec<String> {
+    let start = src.find(begin).map(|i| i + begin.len()).unwrap_or(src.len());
+    let end = src[start..].find(finish).map(|i| start + i).unwrap_or(start);
     let mut out = vec![];
     for line in src[start..end].lines() {
         let code = line.split("//").next().unwrap_or("");
@@ -64,6 +68,17 @@ pub fn safe_filters() -> &'static [String] {
 
 pub fn is_safe_filter(name: &str) -> bool {
     safe_filters().iter().any(|f| f == name)
+}
+
+/// Фильтры хоста (HOST_FILTERS в safeFilters.js): файл им даёт только программа (vidstabtransform — .trf анализа
+/// движения); плагин может объявить их в ffmpeg.filters, граф проверяет plancheck.rs своим правилом
+pub fn host_filters() -> &'static [String] {
+    static LIST: OnceLock<Vec<String>> = OnceLock::new();
+    LIST.get_or_init(|| parse_list(SAFE_SRC, "// BEGIN-HOST-FILTERS", "// END-HOST-FILTERS"))
+}
+
+pub fn is_host_filter(name: &str) -> bool {
+    host_filters().iter().any(|f| f == name)
 }
 
 /// Как FORBIDDEN_OPTION в safeFilters.js: /file|^filename$|^model$|^sofa$|^url$|^commands?$/i
@@ -217,7 +232,7 @@ pub fn check_manifest(m: &Value, dir: Option<&Path>) -> R<String> {
         }
         for x in f["filters"].as_array().into_iter().flatten() {
             let n = x.as_str().unwrap_or("");
-            if !is_safe_filter(n) {
+            if !is_safe_filter(n) && !is_host_filter(n) {
                 return Err(tr!("фильтр FFmpeg «{}» не разрешён", "FFmpeg filter \"{}\" is not allowed", n));
             }
         }
@@ -282,7 +297,7 @@ pub fn list() -> Value {
             if !pdir.join("plugin.json").exists() {
                 continue;
             }
-            let mut item = json!({ "id": name, "dir": s(&pdir), "manifest": Value::Null });
+            let mut item = json!({ "id": name, "dir": s(&pdir), "manifest": Value::Null, "bundled": crate::bundled::is_bundled(&name) });
             match read_manifest(&pdir) {
                 Ok(m) => {
                     match check_manifest(&m, Some(&pdir)) {
@@ -305,7 +320,9 @@ pub fn list() -> Value {
         }
     }
     items.sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));
-    json!({ "dir": s(&dir), "baseUrl": base_url(), "apiVersion": API_VERSION, "safeFilters": safe_filters(), "plugins": items })
+    // bundledMissing — встроенные, которых нет в папке (кнопка «Вернуть встроенные»), removedBundled — удалённые пользователем
+    json!({ "dir": s(&dir), "baseUrl": base_url(), "apiVersion": API_VERSION, "safeFilters": safe_filters(), "plugins": items,
+        "bundledMissing": crate::bundled::missing(&dir), "removedBundled": crate::settings::removed_bundled() })
 }
 
 #[tauri::command]
@@ -338,6 +355,10 @@ pub fn plugins_remove(id: String) -> R<bool> {
     let tmp = plugins_dir().join(format!(".old-{id}-{}", stamp()));
     std::fs::rename(&dir, &tmp).map_err(|e| tr!("Не удалось удалить плагин: {}", "Cannot remove the plugin: {}", e))?;
     let _ = std::fs::remove_dir_all(&tmp);
+    // Встроенный: запомнить, чтобы запуск и обновление программы его не возвращали (bundled.rs)
+    if crate::bundled::is_bundled(&id) {
+        crate::settings::update_removed_bundled(|v| v.push(id.clone()))?;
+    }
     Ok(true)
 }
 
@@ -532,6 +553,10 @@ fn install_from(root: &Path) -> R<Value> {
     }
     if replaced {
         let _ = std::fs::remove_dir_all(&old);
+    }
+    // Ручная установка плагина с id встроенного — он снова «не удалён» (bundled.rs)
+    if crate::bundled::is_bundled(&id) {
+        let _ = crate::settings::update_removed_bundled(|v| v.retain(|x| x != &id));
     }
     Ok(json!({ "id": id, "manifest": manifest, "replaced": replaced }))
 }
@@ -979,6 +1004,14 @@ mod tests {
         for n in ["movie", "amovie", "sendcmd", "lut3d", "subtitles", "drawtext", "ladspa", "arnndn", "zmq", "BEGIN-FILTERS"] {
             assert!(!is_safe_filter(n), "{n}");
         }
+        // Фильтры хоста — отдельный список, не в SAFE_FILTERS; vidstabdetect не даётся никогда
+        assert_eq!(host_filters(), ["vidstabtransform".to_string()]);
+        assert!(!is_safe_filter("vidstabtransform") && !is_safe_filter("vidstabdetect") && !is_host_filter("vidstabdetect"));
+        assert!(is_safe_filter("deshake"));
+        let m = json!({ "id": "stab-x", "name": "x", "version": "1.0.0", "apiVersion": 1, "ffmpeg": { "filters": ["vidstabtransform", "unsharp"] } });
+        assert!(check_manifest(&m, None).is_ok());
+        let bad = json!({ "id": "stab-x", "name": "x", "version": "1.0.0", "apiVersion": 1, "ffmpeg": { "filters": ["vidstabdetect"] } });
+        assert!(check_manifest(&bad, None).is_err());
     }
 
     #[test]

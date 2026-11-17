@@ -301,6 +301,17 @@ async function main() {
     ok(txBad2.isError && /blink/.test(txBad2.text), 'add_text: неизвестное поле оформления → ошибка');
     const ut = (await cl.ok('update_text', { clip_id: txt.id, text: 'Глава 2', duration: 2, fade_in: 0.5, styling: { size: 0.1 } })).clip;
     ok(ut.text.content === 'Глава 2' && ut.duration === 2 && ut.fade_in === 0.5 && ut.text.size === 0.1, 'update_text');
+    // 0.5.x: оформление слов — spans (по тексту / по позиции), правка текста двигает фрагменты
+    const spT = (await cl.ok('update_text', { clip_id: txt.id, spans: [{ text: '2', color: '#ff0000', bold: true }, { start: 0, end: 5, italic: true }] })).clip;
+    const runsJ = (r) => JSON.stringify((r || []).map((x) => Object.fromEntries(Object.entries(x).sort())));
+    ok(runsJ(spT.text.runs) === runsJ([{ a: 0, b: 5, italic: true }, { a: 6, b: 7, color: '#ff0000', bold: true }]), `update_text spans: ${JSON.stringify(spT.text.runs)}`);
+    const sp2 = (await cl.ok('update_text', { clip_id: txt.id, text: 'Новая Глава 2' })).clip;
+    ok(runsJ(sp2.text.runs) === runsJ([{ a: 6, b: 11, italic: true }, { a: 12, b: 13, color: '#ff0000', bold: true }]), `новый текст — фрагменты на тех же словах: ${JSON.stringify(sp2.text.runs)}`);
+    const spBad = await cl.tool('update_text', { clip_id: txt.id, spans: [{ text: 'нет такого', bold: true }] });
+    ok(spBad.isError && /not in the text/.test(spBad.text), 'spans: текста нет → ошибка');
+    const at2 = (await cl.ok('add_text', { text: 'FREE ASSET PACK', spans: [{ text: 'FREE', color: '#FFCC00' }] })).clip;
+    ok(JSON.stringify(at2.text.runs) === JSON.stringify([{ a: 0, b: 4, color: '#ffcc00' }]), `add_text spans: ${JSON.stringify(at2.text.runs)}`);
+    await cl.ok('delete_clip', { clip_id: at2.id });
     const uc = await cl.tool('update_clip', { clip_id: txt.id, volume: 1 });
     ok(uc.isError && /update_text/.test(uc.text), 'update_clip для текста → подсказка про update_text');
     await cl.ok('set_transform', { clip_id: txt.id, y: 0.3 });

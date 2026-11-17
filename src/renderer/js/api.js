@@ -1,8 +1,20 @@
 // Связь окна с программой (Tauri): window.api — все вызовы команд Rust и подписки на события.
 // Подключается первым модулем (index.html, setup.html), до остальных скриптов.
 // window.__TAURI__ в окне нет (withGlobalTauri: false) — вызовы идут через js/tauri.js.
-import { exportCommand, cleanLoudness, loudnessPlan, containerOf } from './exportPlan.js';
+import { exportCommand, cleanLoudness, loudnessPlan, containerOf, hwDecodeFor } from './exportPlan.js';
 import { invoke, listen, appWindow, webview } from './tauri.js';
+import { getPref } from './prefs.js';
+
+// Настройки → Производительность (settings.json perf): { priority: low|normal|high, hwDecode: auto|off, bgJobs: 0..64 }
+export const PERF_DEFAULT = Object.freeze({ priority: 'normal', hwDecode: 'auto', bgJobs: 0 });
+export function perfPrefs() {
+  const p = getPref('perf', {}) || {};
+  return {
+    priority: ['low', 'normal', 'high'].includes(p.priority) ? p.priority : PERF_DEFAULT.priority,
+    hwDecode: ['auto', 'off'].includes(p.hwDecode) ? p.hwDecode : PERF_DEFAULT.hwDecode,
+    bgJobs: Number.isInteger(p.bgJobs) && p.bgJobs >= 0 && p.bgJobs <= 64 ? p.bgJobs : PERF_DEFAULT.bgJobs,
+  };
+}
 
 const on = (event, fn) => {
   let off = null; let dead = false;
@@ -48,7 +60,9 @@ window.addEventListener('unhandledrejection', (e) => {
 });
 
 let infoCache = null;
+const stabListeners = new Set();
 let exportCancelled = false;   // «Отмена» во время экспорта (в т. ч. между проходами нормализации)
+let hwBroken = false;          // аппаратное декодирование уронило экспорт — до перезапуска окна не используется
 const info = async () => {
   const i = await invoke('app_info');
   infoCache = i;
@@ -81,6 +95,18 @@ window.api = {
   fxFreeze: (info, at) => invoke('fx_freeze', { info, at }),
   onFxProgress: (fn) => on('fx:progress', fn),
   fxFrame: (file, t, width) => invoke('fx_frame', { file, t, width }),
+  // Шторка «ДО / ПОСЛЕ» (compare.rs): req — effects.js compareRequest → { before, after } (base64 JPEG) | { cancelled }
+  compareFrames: (req) => invoke('compare_frames', { req }),
+  compareCancel: () => invoke('compare_cancel').catch(() => {}),
+  // Стабилизация (stab.rs, js/stab.js): анализ движения vidstab и прокси превью — запуск/состояние задания
+  // ({ id, state: ready|running|error, progress, start, end, trf?, url?, error? }), отмена по id
+  stabAnalyze: (req) => invoke('stab_analyze', { req }),
+  stabProxy: (req) => invoke('stab_proxy', { req }),
+  stabCancel: (id) => invoke('stab_cancel', { id }).catch(() => false),
+  // Подготовка экспорта: прогресс анализа движения (fn({ fraction, name })) и «экспорт отменён» (для ожидания анализа)
+  onStabPrepare: (fn) => { stabListeners.add(fn); return () => stabListeners.delete(fn); },
+  emitStabPrepare: (p) => { for (const fn of stabListeners) { try { fn(p); } catch (e) { console.warn('stab prepare', e); } } },
+  exportCancelled: () => exportCancelled,
   fxSilence: (file, thresholdDb, minDur) => invoke('fx_silence', { file, thresholdDb, minDur }),
   readProject: (path) => invoke('project_read', { path }),
   // ИИ-ассистент (MCP): программа присылает вызовы инструментов, окно отвечает
@@ -97,8 +123,17 @@ window.api = {
     try {
       // Тексты (картинки PNG) и субтитры (.ass / .srt) — готовятся окном до сборки команды (exportAssets.js)
       const { prepareExportAssets } = await import('./exportAssets.js');
+      // (стабилизация: если анализ движения не готов — экспорт сначала ждёт его, «Отмена» отменяет и анализ)
       const assets = await prepareExportAssets(project, settings, window.api);
-      const s = { ...settings, assets };
+      if (exportCancelled) return { ok: false, error: 'cancelled', cancelled: true };
+      // Настройки → Производительность: аппаратное декодирование (auto | off) и приоритет FFmpeg (low | normal | high)
+      const perf = perfPrefs();
+      let hwDecode = settings.hwDecode;
+      if (hwDecode === undefined && !hwBroken) {
+        const encs = perf.hwDecode === 'off' ? null : await invoke('enc_detect').catch(() => null);
+        hwDecode = hwDecodeFor(perf.hwDecode, i, encs);
+      }
+      const s = { ...settings, assets, hwDecode };
       // Нормализация громкости (0.5.0): первый проход — замер loudnorm по тому же звуку, второй — сам экспорт
       const L = cleanLoudness(settings.loudness);
       if (L && !L.measured && containerOf(s) !== 'gif') {
@@ -109,10 +144,20 @@ window.api = {
         if (exportCancelled) return { ok: false, error: 'cancelled', cancelled: true };
       }
       plan = exportCommand(project, s, i.ffMajor);
-      const res = await invoke('export_start', { plan });
+      let res = await invoke('export_start', { plan: { ...plan, priority: perf.priority } });
+      // Видеокарта не смогла (нет устройства, драйвер) — FFmpeg с -hwaccel падает сразу: тот же экспорт процессором,
+      // и до перезапуска окна аппаратное декодирование больше не пробуем
+      if (res && !res.ok && !res.cancelled && !exportCancelled && hwDecode) {
+        console.warn('export: hardware decoding failed, retrying on the CPU:', res.error);
+        hwBroken = true;
+        hwDecode = null;
+        plan = exportCommand(project, { ...s, hwDecode: null }, i.ffMajor);
+        res = await invoke('export_start', { plan: { ...plan, priority: perf.priority } });
+      }
+      if (res && hwDecode) res.hwDecode = hwDecode;
       if (res && s.loudness) res.loudness = s.loudness;
       return res;
-    } catch (e) { return { ok: false, error: String(e?.message || e) }; }
+    } catch (e) { return { ok: false, error: String(e?.message || e), cancelled: !!(e && e.cancelled) || exportCancelled }; }
   },
   // Готовый план FFmpeg (запекание анимаций): { args, filter, duration, output }
   runPlan: (plan) => invoke('export_start', { plan: { args: plan.args, filter: plan.filter, duration: plan.duration, output: plan.output } }),

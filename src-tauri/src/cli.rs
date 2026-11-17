@@ -1,7 +1,8 @@
 // Движок без окна — для автотестов (tests/engine-test.js) и CI:
 //   ff-montage --engine <команда>   (параметры — JSON в stdin, ответ — JSON в stdout)
 // Команды: probe {file} | thumbs {info} | peaks {info} | proxy {info} | reverse {info,a,b} | freeze {info,at}
-//          silence {file,threshold,min} | frame {file,t,width} | encoders {reset?} | queue | version | export {plan} | checkplan {plan} | paths
+//          silence {file,threshold,min} | frame {file,t,width} | compare {file,t,start,fx,crop,width,image,fps} | encoders {reset?} | queue | version | export {plan} | checkplan {plan} | paths
+//          stab-analyze {file,in,out,margin?,duration?,args} | stab-proxy {file,chain,in,out,fixed?,audio?} | filters
 //          info (AppImage, режим путей, откуда FFmpeg, плагины GStreamer, ассет обновления)
 //          vst-list | vst-scan {force?} | vst-info {uid,state?,ctrl?,params?} | vst-render {job}
 //          reports | crash-test (отчёты об ошибках, crashlog.rs)
@@ -69,6 +70,18 @@ pub fn main(cmd: &str) {
             "reverse" => ff::reverse(&args["info"], f("a"), f("b"), &noop, &enc().await).await.map(|p| json!(p.to_string_lossy())),
             "freeze" => ff::freeze(&args["info"], f("at"), &enc().await).await.map(|p| json!(p.to_string_lossy())),
             "silence" => ff::silence(&file(), args["threshold"].as_f64().unwrap_or(-35.0), args["min"].as_f64().unwrap_or(0.5)).await,
+            // Кадры шторки «ДО / ПОСЛЕ» (compare.rs): {file, t, start, fx, crop, width, image, fps} → { before, after, … }
+            "compare" => crate::compare::frames(&args, crate::plancheck::Inputs::Engine).await,
+            // Стабилизация (stab.rs): анализ движения vidstabdetect / прокси превью — запуск и ожидание конца
+            "stab-analyze" => {
+                if !ff::has_vidstab(&bin).await {
+                    return Err(tr!("В этой сборке FFmpeg нет vidstab", "This FFmpeg build has no vidstab").into());
+                }
+                crate::stab::now("analyze", &args, crate::plancheck::Inputs::Engine).await
+            }
+            "stab-proxy" => crate::stab::now("proxy", &args, crate::plancheck::Inputs::Engine).await,
+            // Фильтры сборки FFmpeg и есть ли vidstab
+            "filters" => Ok(json!({ "vidstab": ff::has_vidstab(&bin).await, "filters": ff::filters(&bin).await })),
             "frame" => ff::frame_jpeg(&file(), f("t"), args["width"].as_f64().unwrap_or(640.0)).await.map(|b| json!(commands::base64(&b))),
             "export" => {
                 let plan: export::Plan = serde_json::from_value(args["plan"].clone()).map_err(|e| e.to_string())?;

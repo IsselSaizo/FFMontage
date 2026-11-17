@@ -14,6 +14,7 @@ import { hasVst } from './audioFx.js';
 import { allVideoClips, videoSoundOn, clipJob, trackJob, trackVstClips } from './vstJobs.js';
 import { t } from './i18n.js';
 import { errText } from './util.js';
+import { prepareStabAssets } from './stabPlan.js';
 
 /**
  * Звук с аудиоплагинами VST3 / CLAP (контракт .agent/vst3-contract.md): рендер каждой такой цепочки — WAV в кэше
@@ -89,9 +90,11 @@ export const exportableSubs = (p) => (p.subtitleTracks || []).filter((tr) => !tr
 export async function prepareExportAssets(project, settings, api) {
   const W = Math.max(2, Math.round(settings.width / 2) * 2);
   const H = Math.max(2, Math.round(settings.height / 2) * 2);
-  const assets = { texts: {}, borders: {}, subtitles: null, vst: await prepareVstAssets(project, api) };
+  const assets = { texts: {}, borders: {}, subtitles: null, vst: await prepareVstAssets(project, api), stab: {} };
   // «Только звук» (0.4.1): картинки текстов и субтитры не нужны
   if (/^(mp3|m4a|wav|ogg)$/.test(String(settings.container || ''))) return assets;
+  // Стабилизация vidstab: анализ движения клипов (stabPlan.js) — если не готов, экспорт ждёт его
+  assets.stab = await prepareStabAssets(project, api);
   const shown = visibleLanes(project).filter((l) => !l.hidden).flatMap((l) => l.clips);
   // Графические клипы (текст, фигуры, таймеры — graphics.js): каждый вид готовит свой файл (exportAsset);
   // в плане экспорта он — картинка с альфой (кадр W×H или рамка x, y, w×h; anim — анимация)

@@ -1,5 +1,6 @@
 // Настройки интерфейса (M0.6): один файл settings.json рядом с config.json (paths::Paths::settings_file).
-// Ключи верхнего уровня ведёт окно (js/prefs.js, js/settings.js): lang, keymap, restoreSession, plugins,
+// Ключи верхнего уровня ведёт окно (js/prefs.js, js/settings.js): lang, keymap, restoreSession,
+// plugins{disabled; removedBundled — только Rust, см. REMOVED_BUNDLED},
 // cache{limitGb}, ui{rightTab, tlHeight, mode, magnet, monitorVol, monitorMute, speedRipple}, export{…}.
 // Служебные ключи начинаются с «_»: _format, _version, _localMigrated.
 // Миграция:
@@ -75,18 +76,86 @@ pub fn load() -> Value {
     Value::Object(load_locked())
 }
 
+/// plugins.removedBundled — удалённые пользователем встроенные плагины (bundled.rs). Это поле ведёт только Rust:
+/// окно присылает объект plugins целиком из своей копии настроек, которая могла устареть.
+pub const REMOVED_BUNDLED: &str = "removedBundled";
+
 fn apply_patch(m: &mut Map<String, Value>, patch: &Value) {
     if let Some(obj) = patch.as_object() {
         for (k, v) in obj {
             if k.starts_with('_') {
                 continue;
             }
+            let mut v = v.clone();
+            if k == "plugins" {
+                let keep = m.get("plugins").and_then(|p| p.get(REMOVED_BUNDLED)).cloned();
+                match (&mut v, keep) {
+                    (Value::Object(o), Some(r)) => {
+                        o.insert(REMOVED_BUNDLED.into(), r);
+                    }
+                    (Value::Object(o), None) => {
+                        o.remove(REMOVED_BUNDLED);
+                    }
+                    (_, Some(r)) => v = json!({ REMOVED_BUNDLED: r }),
+                    _ => {}
+                }
+            }
             if v.is_null() {
                 m.remove(k);
             } else {
-                m.insert(k.clone(), v.clone());
+                m.insert(k.clone(), v);
             }
         }
+    }
+}
+
+fn removed_of(m: &Map<String, Value>) -> Vec<String> {
+    m.get("plugins")
+        .and_then(|p| p.get(REMOVED_BUNDLED))
+        .and_then(Value::as_array)
+        .map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect())
+        .unwrap_or_default()
+}
+
+/// Удалённые пользователем встроенные плагины (plugins.removedBundled)
+pub fn removed_bundled() -> Vec<String> {
+    let _g = lock();
+    removed_of(&load_locked())
+}
+
+/// Изменить plugins.removedBundled (пустой список — поле убирается); файл пишется, только если список изменился
+pub fn update_removed_bundled(f: impl FnOnce(&mut Vec<String>)) -> Result<(), String> {
+    let _g = lock();
+    let mut m = load_locked();
+    let old = removed_of(&m);
+    let mut list = old.clone();
+    f(&mut list);
+    let mut seen: Vec<String> = vec![];
+    list.retain(|x| {
+        !seen.contains(x) && {
+            seen.push(x.clone());
+            true
+        }
+    });
+    if list == old {
+        return Ok(());
+    }
+    set_removed(&mut m, list);
+    write_map(&paths::get().settings_file, &m)
+}
+
+fn set_removed(m: &mut Map<String, Value>, list: Vec<String>) {
+    let mut p = match m.remove("plugins") {
+        Some(Value::Object(o)) => o,
+        _ => Map::new(),
+    };
+    if list.is_empty() {
+        p.remove(REMOVED_BUNDLED);
+    } else {
+        p.insert(REMOVED_BUNDLED.into(), json!(list));
+    }
+    if !p.is_empty() {
+        m.insert("plugins".into(), Value::Object(p));
     }
 }
 
@@ -150,6 +219,11 @@ pub fn cache_limit_gb() -> u64 {
     clamp_limit(&load()["cache"]["limitGb"])
 }
 
+/// Фоновые задачи FFmpeg одновременно (perf.bgJobs): 0 — авто (ядра/2), иначе 1..64
+pub fn bg_jobs(all: &Value) -> usize {
+    all["perf"]["bgJobs"].as_f64().filter(|x| x.is_finite() && *x >= 1.0).map(|x| (x.round() as usize).min(64)).unwrap_or(0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -193,6 +267,26 @@ mod tests {
         apply_patch(&mut m, &json!({ "export": null, "_localMigrated": false, "restoreSession": false }));
         assert!(m.get("export").is_none() && m.get("_localMigrated").is_none() && m["restoreSession"] == false);
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn removed_bundled_kept_by_rust() {
+        let mut m = Map::new();
+        set_removed(&mut m, vec!["vignette".into()]);
+        assert_eq!(removed_of(&m), vec!["vignette".to_string()]);
+        // Окно пишет plugins из устаревшей копии: removedBundled остаётся тем, что на диске
+        apply_patch(&mut m, &json!({ "plugins": { "disabled": ["x"], "removedBundled": [] } }));
+        assert_eq!(m["plugins"]["disabled"], json!(["x"]));
+        assert_eq!(removed_of(&m), vec!["vignette".to_string()]);
+        apply_patch(&mut m, &json!({ "plugins": null }));
+        assert_eq!(m["plugins"], json!({ "removedBundled": ["vignette"] }));
+        // Без удалённых окно не может их добавить
+        set_removed(&mut m, vec![]);
+        assert!(m.get("plugins").is_none());
+        apply_patch(&mut m, &json!({ "plugins": { "disabled": [], "removedBundled": ["restore"] } }));
+        assert!(removed_of(&m).is_empty() && m["plugins"]["disabled"] == json!([]));
+        set_removed(&mut m, vec!["restore".into()]);
+        assert_eq!(m["plugins"], json!({ "disabled": [], "removedBundled": ["restore"] }));
     }
 
     #[test]

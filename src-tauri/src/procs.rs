@@ -19,6 +19,23 @@ pub fn track(child: &tokio::process::Child) -> Tracked {
     Tracked(imp::track(child))
 }
 
+/// Приоритет процесса (0.5.x, настройка «Производительность → Режим экспорта»):
+/// -1 — фоновый (ниже обычного: окно и другие программы не тормозят), 0 — обычный, 1 — выше обычного.
+pub fn set_priority(child: &tokio::process::Child, level: i32) {
+    if level != 0 {
+        imp::priority(child, level.clamp(-1, 1));
+    }
+}
+
+/// «low» | «normal» | «high» → уровень set_priority
+pub fn priority_level(s: Option<&str>) -> i32 {
+    match s {
+        Some("low") => -1,
+        Some("high") => 1,
+        _ => 0,
+    }
+}
+
 static PARTS: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
 
 /// Незаконченный файл: удалить, если программа закроется раньше, чем он будет готов
@@ -124,6 +141,16 @@ mod imp {
 
     pub fn untrack(_: u32) {}
 
+    pub fn priority(child: &tokio::process::Child, level: i32) {
+        use windows::Win32::System::Threading::{SetPriorityClass, ABOVE_NORMAL_PRIORITY_CLASS, BELOW_NORMAL_PRIORITY_CLASS};
+        if let Some(raw) = child.raw_handle() {
+            let class = if level < 0 { BELOW_NORMAL_PRIORITY_CLASS } else { ABOVE_NORMAL_PRIORITY_CLASS };
+            unsafe {
+                let _ = SetPriorityClass(HANDLE(raw), class);
+            }
+        }
+    }
+
     pub fn kill_all() {
         if let Some(j) = job() {
             unsafe {
@@ -152,6 +179,16 @@ mod imp {
     pub fn untrack(id: u32) {
         if let Ok(mut v) = PIDS.lock() {
             v.retain(|&p| p != id);
+        }
+    }
+
+    /// nice: фоновый +10; «выше обычного» без прав root недоступен — тогда остаётся обычный
+    pub fn priority(child: &tokio::process::Child, level: i32) {
+        if let Some(pid) = child.id() {
+            let nice = if level < 0 { 10 } else { -5 };
+            unsafe {
+                let _ = libc::setpriority(libc::PRIO_PROCESS, pid as libc::id_t, nice);
+            }
         }
     }
 

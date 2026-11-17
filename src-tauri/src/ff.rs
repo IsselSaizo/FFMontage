@@ -640,7 +640,7 @@ pub async fn peaks(info: &Value, stream: usize) -> Res<Value> {
 // ---------------------------------------------------------------------------
 // Прокси для форматов, которые не воспроизводятся в окне (AVI, WMV, GIF и т.п.)
 // ---------------------------------------------------------------------------
-fn progress_parser<'a>(duration: f64, on_progress: &'a (dyn Fn(f64) + Send + Sync)) -> impl FnMut(&[u8]) + Send + 'a {
+pub fn progress_parser<'a>(duration: f64, on_progress: &'a (dyn Fn(f64) + Send + Sync)) -> impl FnMut(&[u8]) + Send + 'a {
     let mut buf = String::new();
     move |d: &[u8]| {
         buf.push_str(&String::from_utf8_lossy(d));
@@ -1325,6 +1325,72 @@ pub async fn version_info(bin: &Bin) -> Option<(String, u32)> {
     r
 }
 
+/// Способы аппаратного декодирования в сборке FFmpeg («ffmpeg -hwaccels»): cuda, d3d11va, vaapi, videotoolbox…
+/// Окно выбирает из них (exportPlan.js hwDecodeFor); есть ли сам декодер у видеокарты — FFmpeg решает при запуске
+/// и без него декодирует процессором.
+static HWACCEL_CACHE: StdMutex<Option<HashMap<PathBuf, Vec<String>>>> = StdMutex::new(None);
+
+pub fn parse_hwaccels(text: &str) -> Vec<String> {
+    text.lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.ends_with(':') && l.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_'))
+        .map(String::from)
+        .collect()
+}
+
+pub async fn hwaccels(bin: &Bin) -> Vec<String> {
+    if let Some(v) = HWACCEL_CACHE.lock().unwrap_or_else(|e| e.into_inner()).as_ref().and_then(|m| m.get(&bin.ffmpeg).cloned()) {
+        return v;
+    }
+    if bin.missing {
+        return vec![];
+    }
+    let v = run_with::<fn(&[u8])>(&bin.ffmpeg, &sv(&["-hide_banner", "-hwaccels"]), None, Some(Duration::from_secs(15)))
+        .await
+        .map(|o| parse_hwaccels(&String::from_utf8_lossy(&o.stdout)))
+        .unwrap_or_default();
+    HWACCEL_CACHE.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert_with(HashMap::new).insert(bin.ffmpeg.clone(), v.clone());
+    v
+}
+
+/// Фильтры сборки FFmpeg («ffmpeg -filters»): строки вида « TSC vidstabdetect V->V  Описание» → имена.
+/// Нужно стабилизации: vidstab есть только в GPL-сборках (--enable-libvidstab)
+static FILTERS_CACHE: StdMutex<Option<HashMap<PathBuf, Vec<String>>>> = StdMutex::new(None);
+
+pub fn parse_filters(text: &str) -> Vec<String> {
+    text.lines()
+        .filter_map(|l| {
+            let mut it = l.split_whitespace();
+            let flags = it.next()?;
+            let name = it.next()?;
+            let io = it.next()?;
+            let ok = flags.len() <= 4 && flags.bytes().all(|c| matches!(c, b'.' | b'T' | b'S' | b'C')) && io.contains("->");
+            ok.then(|| name.to_string())
+        })
+        .collect()
+}
+
+pub async fn filters(bin: &Bin) -> Vec<String> {
+    if let Some(v) = FILTERS_CACHE.lock().unwrap_or_else(|e| e.into_inner()).as_ref().and_then(|m| m.get(&bin.ffmpeg).cloned()) {
+        return v;
+    }
+    if bin.missing {
+        return vec![];
+    }
+    let v = run_with::<fn(&[u8])>(&bin.ffmpeg, &sv(&["-hide_banner", "-filters"]), None, Some(Duration::from_secs(15)))
+        .await
+        .map(|o| parse_filters(&String::from_utf8_lossy(&o.stdout)))
+        .unwrap_or_default();
+    FILTERS_CACHE.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert_with(HashMap::new).insert(bin.ffmpeg.clone(), v.clone());
+    v
+}
+
+/// В сборке FFmpeg есть vidstabdetect и vidstabtransform (стабилизация «Баланс» / «Максимум»)
+pub async fn has_vidstab(bin: &Bin) -> bool {
+    let f = filters(bin).await;
+    f.iter().any(|x| x == "vidstabdetect") && f.iter().any(|x| x == "vidstabtransform")
+}
+
 /// Для окна настроек: проверить конкретную папку (или автопоиск, если пусто)
 pub async fn check_dir(dir: &str) -> Value {
     let bin = if dir.is_empty() { search_binaries(None) } else { bin_in(Path::new(dir)) };
@@ -1480,6 +1546,20 @@ mod tests {
         );
         assert!(probe_encoder_args("libx264").join(" ").contains("320x240"));
         assert!(is_gpu_encoder("av1_qsv") && !is_gpu_encoder("libsvtav1"));
+    }
+
+    #[test]
+    fn hwaccels_list() {
+        let t = "Hardware acceleration methods:\r\ncuda\r\nvaapi\r\nd3d11va\r\n\r\nvulkan\r\n";
+        assert_eq!(parse_hwaccels(t), vec!["cuda", "vaapi", "d3d11va", "vulkan"]);
+        assert!(parse_hwaccels("").is_empty());
+    }
+
+    #[test]
+    fn filters_list() {
+        let t = "Filters:\n  T.. = Timeline support\n  .S. = Slice threading\n  A = Audio input/output\n  ------\n ... abench            A->A       Benchmark part 1.\n .. deshake           V->V       Stabilize shaky video.\n .. vidstabdetect     V->V       Extract relative transformations\n TSC hqdn3d            V->V       Apply a High Quality 3D Denoiser.\n";
+        assert_eq!(parse_filters(t), vec!["abench", "deshake", "vidstabdetect", "hqdn3d"]);
+        assert!(parse_filters("").is_empty());
     }
 
     #[test]

@@ -1,0 +1,77 @@
+{
+  "id": "restore",
+  "name": { "ru": "Восстановление записи", "en": "Recording restore" },
+  "version": "1.0.0",
+  "apiVersion": 1,
+  "description": {
+    "ru": "Встроенный плагин без кода: шумодав для старых и сжатых записей. Убирает квадраты сжатия (deblock), шум в кадре и между кадрами (hqdn3d, atadenoise) и по желанию возвращает резкость (unsharp). Вариант «качественно, медленно» — nlmeans. Каждый ползунок на 0 выключает свою ступень. В плеере не виден — сравните кадр кнопкой «Сравнить» или смотрите экспорт.",
+    "en": "Built-in code-free plugin: a denoiser for old and compressed recordings. Removes compression blocks (deblock), noise within and across frames (hqdn3d, atadenoise) and optionally restores sharpness (unsharp). The “high quality, slow” variant uses nlmeans. Setting a slider to 0 turns its stage off. Not visible in the player — compare a frame with the Compare button or check the export."
+  },
+  "author": "FF Montage",
+  "contributes": {
+    "effects": [
+      {
+        "id": "denoise",
+        "name": { "ru": "Шумодав", "en": "Denoise" },
+        "preview": "frame",
+        "params": [
+          { "k": "deblock", "name": { "ru": "Квадраты сжатия", "en": "Compression blocks" }, "min": 0, "max": 10, "step": 1, "def": 5 },
+          { "k": "block", "name": { "ru": "Размер квадрата", "en": "Block size" }, "min": 4, "max": 32, "step": 4, "def": 8 },
+          { "k": "spatial", "name": { "ru": "Шум в кадре", "en": "Noise within a frame" }, "min": 0, "max": 10, "step": 0.5, "def": 4 },
+          { "k": "temporal", "name": { "ru": "Шум между кадрами", "en": "Noise across frames" }, "min": 0, "max": 30, "step": 0.5, "def": 6 },
+          { "k": "average", "name": { "ru": "Усреднение кадров", "en": "Frame averaging" }, "min": 0, "max": 10, "step": 1, "def": 2 },
+          { "k": "sharpen", "name": { "ru": "Резкость", "en": "Sharpness" }, "min": 0, "max": 2, "step": 0.05, "def": 0 }
+        ],
+        "ffmpeg": [
+          {
+            "filter": "deblock",
+            "args": {
+              "filter": "strong", "block": "{block:0}",
+              "alpha": "{deblock * 0.0196:4}", "beta": "{deblock * 0.01:4}", "gamma": "{deblock * 0.01:4}", "delta": "{deblock * 0.01:4}"
+            },
+            "when": "deblock > 0"
+          },
+          {
+            "filter": "hqdn3d",
+            "args": {
+              "luma_spatial": "{max(spatial, 0.01):2}", "chroma_spatial": "{max(spatial * 0.75, 0.01):2}",
+              "luma_tmp": "{max(temporal, 0.01):2}", "chroma_tmp": "{max(temporal * 0.667, 0.01):2}"
+            },
+            "when": "spatial > 0 || temporal > 0"
+          },
+          {
+            "filter": "atadenoise",
+            "args": ["{average * 0.01:4}", "{average * 0.02:4}", "{average * 0.01:4}", "{average * 0.02:4}", "{average * 0.01:4}", "{average * 0.02:4}"],
+            "when": "average > 0"
+          },
+          { "filter": "unsharp", "args": { "lx": "5", "ly": "5", "la": "{sharpen:2}" }, "when": "sharpen > 0" }
+        ]
+      },
+      {
+        "id": "denoise-hq",
+        "name": { "ru": "Шумодав (качественно, медленно)", "en": "Denoise (high quality, slow)" },
+        "preview": "frame",
+        "params": [
+          { "k": "deblock", "name": { "ru": "Квадраты сжатия", "en": "Compression blocks" }, "min": 0, "max": 10, "step": 1, "def": 5 },
+          { "k": "block", "name": { "ru": "Размер квадрата", "en": "Block size" }, "min": 4, "max": 32, "step": 4, "def": 8 },
+          { "k": "strength", "name": { "ru": "Сила", "en": "Strength" }, "min": 0, "max": 15, "step": 0.5, "def": 3 },
+          { "k": "sharpen", "name": { "ru": "Резкость", "en": "Sharpness" }, "min": 0, "max": 2, "step": 0.05, "def": 0 }
+        ],
+        "ffmpeg": [
+          {
+            "filter": "deblock",
+            "args": {
+              "filter": "strong", "block": "{block:0}",
+              "alpha": "{deblock * 0.0196:4}", "beta": "{deblock * 0.01:4}", "gamma": "{deblock * 0.01:4}", "delta": "{deblock * 0.01:4}"
+            },
+            "when": "deblock > 0"
+          },
+          { "filter": "nlmeans", "args": { "s": "{max(strength, 1):2}", "p": "7", "r": "15" }, "when": "strength > 0" },
+          { "filter": "unsharp", "args": { "lx": "5", "ly": "5", "la": "{sharpen:2}" }, "when": "sharpen > 0" }
+        ]
+      }
+    ]
+  },
+  "permissions": [],
+  "ffmpeg": { "filters": ["deblock", "hqdn3d", "atadenoise", "nlmeans", "unsharp"] }
+}

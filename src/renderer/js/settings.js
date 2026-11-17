@@ -13,6 +13,8 @@ import { foldersForm } from './folders.js';
 import { store } from './store.js';
 import { renderPaths } from './vst.js';
 import { experimentalOn, setExperimental } from './popout.js';
+import { perfPrefs } from './api.js';
+import { hwDecodeFor } from './exportPlan.js';
 
 const api = window.api;
 // Действия главного окна: перезагрузка с сохранением проекта, обновления, диалог MCP, сохранение перед перезапуском
@@ -66,6 +68,7 @@ const SECTIONS = () => [
   { id: 'general', title: t('Общие'), icon: 'palette', render: renderGeneral },
   { id: 'hotkeys', title: t('Горячие клавиши'), icon: 'keyboard', render: renderHotkeys },
   { id: 'folders', title: t('Папки'), icon: 'folder', render: renderFolders },
+  { id: 'perf', title: t('Производительность'), icon: 'export', render: renderPerf },
   { id: 'cache', title: t('Кэш'), icon: 'trash', render: renderCache },
   { id: 'mcp', title: t('ИИ-ассистент'), icon: 'ai', render: renderMcp },
   { id: 'plugins', title: t('Плагины'), icon: 'link', render: renderPlugins },
@@ -140,6 +143,45 @@ function renderGeneral(body) {
     h('div', { class: 'set-label' }, h('b', {}, t('Экспериментальные функции')),
       h('span', { class: 'muted small' }, t('Панели в отдельных окнах (второй монитор). Не доделано — может работать с ошибками.'))),
     h('label', { class: 'check-row' }, exp, t('Включить'))));
+}
+
+// --- Производительность (0.5.x) ---
+// settings.json perf { priority: low|normal|high, hwDecode: auto|off, bgJobs: 0 (авто) | 1..64 }.
+// priority и hwDecode читает api.startExport (api.js perfPrefs), bgJobs — Rust (queue.rs set_cpu_jobs при settings_set).
+async function renderPerf(body) {
+  const perf = perfPrefs();
+  const save = (patch) => setSettings({ perf: { ...perfPrefs(), ...patch } }).catch((e) => toast(errText(e), 'error'));
+  const chips = (key, opts, cur) => {
+    const row = h('div', { class: 'row gap wrap', dataset: { perf: key } });
+    const draw = (v) => {
+      row.innerHTML = '';
+      row.append(...opts.map(([id, name]) => h('button', {
+        class: `chip${id === v ? ' on' : ''}`, dataset: { value: String(id) }, onclick: () => { save({ [key]: id }); draw(id); },
+      }, name)));
+    };
+    draw(cur);
+    return row;
+  };
+  const row = (title, desc, ctl, key) => h('div', { class: 'set-row', dataset: { set: key } },
+    h('div', { class: 'set-label' }, h('b', {}, title), h('span', { class: 'muted small' }, desc)), ctl);
+
+  const info = await api.info().catch(() => null);
+  const encs = await api.encoders().catch(() => null);
+  const hw = hwDecodeFor('auto', info, encs);
+  const hwName = { cuda: 'NVIDIA (CUDA)', d3d11va: 'Direct3D 11', dxva2: 'DXVA2', videotoolbox: 'VideoToolbox', vaapi: 'VAAPI' };
+  const cores = navigator.hardwareConcurrency || 4;
+  const autoJobs = Math.max(2, Math.floor(cores / 2));
+  const jobs = [[0, t('Авто ({n})', { n: autoJobs })], ...[1, 2, 4, 6, 8, 12, 16].filter((n) => n <= Math.max(2, cores)).map((n) => [n, String(n)])];
+
+  body.append(
+    row(t('Режим экспорта'), t('Приоритет FFmpeg во время экспорта. «Фоновый» — программа и компьютер не тормозят, экспорт чуть медленнее; «Максимальный» — экспорт важнее остального.'),
+      chips('priority', [['low', t('Фоновый')], ['normal', t('Стандартный')], ['high', t('Максимальный')]], perf.priority), 'priority'),
+    row(t('Аппаратное декодирование'),
+      hw ? t('Видео для экспорта распаковывает видеокарта: {name}. Освобождает процессор для эффектов — на тяжёлых файлах (AV1, 4K, ускорение ×4…) экспорт быстрее. Если файл видеокарте не по силам, его распакует процессор.', { name: hwName[hw] || hw })
+        : t('В этой сборке FFmpeg или на этой видеокарте не найдено — видео распаковывает процессор.'),
+      chips('hwDecode', [['auto', t('Авто')], ['off', t('Выкл.')]], perf.hwDecode), 'hwDecode'),
+    row(t('Фоновые задачи одновременно'), t('Миниатюры, волны звука, прокси, реверс: сколько процессов FFmpeg работает сразу. Больше — быстрее готовится новый материал, но тяжелее компьютеру во время монтажа.'),
+      chips('bgJobs', jobs, perf.bgJobs), 'bgJobs'));
 }
 
 // --- Горячие клавиши ---
@@ -398,6 +440,7 @@ async function renderCache(body) {
       { id: 'peaks', title: t('Волны звука'), desc: t('Пересоздаются сами, когда файл снова понадобится.'), size: s.peaks, on: true },
       { id: 'proxy', title: t('Прокси'), desc: t('Облегчённые копии видео для плавного просмотра. Пересоздаются, но не сразу.'), size: s.proxy, on: true },
       { id: 'fx', title: t('Реверс и стоп-кадры'), desc: t('Пересоздаются по проекту, но долго. Файлы открытого проекта не трогаем.'), size: s.fx, on: false },
+      { id: 'stab', title: t('Стабилизация'), desc: t('Анализ движения и превью стабилизированных клипов. Пересоздаются сами; файлы открытого проекта не трогаем.'), size: s.stab || 0, on: false },
       { id: 'assets', title: t('Тексты и субтитры для экспорта'), desc: t('Картинки и файлы субтитров, которые готовятся перед каждым экспортом.'), size: s.assets, on: true },
       { id: 'fonts', title: t('Шрифты для субтитров'), desc: t('Копии шрифтов для экспорта субтитров (libass).'), size: s.fonts, on: true },
       ...(s.audiofx !== undefined ? [{ id: 'audiofx', title: t('Звук после аудиоплагинов'), desc: t('Результаты VST3 / CLAP для плеера и экспорта. Пересоздаются сами. Файлы открытого проекта не трогаем.'), size: s.audiofx, on: true }] : []),
@@ -542,7 +585,7 @@ async function renderPlugins(body) {
         h('div', { class: 'plg-title' },
           h('b', {}, p.name || p.id),
           m.version ? h('span', { class: 'muted small' }, t('версия {v}', { v: String(m.version) })) : null,
-          p.builtin ? h('span', { class: 'plg-tag' }, t('встроенный')) : null),
+          p.builtin || p.bundled ? h('span', { class: 'plg-tag', title: p.bundled ? t('Поставляется с программой и обновляется вместе с ней') : null }, t('встроенный')) : null),
         h('span', { class: 'muted small' }, [m.author ? t('Автор: {name}', { name: String(m.author) }) : null, `id: ${p.id}`].filter(Boolean).join(' · '))));
     const tools = h('div', { class: 'plg-tools' });
     if (!p.builtin) {
@@ -565,7 +608,9 @@ async function renderPlugins(body) {
         h('button', { class: 'icon-btn small', title: t('Открыть папку'), html: icon('folder', 15), onclick: () => api.pluginsOpenDir(p.id).catch((e) => toast(errText(e), 'error')) }),
         h('button', { class: 'icon-btn small plg-remove', title: t('Удалить'), dataset: { plugin: p.id }, html: icon('trash', 15), onclick: async () => {
           if (!(await confirmDialog(t('Удалить плагин «{name}»?', { name: p.name }),
-            t('Папка плагина будет удалена. Проекты с его эффектами откроются, но эти эффекты не будут применяться, пока плагин не установят снова.'),
+            p.bundled
+              ? t('Встроенный плагин будет удалён и не вернётся при обновлении программы — вернуть его можно кнопкой «Вернуть встроенные». Проекты с его эффектами откроются, но эти эффекты не будут применяться.')
+              : t('Папка плагина будет удалена. Проекты с его эффектами откроются, но эти эффекты не будут применяться, пока плагин не установят снова.'),
             t('Удалить'), t('Отмена'), true))) return;
           try { await host.removePlugin(p.id); toast(t('Плагин удалён'), 'success', 2000); } catch (e) { toast(t('Не удалось удалить плагин: {e}', { e: errText(e) }), 'error', 6000); }
         } }));
@@ -586,8 +631,21 @@ async function renderPlugins(body) {
     for (const p of all) listBox.append(card(p));
     if (!all.some((p) => !p.builtin)) listBox.append(h('p', { class: 'muted small' }, t('Установленных плагинов нет.')));
     dirBox.textContent = host.pluginsDir() ? t('Папка плагинов: {path}', { path: host.pluginsDir() }) : '';
+    // не hidden: .btn задаёт display, атрибут hidden его не перебивает
+    restoreBtn.style.display = host.bundledMissing().length ? '' : 'none';
   }
   const dirBox = h('span', { class: 'muted small cfg-path' });
+  // Встроенные плагины, удалённые пользователем (или пропавшие из папки), — поставить снова
+  const restoreBtn = btn(t('Вернуть встроенные'), 'refresh', async () => {
+    setBusy(true);
+    try {
+      const r = await host.restoreBundled();
+      const names = (r.restored || []).map((id) => (host.pluginList().find((x) => x.id === id) || { name: id }).name);
+      toast(names.length ? t('Встроенные плагины возвращены: {list}', { list: names.join(', ') }) : t('Все встроенные плагины на месте'), 'success', 3000);
+    } finally { setBusy(false); }
+  });
+  restoreBtn.id = 'plg-restore-bundled';
+  restoreBtn.title = t('Снова установить встроенные плагины, которые были удалены');
   const off = host.onPluginsChange(() => { if (!listBox.isConnected) { off(); return; } draw(); });
 
   body.append(
@@ -597,7 +655,8 @@ async function renderPlugins(body) {
       btn(t('Из zip…'), 'upload', () => installPick('zip')),
       btn(t('С GitHub…'), 'link', installGh),
       btn(t('Открыть папку плагинов'), 'folder', () => api.pluginsOpenDir(null)),
-      btn(t('Обновить список'), 'refresh', () => host.refreshList())),
+      btn(t('Обновить список'), 'refresh', () => host.refreshList()),
+      restoreBtn),
     status,
     listBox,
     dirBox);

@@ -73,6 +73,34 @@
     store.setText([tc.id], { box: true, boxColor: '#ff0000', boxOpacity: 1, color: '#ffffff' }); await sleep(100);
     ok(store.findClip(tc.id).clip.text.box === true, 'подложка включена');
 
+    // --- 0.5.x: оформление выделенного — жирный и цвет слова «мир», правка текста двигает фрагмент ---
+    // У «Заголовка» вес 800 (весь текст жирный) — для проверки «жирного слова» нужен обычный
+    store.setText([tc.id], { weight: 400 });
+    await sleep(150);
+    let ta2 = document.querySelector('#text-content');
+    const bBtn = () => document.querySelector('[data-text-sel="bold"]');
+    ok(!!bBtn() && bBtn().disabled, 'кнопки «Выделенное» есть и без выделения выключены');
+    ta2.focus(); ta2.setSelectionRange(8, 11); ta2.dispatchEvent(new Event('select'));
+    await sleep(50);
+    ok(!bBtn().disabled, 'выделение «мир» — кнопки включены');
+    const undo2 = store.undoStack.length;
+    bBtn().click(); await sleep(250);
+    let tx2 = store.findClip(tc.id).clip.text;
+    ok(JSON.stringify(tx2.runs) === JSON.stringify([{ a: 8, b: 11, bold: true }]) && store.undoStack.length === undo2 + 1, `жирный «мир»: ${JSON.stringify(tx2.runs)}`);
+    ta2 = document.querySelector('#text-content');
+    ok(ta2 && ta2.selectionStart === 8 && ta2.selectionEnd === 11, `выделение сохранилось после перерисовки: ${ta2 && ta2.selectionStart}–${ta2 && ta2.selectionEnd}`);
+    const col = document.querySelector('[data-text-sel="color"]');
+    col.value = '#ffcc00'; col.dispatchEvent(new Event('change')); await sleep(250);
+    tx2 = store.findClip(tc.id).clip.text;
+    ok(JSON.stringify(tx2.runs) === JSON.stringify([{ a: 8, b: 11, color: '#ffcc00', bold: true }]), `цвет «мир»: ${JSON.stringify(tx2.runs)}`);
+    ok(document.querySelector('.text-runs span[style*="font-weight: 700"]') !== null, 'под полем — предпросмотр фрагментов');
+    ta2 = document.querySelector('#text-content');
+    ta2.focus(); ta2.value = 'Ну, привет, мир'; ta2.dispatchEvent(new Event('input')); ta2.blur(); if (!document.hasFocus()) ta2.dispatchEvent(new FocusEvent('blur'));
+    await sleep(150);
+    tx2 = store.findClip(tc.id).clip.text;
+    ok(tx2.runs.length === 1 && tx2.runs[0].a === 12 && tx2.runs[0].b === 15, `правка текста сдвинула фрагмент: ${JSON.stringify(tx2.runs)}`);
+    store.setText([tc.id], { content: 'Привет, мир', runs: [] }); await sleep(100);
+
     // --- разрез и длительность текста (нет файла — длина любая) ---
     store.setTime(2); store.select({ kind: 'video', id: tc.id });
     timeline.splitAction(); await sleep(100);

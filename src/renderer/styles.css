@@ -918,7 +918,44 @@ body.popout #right-side { display: flex; }
 .ts-thumb { width: 100%; aspect-ratio: 16 / 9; border-radius: 8px; border: 1.5px solid var(--line-2); }
 .ts-tile:hover .ts-thumb { border-color: var(--accent); }
 textarea.text-edit { width: 100%; resize: vertical; font: inherit; font-size: 13px; line-height: 1.35; user-select: text; }
+.text-sel { align-items: center; margin-top: 6px; flex-wrap: wrap; }
+.text-sel .color-in:disabled, .text-sel .chip:disabled { opacity: .45; }
+.text-runs { margin-top: 6px; padding: 6px 8px; border-radius: 6px; background: #121216; font-size: 13px; line-height: 1.35; white-space: pre-wrap; word-break: break-word; max-height: 120px; overflow: auto; }
+.text-runs[hidden] { display: none; }
 .color-in { width: 30px; height: 26px; padding: 0 2px; border: 1px solid var(--line-2); border-radius: 6px; background: var(--panel-2); cursor: pointer; flex: none; }
 select.font-select { flex: 1; min-width: 0; }
 label.check { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
 .font-row { padding: 3px 0; font-size: 14px; }
+/* ---------- Шторка «ДО / ПОСЛЕ» (compare.js): кадры FFmpeg поверх плеера, над гизмо ---------- */
+.cmp-layer { position: absolute; inset: 0; z-index: 30; pointer-events: none; display: none; }
+.cmp-layer.on { display: block; }
+.cmp-box { position: absolute; transform-origin: 50% 50%; overflow: hidden; }
+.cmp-box.empty { background: rgba(0,0,0,.35); }
+.cmp-box.empty .cmp-img, .cmp-box.empty .cmp-tag, .cmp-box.empty .cmp-line { visibility: hidden; }
+.cmp-box.stale .cmp-img { filter: brightness(.8); }
+.cmp-img { position: absolute; inset: 0; width: 100%; height: 100%; display: block; user-select: none; -webkit-user-drag: none; }
+.cmp-tag { position: absolute; padding: 2px 7px; border-radius: 6px; font-size: 11px; font-weight: 700; letter-spacing: .04em;
+  background: rgba(10,10,14,.72); color: #fff; pointer-events: none; }
+.cmp-layer[data-dir="v"] .cmp-tag.before { left: 8px; top: 8px; }
+.cmp-layer[data-dir="v"] .cmp-tag.after { right: 8px; top: 8px; }
+.cmp-layer[data-dir="h"] .cmp-tag.before { left: 8px; top: 8px; }
+.cmp-layer[data-dir="h"] .cmp-tag.after { left: 8px; bottom: 8px; }
+.cmp-line { position: absolute; pointer-events: auto; touch-action: none; z-index: 2; }
+.cmp-layer[data-dir="v"] .cmp-line { width: 14px; margin-left: -7px; cursor: ew-resize;
+  background: linear-gradient(90deg, transparent 6px, #fff 6px, #fff 8px, transparent 8px); }
+.cmp-layer[data-dir="h"] .cmp-line { height: 14px; margin-top: -7px; cursor: ns-resize;
+  background: linear-gradient(180deg, transparent 6px, #fff 6px, #fff 8px, transparent 8px); }
+.cmp-knob { position: absolute; left: 50%; top: 50%; width: 18px; height: 18px; margin: -9px 0 0 -9px; border-radius: 50%;
+  background: #fff; border: 2px solid var(--accent); box-shadow: 0 1px 4px rgba(0,0,0,.5); }
+.cmp-layer.dragging, .cmp-layer.dragging * { cursor: inherit; }
+.cmp-bar { position: absolute; right: 10px; bottom: 10px; display: flex; align-items: center; gap: 6px; padding: 4px 6px 4px 10px;
+  background: rgba(20,20,26,.92); border: 1px solid var(--line-2); border-radius: 9px; pointer-events: auto; font-size: 12px; }
+.cmp-busy { color: #9fe3ff; font-size: 11.5px; }
+.fx-frame-note { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 8px; }
+.fx-frame-note .btn.on { background: var(--accent-soft); }
+/* Стабилизация (inspector.js stabSection): чекбокс превью и статус анализа / прокси */
+.fx-stab { margin-top: 8px; }
+.stab-status { display: flex; flex-direction: column; gap: 4px; margin-top: 4px; }
+.stab-line { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.stab-line.error { color: var(--danger, #e5534b); }
+.stab-line.warn { color: var(--warn, #d29922); }

@@ -1,7 +1,7 @@
 // Отрисовка текстового клипа на холсте (M5.1, решение D2): одна функция и для плеера, и для экспорта —
 // что видно в плеере, то и в файле. Экспорт: холст → PNG (кадр W×H, у титров «roll» — полоса W×h) → overlay в FFmpeg.
 // Геометрия — как у transform.js: центр блока = центр кадра + (x·W, y·H), масштаб и поворот вокруг центра.
-import { cleanText } from './textModel.js';
+import { cleanText, runStyle } from './textModel.js';
 import { tfOf } from './transform.js';
 import { tlLen } from './clipTime.js';
 import { registerGraphic } from './graphics.js';
@@ -27,33 +27,75 @@ function setFont(ctx, tx, px) {
   ctx.fontKerning = 'normal';
 }
 
-// Перенос по словам: строки не шире maxW (одно длинное слово не режется)
-function wrapLines(ctx, content, maxW) {
+const trimEndAt = (s, a, b) => { while (b > a && /\s/.test(s[b - 1])) b--; return b; };
+
+// Перенос по словам: строки не шире maxW (одно длинное слово не режется). → [[a, b)] — места строк в content
+function wrapRanges(content, maxW, measure) {
   const out = [];
+  let pos = 0;
   for (const para of content.split('\n')) {
-    if (!maxW || !para.trim()) { out.push(para); continue; }
-    const words = para.split(/(\s+)/);
-    let line = '';
-    for (const w of words) {
-      const next = line + w;
-      if (line.trim() && ctx.measureText(next.trimEnd()).width > maxW) { out.push(line.trimEnd()); line = w.trimStart(); } else line = next;
+    const p0 = pos;
+    pos += para.length + 1;
+    if (!maxW || !para.trim()) { out.push([p0, p0 + para.length]); continue; }
+    const re = /\s+|\S+/g;
+    let ls = p0; let le = p0;
+    for (let m = re.exec(para); m; m = re.exec(para)) {
+      const ts = p0 + m.index; const te = ts + m[0].length;
+      if (content.slice(ls, le).trim() && measure(ls, trimEndAt(content, ls, te)) > maxW) {
+        out.push([ls, trimEndAt(content, ls, le)]);
+        ls = /\s/.test(m[0][0]) ? te : ts;
+      }
+      le = te;
     }
-    out.push(line.trimEnd());
+    out.push([ls, trimEndAt(content, ls, le)]);
   }
+  return out;
+}
+
+// Отрезки строки [a, b) одного оформления: [{ a, b, st: { color, weight, italic } | null }] (null — общее)
+function lineSegs(runs, a, b) {
+  if (!runs.length) return [{ a, b, st: null }];
+  const out = [];
+  let pos = a;
+  for (const r of runs) {
+    if (r.b <= pos || r.a >= b) continue;
+    if (r.a > pos) out.push({ a: pos, b: r.a, run: null });
+    out.push({ a: Math.max(pos, r.a), b: Math.min(b, r.b), run: r });
+    pos = Math.min(b, r.b);
+  }
+  if (pos < b) out.push({ a: pos, b, run: null });
   return out;
 }
 
 /**
  * Раскладка текста в пикселях кадра W×H (без масштаба и поворота клипа):
- * { tx, px, lines: [{ text, w }], adv, asc, desc, blockW, blockH, sw, pad, boxW, boxH }
+ * { tx, px, content, lines: [{ text, a, b, w, segs: [{ a, b, st }] }], adv, asc, desc, blockW, blockH, sw, pad, boxW, boxH }
+ * segs — куски строки одного оформления (фрагменты tx.runs); st = null — общее оформление.
  */
 export function layoutText(clip, W, H) {
   const tx = cleanText(clip && clip.text);
   const ctx = mctx();
   const px = tx.size * H;
+  const content = tx.content || ' ';
+  const runs = tx.content ? tx.runs : [];
+  const styleOf = (run) => (run ? runStyle(tx, run) : null);
+  // Ширина content[a…b): без фрагментов — как раньше одним measureText, иначе по кускам своим шрифтом
+  const measure = (a, b) => {
+    if (b <= a) return 0;
+    if (!runs.length) return ctx.measureText(content.slice(a, b)).width;
+    let w = 0;
+    for (const s of lineSegs(runs, a, b)) {
+      setFont(ctx, s.run ? { ...tx, ...styleOf(s.run) } : tx, px);
+      w += ctx.measureText(content.slice(s.a, s.b)).width;
+    }
+    setFont(ctx, tx, px);
+    return w;
+  };
   setFont(ctx, tx, px);
-  const texts = wrapLines(ctx, tx.content || ' ', tx.wrap > 0 ? tx.wrap * W : 0);
-  const lines = texts.map((s) => ({ text: s, w: s ? ctx.measureText(s).width : 0 }));
+  const lines = wrapRanges(content, tx.wrap > 0 ? tx.wrap * W : 0, measure).map(([a, b]) => ({
+    text: content.slice(a, b), a, b, w: measure(a, b),
+    segs: lineSegs(runs, a, b).map((s) => ({ a: s.a, b: s.b, st: styleOf(s.run) })),
+  }));
   const m = ctx.measureText('HgЙ'); // i18n-ignore
   const asc = m.fontBoundingBoxAscent || px * 0.9;
   const desc = m.fontBoundingBoxDescent || px * 0.25;
@@ -62,7 +104,7 @@ export function layoutText(clip, W, H) {
   const blockH = Math.max(1, lines.length) * adv;
   const sw = tx.strokeWidth * px;
   const pad = tx.box ? tx.boxPad * px : 0;
-  return { tx, px, lines, adv, asc, desc, blockW, blockH, sw, pad, boxW: blockW + 2 * pad + 2 * sw, boxH: blockH + 2 * pad + 2 * sw };
+  return { tx, px, content, lines, adv, asc, desc, blockW, blockH, sw, pad, boxW: blockW + 2 * pad + 2 * sw, boxH: blockH + 2 * pad + 2 * sw };
 }
 
 // Титры «roll»: верх блока едет от низа кадра (local = 0) до положения «весь блок выше кадра» (local = длина клипа)
@@ -128,11 +170,20 @@ export function drawText(ctx, clip, W, H, { local = 0, strip = false } = {}) {
   ctx.textBaseline = 'alphabetic';
   ctx.textAlign = 'left';
   const top = -L.blockH / 2;
-  const pos = L.lines.map((l, i) => {
-    const x = tx.align === 'left' ? -L.blockW / 2 : tx.align === 'right' ? L.blockW / 2 - l.w : -l.w / 2;
+  // Куски строк: [текст, x, y, оформление | null] — без фрагментов одна строка = один кусок (как до 0.5.x)
+  const pos = [];
+  L.lines.forEach((l, i) => {
+    let x = tx.align === 'left' ? -L.blockW / 2 : tx.align === 'right' ? L.blockW / 2 - l.w : -l.w / 2;
     const y = top + i * L.adv + (L.adv - (L.asc + L.desc)) / 2 + L.asc;
-    return [l.text, x, y];
+    if (l.segs.length <= 1 && !(l.segs[0] && l.segs[0].st)) { pos.push([l.text, x, y, null]); return; }
+    for (const s of l.segs) {
+      const str = L.content.slice(s.a, s.b);
+      setFont(ctx, s.st ? { ...tx, ...s.st } : tx, px);
+      pos.push([str, x, y, s.st]);
+      x += str ? ctx.measureText(str).width : 0;
+    }
   });
+  const fontFor = (st) => setFont(ctx, st ? { ...tx, ...st } : tx, px);
   // Тень — в пикселях холста (на неё трансформ не действует), поэтому умножаем на масштаб сами
   const shadow = (on) => {
     if (on && tx.shadowOpacity > 0) {
@@ -147,11 +198,15 @@ export function drawText(ctx, clip, W, H, { local = 0, strip = false } = {}) {
     ctx.lineJoin = 'round'; ctx.miterLimit = 2;
     ctx.lineWidth = 2 * L.sw;
     ctx.strokeStyle = tx.strokeColor;
-    for (const [s2, x, y] of pos) if (s2) ctx.strokeText(s2, x, y);
+    for (const [s2, x, y, st] of pos) if (s2) { fontFor(st); ctx.strokeText(s2, x, y); }
     shadow(false);
   } else shadow(true);
-  ctx.fillStyle = tx.color;
-  for (const [s2, x, y] of pos) if (s2) ctx.fillText(s2, x, y);
+  for (const [s2, x, y, st] of pos) {
+    if (!s2) continue;
+    fontFor(st);
+    ctx.fillStyle = (st && st.color) || tx.color;
+    ctx.fillText(s2, x, y);
+  }
   ctx.restore();
 }
 
@@ -176,6 +231,8 @@ export async function ensureFonts(clips) {
   for (const c of clips) {
     const tx = cleanText(c.text);
     want.add(fontCss(tx, 40));
+    // Жирные / курсивные фрагменты — свои начертания шрифта
+    for (const r of tx.runs) want.add(fontCss({ ...tx, ...runStyle(tx, r) }, 40));
   }
   await Promise.all([...want].map((f) => document.fonts.load(f, 'AaЯя').catch(() => null))); // i18n-ignore
 }

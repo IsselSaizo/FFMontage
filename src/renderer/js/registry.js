@@ -2,7 +2,7 @@
 // Встроенные (js/core/*.js, «плагин» core) и плагины описывают их одинаково — декларативно (см. .agent/plugins-contract.md, раздел 7),
 // а реестр превращает описание в объект прежней формы и кладёт его в живые массивы EFFECTS / TRANSITIONS / AUDIO_FX,
 // которые дальше экспортируют effects.js, transitions.js и audioFx.js (тот же объект массива — остальной код не меняется):
-//   эффект      { id, name, plugin, params, ff(w, values) → 'фильтр=…,фильтр', css(w, values) → 'CSS filter' }
+//   эффект      { id, name, plugin, params, ff(w, values) → 'фильтр=…,фильтр', css(w, values) → 'CSS filter', preview?: 'frame' }
 //   переход     { id, name, plugin, xfadeArg: 'transition=…', style(p) → { a?, b?, top?, overlay? } }
 //   аудиоэффект { id, name, hint, plugin, params, previewOnlyExport, ff(values) → ['фильтр=…'], webaudio(values) → [{ node, … }] }
 //   пресет      { id, name, plugin, width, height, fps, codec?, quality? }
@@ -10,7 +10,7 @@
 // и объявленные плагином, ключи без файлов, значения без символов, ломающих граф.
 // Модуль без DOM — грузится и в Node (тесты экспорта).
 import { t, getLang } from './i18n.js';
-import { SAFE_FILTERS, FORBIDDEN_OPTION } from './core/safeFilters.js';
+import { SAFE_FILTERS, FORBIDDEN_OPTION, HOST_FILTERS, HOST_FILTER_FILE } from './core/safeFilters.js';
 import { compileExpr, compileTemplate } from './expr.js';
 import { cleanText, cleanContent, TEXT_KEYS, TEXT_DEFAULT_DUR } from './textModel.js';
 import { cleanTransform } from './transform.js';
@@ -126,29 +126,41 @@ const expr = (src, allowed) => checkVars(compileExpr(String(src)), allowed);
 const tpl = (src, allowed) => checkVars(compileTemplate(src), allowed);
 
 // --- фильтры FFmpeg: [{ filter, args?: { key: шаблон } | [шаблон, …], when?: выражение }] ---
-function compileFilters(list, owner, allowed) {
+// prepare — вид подготовки клипа у эффекта ('vidstab' | null): только с ней можно фильтр хоста (HOST_FILTERS) —
+// его опция с файлом (HOST_FILTER_FILE) обязана быть ровно плейсхолдером ("{trf}"), путь подставляет программа
+function compileFilters(list, owner, allowed, prepare = null) {
   if (!Array.isArray(list) || !list.length || list.length > MAX_FILTERS) fail(t('нужен список фильтров FFmpeg (от 1 до 16)'));
   return list.map((f) => {
     if (!isObj(f) || typeof f.filter !== 'string' || !FILTER_RE.test(f.filter)) fail(t('неверное имя фильтра'));
     const name = f.filter;
-    if (!SAFE_FILTERS.includes(name)) fail(t('фильтр «{f}» запрещён', { f: name }));
+    const host = HOST_FILTERS.includes(name) ? HOST_FILTER_FILE[name] : null;
+    if (host && host.prepare !== prepare) fail(t('фильтр «{f}» доступен только эффекту с подготовкой клипа «{p}» (поле prepare)', { f: name, p: host.prepare }));
+    if (!host && !SAFE_FILTERS.includes(name)) fail(t('фильтр «{f}» запрещён', { f: name }));
     if (!owner.core && !owner.filters.has(name)) fail(t('фильтр «{f}» не объявлен в манифесте (ffmpeg.filters)', { f: name }));
     const out = { name, when: null, named: null, pos: null };
     if (f.when !== undefined && f.when !== null && f.when !== '') out.when = expr(f.when, allowed);
     if (Array.isArray(f.args)) {
+      if (host) fail(t('у фильтра «{f}» параметры — только по именам', { f: name }));
       if (f.args.length > 32) fail(t('слишком много параметров у фильтра «{f}»', { f: name }));
       out.pos = f.args.map((a) => tpl(a, allowed));
     } else if (isObj(f.args)) {
       const keys = Object.keys(f.args);
       if (keys.length > 32) fail(t('слишком много параметров у фильтра «{f}»', { f: name }));
       out.named = keys.map((k) => {
+        if (host && k === host.option) {
+          if (f.args[k] !== host.placeholder) fail(t('у фильтра «{f}» опция {k} — только «{p}» (файл подставляет программа)', { f: name, k, p: host.placeholder }));
+          return [k, HOST_FILE];
+        }
         if (!KEY_RE.test(k) || FORBIDDEN_OPTION.test(k)) fail(t('недопустимый параметр фильтра «{k}»', { k }));
         return [k, tpl(f.args[k], allowed)];
       });
     } else if (f.args !== undefined && f.args !== null) fail(t('неверные параметры фильтра «{f}»', { f: name }));
+    if (host && !(out.named || []).some(([k]) => k === host.option)) fail(t('у фильтра «{f}» нет опции {k}: «{p}»', { f: name, k: host.option, p: host.placeholder }));
     return out;
   });
 }
+// Метка «здесь путь файла подготовки» в скомпилированных опциях фильтра хоста
+const HOST_FILE = Object.freeze({ hostFile: true });
 
 function checkValue(v, filter) {
   if (!v || v.length > 200 || BAD_VALUE.test(v)) fail(t('недопустимое значение «{v}» у фильтра «{f}»', { v: String(v).slice(0, 60), f: filter }));
@@ -158,13 +170,20 @@ function checkValue(v, filter) {
   return v;
 }
 
-// Описание фильтров + значения → ['имя=к=в:к=в', …] (фильтры с ложным when пропускаются)
-function renderFilters(cf, vars) {
+// Описание фильтров + значения → ['имя=к=в:к=в', …] (фильтры с ложным when пропускаются).
+// file — путь файла подготовки клипа для фильтра хоста (уже экранированный ffPath); нет — ошибка (эффект пропускается)
+function renderFilters(cf, vars, file = null) {
   const out = [];
   for (const f of cf) {
     if (f.when && !f.when.run(vars)) continue;
     const args = f.named
-      ? f.named.map(([k, tp]) => `${k}=${checkValue(tp.fill(vars), f.name)}`)
+      ? f.named.map(([k, tp]) => {
+        if (tp === HOST_FILE) {
+          if (!file) throw new Error(t('клип не подготовлен (нет файла анализа)'));
+          return `${k}=${file}`;
+        }
+        return `${k}=${checkValue(tp.fill(vars), f.name)}`;
+      })
       : (f.pos || []).map((tp) => checkValue(tp.fill(vars), f.name));
     out.push(args.length ? `${f.name}=${args.join(':')}` : f.name);
   }
@@ -188,20 +207,60 @@ function probeValues(params, extra) {
 }
 
 // ---------------- эффекты ----------------
+// Подготовка клипа (поле prepare эффекта): вид → какие числа можно задать анализу (шаблоны от параметров)
+export const PREPARE_KINDS = Object.freeze({
+  // анализ движения vidstabdetect (Rust stab.rs); границы — как у фильтра, Rust их ещё раз зажимает
+  vidstab: { shakiness: [1, 10], accuracy: [1, 15], stepsize: [1, 32], mincontrast: [0, 1], tripod: [0, 1] },
+});
+function compilePrepare(p, allowed) {
+  if (p === undefined || p === null) return null;
+  if (!isObj(p) || typeof p.kind !== 'string' || !hasOwn(PREPARE_KINDS, p.kind)) fail(t('неверная подготовка клипа (prepare): вид «{k}»', { k: isObj(p) ? String(p.kind) : '?' }));
+  const spec = PREPARE_KINDS[p.kind];
+  const a = p.args === undefined ? {} : p.args;
+  if (!isObj(a)) fail(t('неверная подготовка клипа (prepare): args'));
+  const list = Object.keys(a).map((k) => {
+    if (!hasOwn(spec, k)) fail(t('неверная подготовка клипа (prepare): параметр «{k}»', { k }));
+    return [k, tpl(a[k], allowed)];
+  });
+  return {
+    kind: p.kind,
+    args: (vars) => {
+      const out = {};
+      for (const [k, tp] of list) { const [lo, hi] = spec[k]; out[k] = Math.min(hi, Math.max(lo, tp.num(vars))); }
+      return out;
+    },
+  };
+}
+
 function compileEffect(desc, owner, id) {
   const params = compileParams(desc.params);
   const allowed = new Set([...params.map((x) => x.k), 'w']);
-  const cf = compileFilters(desc.ffmpeg, owner, allowed);
+  const prep = compilePrepare(desc.prepare, allowed);
+  const cf = compileFilters(desc.ffmpeg, owner, allowed, prep ? prep.kind : null);
   const cssT = desc.css === undefined || desc.css === null || desc.css === '' ? null : tpl(desc.css, allowed);
   const vars = (w, raw, defW) => Object.assign(paramValues(params, raw), { w: Number(w) || defW });
   const e = {
     id, name: localName(desc.name), plugin: owner.id, params,
-    // w — ширина исходного кадра (по ней blur и т.п. выглядят одинаково при любом размере); values — clip.fxp[id]
-    ff: (w, values) => renderFilters(cf, vars(w, values, 1920)).join(','),
+    // w — ширина исходного кадра (по ней blur и т.п. выглядят одинаково при любом размере); values — clip.fxp[id];
+    // file — путь файла подготовки клипа (prepare, уже для графа: ffPath) — без него эффект с prepare бросает ошибку
+    ff: (w, values, file = null) => renderFilters(cf, vars(w, values, 1920), file).join(','),
     // w — ширина показанного кадра в CSS-пикселях
     css: (w, values) => (cssT ? checkCss(cssT.fill(vars(w, values, 640))) : ''),
   };
-  for (const v of probeValues(params, { w: 1920 })) { renderFilters(cf, v); if (cssT) checkCss(cssT.fill(v)); }
+  const PROBE_FILE = 'C\\\\:/probe/x.trf';
+  for (const v of probeValues(params, { w: 1920 })) { renderFilters(cf, v, PROBE_FILE); if (cssT) checkCss(cssT.fill(v)); if (prep) prep.args(v); }
+  // preview: 'frame' — CSS не показывает эффект честно (шумодав, виньетка): в инспекторе — «Сравнить»
+  // (шторка «ДО / ПОСЛЕ» из кадров FFmpeg, js/compare.js).
+  // preview: 'proxy' — эффект меняет движение (стабилизация): шторки нет, в инспекторе чекбокс «Показывать превью» —
+  // программа делает прокси отрезка клипа с эффектом, плеер играет его вместо исходника (js/stab.js)
+  if (desc.preview !== undefined && desc.preview !== null && desc.preview !== 'frame' && desc.preview !== 'proxy') fail(t('неверное значение preview (допустимо «frame» или «proxy»)'));
+  if (desc.preview) e.preview = desc.preview;
+  // stage: 'source' — эффект на кадрах файла, первым в цепочке клипа: до скорости, кадрирования, трансформа и
+  // остальных эффектов (стабилизация). У клипа работает только первый такой эффект
+  if (desc.stage !== undefined && desc.stage !== null && desc.stage !== 'source') fail(t('неверное значение stage (допустимо только «source»)'));
+  if (desc.stage === 'source') e.stage = 'source';
+  if ((prep || e.preview === 'proxy') && e.stage !== 'source') fail(t('эффекту с prepare или preview «proxy» нужен stage «source»'));
+  if (prep) e.prepare = { kind: prep.kind, args: (values) => prep.args(vars(1920, values, 1920)) };
   return e;
 }
 

@@ -442,6 +442,19 @@ async function textTest(enc) {
     texts: { t1: { path: png, w: W, h: H, roll: false }, roll: { path: strip, w: W, h: 80, roll: true } },
     subtitles: { mode: 'burn', ass: assFile, fontsdir, end: 2.5 },
   };
+  // 0.5.x: картинка текста — один кадр (без -loop) + фильтр loop; наложение в формате кадра (yuv420, не auto)
+  const bp = plan.buildExport(pr, { width: W, height: H, fps: 30, assets });
+  assert(!bp.inputs.includes('-loop') && /\[1:v\]loop=loop=\d+:size=1:start=0,setpts=N\/\(30\)\/TB,/.test(bp.filter) && /overlay=[^;]*:format=yuv420:eof_action/.test(bp.filter),
+    'план: PNG одним кадром (loop), overlay=format=yuv420');
+  // Аппаратное декодирование: -hwaccel только у видеофайлов, не у картинок
+  const bh = plan.buildExport(pr, { width: W, height: H, fps: 30, assets, hwDecode: 'd3d11va' });
+  const hwAt = bh.inputs.indexOf('-hwaccel');
+  assert(hwAt >= 0 && bh.inputs.filter((x) => x === '-hwaccel').length === 1 && bh.inputs[hwAt + 1] === 'd3d11va' && bh.inputs.indexOf(blue) > hwAt, 'план: -hwaccel у видео, у PNG — нет');
+  assert(!plan.buildExport(pr, { width: W, height: H, fps: 30, assets, hwDecode: 'opencl' }).inputs.includes('-hwaccel'), 'неизвестный способ декодирования не попадает в план');
+  assert(plan.hwDecodeFor('auto', { platform: 'windows', hwaccels: ['cuda', 'd3d11va'] }, { h264_nvenc: true }) === 'cuda' &&
+    plan.hwDecodeFor('auto', { platform: 'windows', hwaccels: ['cuda', 'd3d11va'] }, { h264_nvenc: false }) === 'd3d11va' &&
+    plan.hwDecodeFor('auto', { platform: 'linux', hwaccels: ['vaapi'] }, {}) === null && plan.hwDecodeFor('off', { platform: 'windows', hwaccels: ['d3d11va'] }, {}) === null,
+  'hwDecodeFor: NVIDIA → cuda, Windows → d3d11va, Linux/выкл. → процессор');
   const out = path.join(DIR, 'out_text.mp4');
   await startExport(pr, { width: W, height: H, fps: 30, codec, quality: 'high', output: out, assets });
   const io = await ff.probe(out);
@@ -461,6 +474,16 @@ async function textTest(enc) {
   const rowOf = (f) => { let best = -1; let n = 0; for (let y = 0; y < 36; y++) { let k = 0; for (let x = 0; x < 64; x++) if (isWhite(f.px(x, y))) k++; if (k > n) { n = k; best = y; } } return best; };
   const r1 = rowOf(await rgb(out, 3.4)); const r2 = rowOf(await rgb(out, 4.5)); const r3 = rowOf(await rgb(out, 5.6));
   assert(r1 > r2 && r2 > r3 && r1 >= 24 && Math.abs(r2 - 16) <= 5, `титры едут вверх: строка ${r1} → ${r2} → ${r3}`);
+  // Надпись одним кадром стоит ровно своё время: 1–3 с (кадр 30 к/с)
+  const fEnd = await rgb(out, 3.05); const fIn = await rgb(out, 2.95);
+  assert(isWhite(fIn.px(32, 6)) && isBlue(fEnd.px(32, 6)), `надпись видна до 2,95 с и пропадает к 3,05 с: ${fIn.px(32, 6)} / ${fEnd.px(32, 6)}`);
+  // Аппаратное декодирование (NVIDIA): тот же кадр
+  if (enc.h264_nvenc) {
+    const outHw = path.join(DIR, 'out_text_hw.mp4');
+    await startExport(pr, { width: W, height: H, fps: 30, codec, quality: 'high', output: outHw, assets: { texts: assets.texts }, hwDecode: 'cuda' });
+    const fh = await rgb(outHw, 1.5);
+    assert(isWhite(fh.px(32, 6)) && isBlue(fh.px(32, 18)), `экспорт с -hwaccel cuda: текст ${fh.px(32, 6)}, видео ${fh.px(32, 18)}`);
+  }
 
   // Мягкие субтитры: отдельный поток mov_text с языком
   const srt = path.join(DIR, 't_subs.srt');
@@ -619,6 +642,208 @@ async function timerTest(enc) {
   assert(isWhite((await rgb(out, 1.0)).px(10, 18)), 'вне рамки таймера — видео под ним');
 }
 
+// Шторка «ДО / ПОСЛЕ» (compare.rs, --engine compare): кадр нужного момента, ДО = исходник, ПОСЛЕ — с цепочкой
+// эффектов клипа (effects.js compareRequest, как в экспорте), кадрирование, картинка, кэш, проверка цепочки
+async function compareTest() {
+  console.log('Шторка «ДО / ПОСЛЕ»:');
+  const { pathToFileURL } = require('url');
+  const fxm = await import(pathToFileURL(path.join(__dirname, '..', 'src', 'renderer', 'js', 'effects.js')).href);
+  // 0–2 с красный, 2–4 зелёный, 4–6 синий (25 кадров/с: кадр 2,00 с — первый зелёный)
+  const rgbFile = await make('cmp_rgb.mp4', ['-f', 'lavfi', '-i', 'color=c=red:s=640x360:r=25:d=2', '-f', 'lavfi', '-i', 'color=c=0x00ff00:s=640x360:r=25:d=2',
+    '-f', 'lavfi', '-i', 'color=c=blue:s=640x360:r=25:d=2', '-filter_complex', '[0:v][1:v][2:v]concat=n=3:v=1:a=0', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-g', '50']);
+  const halves = await make('cmp_halves.mp4', ['-f', 'lavfi', '-i', 'color=c=red:s=320x360:r=25:d=4', '-f', 'lavfi', '-i', 'color=c=blue:s=320x360:r=25:d=4',
+    '-filter_complex', '[0:v][1:v]hstack', '-c:v', 'libx264', '-pix_fmt', 'yuv420p']);
+  const png = await make('cmp_photo.png', ['-f', 'lavfi', '-i', 'color=c=0x00ff00:s=400x300', '-frames:v', '1']);
+  const im = await ff.probe(rgbFile); const ih = await ff.probe(halves); const ip = await ff.probe(png);
+  const gray = ([r, g, b]) => Math.abs(r - g) < 20 && Math.abs(g - b) < 20;
+  const cmp = (clip, m, tl, width = 320) => ff.engine('compare', fxm.compareRequest(clip, m, tl, width));
+  const clip = { mediaId: 'm', in: 0, out: 6, start: 10, volume: 1, effects: ['bw'] };
+
+  let r = await cmp(clip, im, 13);
+  let a = await rgb(r.beforePath, 0); let b = await rgb(r.afterPath, 0);
+  assert(isGreen(a.px(32, 18)) && gray(b.px(32, 18)) && b.px(32, 18)[1] > 60, `момент 3 с: ДО зелёный ${a.px(32, 18)}, ПОСЛЕ серый ${b.px(32, 18)} (эффект bw)`);
+  const src = await rgb(rgbFile, 3);
+  let d = 0; for (let y = 0; y < 36; y += 5) for (let x = 0; x < 64; x += 5) { const p = a.px(x, y); const q = src.px(x, y); d += Math.abs(p[0] - q[0]) + Math.abs(p[1] - q[1]) + Math.abs(p[2] - q[2]); }
+  assert(d / (13 * 8 * 3) < 6, `ДО совпадает с исходником (разница ${(d / (13 * 8 * 3)).toFixed(2)})`);
+  const info = await ff.run(ff.findBinaries().ffprobe || ff.findBinaries().ffmpeg.replace(/ffmpeg(\.exe)?$/i, 'ffprobe$1'), ['-v', 'error', '-show_entries', 'stream=width,height', '-of', 'csv=p=0', r.afterPath]);
+  assert(info.stdout.trim() === '320,180', `размер кадра по запросу: ${info.stdout.trim()}`);
+  // Граница кадров: 11,99 с таймлайна = 1,99 с файла — ещё красный кадр, 12,02 — уже зелёный
+  r = await cmp({ ...clip, effects: [] }, im, 11.99);
+  assert(isRed((await rgb(r.beforePath, 0)).px(32, 18)), 'кадр 1,99 с — красный (последний до границы)');
+  r = await cmp({ ...clip, effects: [] }, im, 12.02);
+  assert(isGreen((await rgb(r.beforePath, 0)).px(32, 18)), 'кадр 2,02 с — зелёный');
+  // Скорость и начало отрезка: in 4, ×2 — момент 10,5 с таймлайна = 5 с файла (синий); прогон — не раньше in
+  r = await cmp({ ...clip, in: 4, speed: 2 }, im, 10.5);
+  assert(r.before && (await rgb(r.beforePath, 0)).px(32, 18)[2] > 150, 'скорость ×2: кадр 5 с файла (синий)');
+  // Кэш: тот же запрос — из файлов
+  r = await cmp(clip, im, 13);
+  assert(r.cached === true, 'повтор того же запроса — из кэша');
+  // Временной шумодав (hqdn3d + atadenoise) — прогон с запасом, кадр получается
+  const reg = await import(pathToFileURL(path.join(__dirname, '..', 'src', 'renderer', 'js', 'registry.js')).href);
+  const owner = { id: 'cmptest', filters: new Set(['hqdn3d', 'atadenoise']) };
+  const did = reg.registerEffect({ id: 'dn', name: 'DN', preview: 'frame', ffmpeg: [{ filter: 'hqdn3d', args: ['4', '3', '6', '4'] }, { filter: 'atadenoise' }] }, owner);
+  r = await cmp({ ...clip, effects: [did] }, im, 13.5);
+  assert(isGreen((await rgb(r.afterPath, 0)).px(32, 18)), 'временные фильтры: кадр с шумодавом получен');
+  reg.unregisterPlugin('cmptest');
+  // Кадрирование — одинаково у обоих кадров: срезана левая половина → синий
+  r = await cmp({ ...clip, crop: { l: 0.5 } }, ih, 11);
+  a = await rgb(r.beforePath, 0); b = await rgb(r.afterPath, 0);
+  assert(a.px(4, 18)[2] > 150 && a.px(4, 18)[0] < 80 && gray(b.px(4, 18)), `кадрирование: ДО ${a.px(4, 18)}, ПОСЛЕ ${b.px(4, 18)}`);
+  // Картинка
+  r = await cmp({ mediaId: 'p', in: 0, out: 5, start: 0, effects: ['invert'] }, ip, 1);
+  a = await rgb(r.beforePath, 0); b = await rgb(r.afterPath, 0);
+  assert(isGreen(a.px(32, 18)) && b.px(32, 18)[0] > 150 && b.px(32, 18)[2] > 150 && b.px(32, 18)[1] < 80, `картинка: ДО ${a.px(32, 18)}, ПОСЛЕ (негатив) ${b.px(32, 18)}`);
+  // Проверка цепочки (как plancheck): метки/«;», фильтры вне списка, файловые опции; момент за концом файла
+  const bad = async (fx, re, msg) => {
+    try { await ff.engine('compare', { ...fxm.compareRequest(clip, im, 13, 320), fx }); assert(false, msg); } catch (e) { assert(re.test(e.message), `${msg}: ${e.message.slice(0, 90)}`); }
+  };
+  await bad('hue=s=0[x];[x]negate', /;|label|мет/i, 'отказ: цепочка с метками');
+  await bad('movie=C\\:/x.mp4', /movie/, 'отказ: movie');
+  await bad('drawtext=textfile=C\\:/x.txt', /drawtext/, 'отказ: drawtext');
+  await bad('ass=C\\:/x.ass', /ass/, 'отказ: ass');
+  try { await ff.engine('compare', { ...fxm.compareRequest(clip, im, 13, 320), t: 60 }); assert(false, 'за концом файла — ошибка'); } catch (e) { assert(/кадр|frame/i.test(e.message), `за концом файла — понятная ошибка: ${e.message.slice(0, 90)}`); }
+  try { await ff.engine('compare', { ...fxm.compareRequest(clip, im, 13, 320), file: path.join(DIR, 'нет-такого.mp4') }); assert(false, 'нет файла'); } catch (e) { assert(/не разрешён|not allowed/.test(e.message), 'нет файла — отказ'); }
+}
+
+// Стабилизация (plugins-bundled/stabilize, stab.rs, exportPlan.js stabPart): синтетический «трясущийся» клип
+// (testsrc2 + crop со сдвигом по sin), красный кадр-метка на 4,00 с файла. Быстрая (deshake) — без анализа;
+// Баланс / Максимум (vidstab) — анализ движком (--engine stab-analyze) в кэш теста, экспорт проходит plancheck,
+// тряска заметно меньше, метка — тем же кадром, что без стабилизации; прокси превью; отказы plancheck.
+async function stabTest(enc) {
+  console.log('Стабилизация:');
+  const { pathToFileURL } = require('url');
+  const js = (f) => import(pathToFileURL(path.join(__dirname, '..', 'src', 'renderer', 'js', f)).href);
+  const reg = await js('registry.js');
+  const fxm = await js('effects.js');
+  const sp = await js('stabPlan.js');
+  const man = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'plugins-bundled', 'stabilize', 'plugin.json'), 'utf8'));
+  reg.unregisterPlugin('stabilize');
+  for (const e of man.contributes.effects) reg.registerEffect(JSON.parse(JSON.stringify(e)), { id: man.id, filters: new Set(man.ffmpeg.filters) });
+  const shaky = await make('stab_shaky.mp4', ['-f', 'lavfi', '-i', 'testsrc2=s=960x540:r=25:d=8',
+    '-vf', "crop=800:450:x='80+60*sin(n*0.9)*cos(n*0.37)':y='45+35*sin(n*1.7+1)',drawbox=x=0:y=0:w=iw:h=ih:color=red:t=fill:enable='eq(n,100)'",
+    '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '18', '-g', '50', '-pix_fmt', 'yuv420p']);
+  const m = await ff.probe(shaky);
+  const codec = enc.h264_nvenc ? 'h264_nvenc' : 'libx264';
+  // Кадры видео: серые 128×72 (тряска) и доля красного в каждом кадре (метка)
+  const frames = async (file) => {
+    const { stdout } = await ff.run(ff.findBinaries().ffmpeg, ['-hide_banner', '-loglevel', 'error', '-i', file, '-vf', 'scale=128:72:flags=area,format=gray', '-f', 'rawvideo', 'pipe:1'], { binaryStdout: true });
+    const n = stdout.length / (128 * 72); const out = [];
+    for (let i = 0; i < n; i++) out.push(stdout.subarray(i * 128 * 72, (i + 1) * 128 * 72));
+    return out;
+  };
+  const redIdx = async (file) => {
+    const { stdout } = await ff.run(ff.findBinaries().ffmpeg, ['-hide_banner', '-loglevel', 'error', '-i', file, '-vf', 'scale=16:9:flags=area,format=rgb24', '-f', 'rawvideo', 'pipe:1'], { binaryStdout: true });
+    const fsz = 16 * 9 * 3; const n = stdout.length / fsz;
+    for (let i = 0; i < n; i++) {
+      let red = 0;
+      for (let k = i * fsz; k < (i + 1) * fsz; k += 3) if (stdout[k] > 180 && stdout[k + 1] < 80 && stdout[k + 2] < 80) red++;
+      if (red > 16 * 9 * 0.8) return { at: i, n };
+    }
+    return { at: -1, n };
+  };
+  // Средний сдвиг между соседними кадрами (перебор ±12 пикселей 128×72, середина кадра)
+  const shake = (fr) => {
+    let tot = 0; const W = 128; const R = 12;
+    for (let i = 1; i < fr.length; i++) {
+      const a = fr[i - 1]; const b = fr[i]; let best = Infinity; let bx = 0; let by = 0;
+      for (let dy = -R; dy <= R; dy++) for (let dx = -R; dx <= R; dx++) {
+        let s = 0;
+        for (let y = 16; y < 56; y += 2) for (let x = 20; x < 108; x += 2) { const d = a[y * W + x] - b[(y + dy) * W + x + dx]; s += d * d; }
+        if (s < best) { best = s; bx = dx; by = dy; }
+      }
+      tot += Math.hypot(bx, by);
+    }
+    return tot / (fr.length - 1);
+  };
+  const clip = (fx, fxp) => ({ mediaId: 'm', in: 2, out: 6, start: 0, volume: 1, muted: true, effects: fx ? [fx] : [], ...(fxp ? { fxp } : {}) });
+  const exportOf = async (name, c, stab = {}) => {
+    const out = path.join(DIR, name);
+    try { fs.unlinkSync(out); } catch { /* нет файла */ }
+    await startExport({ media: { m }, videoClips: [c], audioTracks: [] }, { width: 320, height: 180, fps: 25, codec, quality: 'high', output: out, assets: { stab } });
+    return out;
+  };
+  const plain = await exportOf('stab_plain.mp4', clip(null));
+  const fp = await frames(plain); const rp = await redIdx(plain);
+  const s0 = shake(fp);
+  assert(rp.at === 50 && rp.n === 100, `без стабилизации: метка — кадр ${rp.at} из ${rp.n} (ждём 50 из 100), тряска ${s0.toFixed(2)}`);
+  // Быстрая: deshake, без анализа, первой в цепочке (до setpts)
+  const fastPlan = (await js('exportPlan.js')).exportCommand({ media: { m }, videoClips: [clip('stabilize.fast')], audioTracks: [] }, { width: 320, height: 180, fps: 25, codec, quality: 'high', output: path.join(DIR, 'x.mp4') });
+  assert(/\[0:v\]deshake=rx=32:ry=32:edge=mirror,scale=[^,]+,crop=[^,]+,setpts=PTS-STARTPTS/.test(fastPlan.filter), 'быстрая: deshake первым, до скорости (setpts)');
+  const fast = await exportOf('stab_fast.mp4', clip('stabilize.fast', { 'stabilize.fast': { range: 64, zoom: 0 } }));
+  const rf = await redIdx(fast); const s1 = shake(await frames(fast));
+  assert(rf.at === 50 && rf.n === 100, `быстрая: метка тем же кадром (${rf.at} из ${rf.n}), тряска ${s1.toFixed(2)} (было ${s0.toFixed(2)})`);
+  assert(s1 < s0, 'быстрая: тряска меньше');
+  // Баланс / Максимум — только если в сборке FFmpeg есть vidstab
+  const caps = await ff.engine('filters');
+  if (!caps.vidstab) {
+    console.log('  (в этой сборке FFmpeg нет vidstab — проверки «Баланс» / «Максимум» пропущены)');
+    fxm.setHostCaps({ vidstab: false });
+    const p = (await js('exportPlan.js')).buildExport({ media: { m }, videoClips: [clip('stabilize.max')], audioTracks: [] }, { width: 320, height: 180, fps: 25, codec, assets: { stab: {} } });
+    assert(p.warnings.some((w) => /vidstab/.test(w)) && !/vidstab/.test(p.filter), 'без vidstab: эффект пропущен с предупреждением');
+    fxm.setHostCaps({ vidstab: null });
+    reg.unregisterPlugin('stabilize');
+    return;
+  }
+  const c2 = clip('stabilize.balanced', { 'stabilize.balanced': { smooth: 20 } });
+  const req = sp.analyzeReq(c2, m);
+  assert(req && req.args.shakiness === 5 && req.args.stepsize === 12 && req.args.accuracy === 9, `запрос анализа: ${JSON.stringify(req && req.args)}`);
+  const t0 = Date.now();
+  const a = await ff.engine('stab-analyze', req);
+  const media = path.resolve(ff.paths().media_cache);
+  assert(a.state === 'ready' && fs.existsSync(a.trf) && /[\\/]stab[\\/][0-9a-f]+\.trf$/.test(a.trf) && path.resolve(a.trf).toLowerCase().startsWith(media.toLowerCase()),
+    `анализ: ${path.basename(a.trf)} в stab-кэше (${Date.now() - t0} мс)`);
+  assert(a.start === 1 && a.end === 7, `отрезок анализа с запасом 1 с: ${a.start}…${a.end}`);
+  const a2 = await ff.engine('stab-analyze', req);
+  assert(a2.trf === a.trf && a2.cached !== false, 'повтор — готовый анализ из кэша');
+  const a3 = await ff.engine('stab-analyze', { ...req, in: 2.5, out: 6.5 });
+  assert(a3.trf === a.trf, 'клип обрезан в пределах запаса — тот же анализ');
+  const a4 = await ff.engine('stab-analyze', { ...req, in: 0.5 });
+  assert(a4.trf !== a.trf && a4.start === 0, 'обрезан за пределы запаса — новый анализ');
+  const a5 = await ff.engine('stab-analyze', { ...req, args: { ...req.args, shakiness: 9 } });
+  assert(a5.trf !== a.trf, 'другие параметры анализа — новый анализ');
+  const stab = { trf: a.trf, start: a.start, end: a.end };
+  c2.id = 'c2';
+  const bal = await exportOf('stab_balanced.mp4', c2, { c2: stab });
+  const rb = await redIdx(bal); const s2 = shake(await frames(bal));
+  assert(rb.at === 50 && rb.n === 100, `баланс: метка тем же кадром (${rb.at} из ${rb.n}) — кадры анализа и экспорта совпадают`);
+  assert(s2 < s0 * 0.7, `баланс: тряска ${s2.toFixed(2)} заметно меньше (было ${s0.toFixed(2)})`);
+  // Скорость ×2: стабилизация до setpts, метка — кадр 25
+  const c3 = { ...c2, id: 'c3', speed: 2 };
+  const fastSp = await exportOf('stab_speed.mp4', c3, { c3: stab });
+  const rs = await redIdx(fastSp);
+  assert(rs.at === 25 && rs.n === 50, `баланс ×2: метка — кадр ${rs.at} из ${rs.n}`);
+  // Без готового анализа экспорт пропускает стабилизацию с предупреждением
+  const pm = (await js('exportPlan.js')).buildExport({ media: { m }, videoClips: [c2], audioTracks: [] }, { width: 320, height: 180, fps: 25, codec, assets: { stab: {} } });
+  assert(pm.warnings.some((w) => /Анализ движения|motion analysis/i.test(w)) && !/vidstab/.test(pm.filter), 'анализ не готов — стабилизация пропущена с предупреждением');
+  // Максимум: прокси превью (тот же отрезок, что анализ)
+  const c4 = { ...clip('stabilize.max', { 'stabilize.max': { showPreview: true } }), id: 'c4' };
+  const am = await ff.engine('stab-analyze', sp.analyzeReq(c4, m));
+  const preq = sp.proxyReq(c4, m, am);
+  assert(preq && preq.fixed && preq.fixed.start === am.start && /^vidstabtransform=input=.*:smoothing=30:optzoom=1:zoom=0\.0:interpol=bicubic:tripod=0,unsharp=/.test(preq.chain), `прокси: цепочка «Максимум» ${preq && preq.chain.slice(-60)}`);
+  const px = await ff.engine('stab-proxy', preq);
+  const ip = await ff.probe(px.path);
+  assert(fs.existsSync(px.path) && /[\\/]stab[\\/]/.test(px.path) && Math.abs(ip.duration - (am.end - am.start)) < 0.15 && ip.height <= 720,
+    `прокси: ${path.basename(px.path)} ${ip.width}×${ip.height}, ${ip.duration.toFixed(2)} с (отрезок ${am.start}…${am.end})`);
+  const rx = await redIdx(px.path);
+  assert(rx.at === Math.round((4 - am.start) * 25), `прокси: метка — кадр ${rx.at} (время файла − начало отрезка)`);
+  const pd = await ff.engine('stab-proxy', sp.proxyReq({ ...clip('stabilize.fast', { 'stabilize.fast': { showPreview: true } }) }, m));
+  assert(fs.existsSync(pd.path) && pd.start === 1, `прокси быстрой (без анализа): ${pd.start}…${pd.end}`);
+  // plancheck: vidstabtransform только с .trf из stab-кэша; vidstabdetect — никогда
+  const okPlan = (await js('exportPlan.js')).exportCommand({ media: { m }, videoClips: [c2], audioTracks: [] }, { width: 320, height: 180, fps: 25, codec, quality: 'high', output: path.join(DIR, 'chk.mp4'), assets: { stab: { c2: stab } } });
+  const chk = (filter) => ff.engine('checkplan', { plan: { ...okPlan, filter } });
+  await chk(okPlan.filter);
+  assert(true, 'план с vidstabtransform из stab-кэша проходит plancheck');
+  const foreign = path.join(DIR, 'foreign.trf');
+  fs.copyFileSync(a.trf, foreign);
+  const esc = (p) => p.replace(/\\/g, '/').replace(/:/g, '\\\\:');
+  const bad = async (filter, msg) => { try { await chk(filter); assert(false, msg); } catch (e) { assert(/отклон|rejected|не разрешён|not allowed/i.test(e.message), `${msg}: ${e.message.slice(0, 100)}`); } };
+  await bad(okPlan.filter.replace(esc(a.trf), esc(foreign)), 'отказ: чужой input=');
+  await bad(okPlan.filter.replace(esc(a.trf), esc(`${path.dirname(a.trf)}/../stab/${path.basename(a.trf)}`)), 'отказ: путь с ..');
+  await bad(okPlan.filter.replace(/vidstabtransform=input=[^:]+/, `vidstabdetect=result=${esc(foreign)}`), 'отказ: vidstabdetect');
+  await bad(okPlan.filter.replace(/vidstabtransform=input=[^:]+/, `vidstabtransform=input=${esc(a.trf)}:debug=1`), 'отказ: debug');
+  reg.unregisterPlugin('stabilize');
+}
+
 (async () => {
   await ff.ready;
   DIR = path.join(ff.paths().temp, 'engine-test');
@@ -632,7 +857,7 @@ async function timerTest(enc) {
   // node tests/engine-test.js --only tracks — только одна группа проверок (для отладки)
   const only = process.argv.includes('--only') ? process.argv[process.argv.indexOf('--only') + 1] : null;
   if (only) {
-    await ({ tracks: tracksTest, effects: effectsTest, speed: speedTest, plugin: pluginTest, text: textTest, border: borderTest, timer: timerTest, encoders: encodersTest })[only](enc);
+    await ({ tracks: tracksTest, effects: effectsTest, speed: speedTest, plugin: pluginTest, text: textTest, border: borderTest, timer: timerTest, encoders: encodersTest, compare: compareTest, stab: stabTest })[only](enc);
     console.log('\nВСЁ ОК');
     return;
   }
@@ -748,6 +973,8 @@ async function timerTest(enc) {
   await textTest(enc);
   await borderTest(enc);
   await timerTest(enc);
+  await compareTest(enc);
+  await stabTest(enc);
   await encodersTest(enc);
   console.log('\nВСЁ ОК');
 })().catch((e) => { console.error(e); process.exit(1); });

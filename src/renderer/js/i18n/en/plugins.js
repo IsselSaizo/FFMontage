@@ -66,4 +66,12 @@ export default {
   'Список плагинов не загрузился: {e}': 'The plugin list did not load: {e}',
   'Установленных плагинов нет.': 'No plugins installed.',
   'Папка плагинов: {path}': 'Plugins folder: {path}',
+  // встроенные плагины (plugins-bundled, Rust bundled.rs)
+  'Поставляется с программой и обновляется вместе с ней': 'Ships with the app and is updated with it',
+  'Встроенный плагин будет удалён и не вернётся при обновлении программы — вернуть его можно кнопкой «Вернуть встроенные». Проекты с его эффектами откроются, но эти эффекты не будут применяться.':
+    'The built-in plugin will be removed and will not come back when the app is updated — use “Restore built-in” to bring it back. Projects with its effects will still open, but those effects will not be applied.',
+  'Вернуть встроенные': 'Restore built-in',
+  'Снова установить встроенные плагины, которые были удалены': 'Reinstall the built-in plugins that were removed',
+  'Встроенные плагины возвращены: {list}': 'Built-in plugins restored: {list}',
+  'Все встроенные плагины на месте': 'All built-in plugins are in place',
 };

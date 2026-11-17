@@ -2,7 +2,7 @@
 // Вызывается из inspector.js; ui — его помощники { root, liveSlider, secInput, transformSection, num, render, liveStart, liveEnd }.
 import { store, MAX_FADE, MIN_CUE } from './store.js';
 import { h, icon, iconEl, fmtTime, t, toast, errText } from './util.js';
-import { cleanText, TEXT_DEFAULT } from './textModel.js';
+import { cleanText, TEXT_DEFAULT, remapRuns, applyRun, runStyle, selectionStyle } from './textModel.js';
 import { cleanShape, shapeName, shapeIcon, SHAPE_TYPES, CHAMFER_DEFAULT } from './shapes.js';
 import { borderOf, cleanBorder, BORDER_DEFAULT } from './border.js';
 import { cleanTimer, fmtClock, RING_DUR, TIMER_STYLES, timerStyleName } from './timer.js';
@@ -19,12 +19,13 @@ import { exportSubtitleTrack, importSubtitles } from './subtitlesUi.js';
 const label = (v, fb = '') => (typeof v === 'string' ? v : v && typeof v === 'object' ? v[getLang()] || v.ru || v.en || fb : fb);
 
 // Поле многострочного текста: правка «вживую», одна запись в историю за сеанс ввода
-function textArea(ui, value, onLive, { rows = 3, id = null } = {}) {
+// keepLive(e) → true: фокус ушёл туда, где правка продолжается (палитра цвета фрагмента) — сеанс не закрывать
+function textArea(ui, value, onLive, { rows = 3, id = null, keepLive = null } = {}) {
   const ta = h('textarea', { class: 'input text-edit', rows: String(rows), spellcheck: 'true', id });
   ta.value = value;
   ta.addEventListener('focus', () => ui.liveStart());
   ta.addEventListener('input', () => { ui.liveStart(); onLive(ta.value); });
-  ta.addEventListener('blur', () => ui.liveEnd());
+  ta.addEventListener('blur', (e) => { if (!(keepLive && keepLive(e))) ui.liveEnd(); });
   ta.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Escape') ta.blur(); });
   return ta;
 }
@@ -62,6 +63,71 @@ function styleSlider(ui, value, { min, max, step, fmt, live, commit }) {
   return { slider, val };
 }
 
+// ---------------- Оформление выделенного фрагмента (цвет, жирный, курсив) ----------------
+// Выделение в поле текста переживает перерисовку панели (после кнопки панель строится заново)
+let lastSel = { id: null, a: 0, b: 0, restore: false };
+
+// Предпросмотр фрагментов под полем: текст с цветами и начертаниями (само поле их не показывает)
+function paintRunsView(view, tx) {
+  view.textContent = '';
+  view.hidden = !tx.runs.length;
+  if (!tx.runs.length) return;
+  let pos = 0;
+  const push = (a, b, run) => {
+    if (b <= a) return;
+    const st = runStyle(tx, run);
+    view.append(h('span', { style: { color: st.color, fontWeight: String(st.weight), fontStyle: st.italic ? 'italic' : 'normal' } }, tx.content.slice(a, b)));
+  };
+  for (const r of tx.runs) { push(pos, r.a, null); push(r.a, r.b, r); pos = r.b; }
+  push(pos, tx.content.length, null);
+}
+
+function textSelection(ui, clip, ta, bar, locked) {
+  const cur = () => cleanText((store.findClip(clip.id) || { clip }).clip.text);
+  const range = () => (lastSel.id === clip.id ? [Math.min(lastSel.a, lastSel.b), Math.max(lastSel.a, lastSel.b)] : [0, 0]);
+  const colorIn = h('input', { type: 'color', class: 'color-in', title: t('Цвет выделенного'), dataset: { textSel: 'color' } });
+  const bBtn = h('button', { class: 'chip', title: t('Жирный — выделенное'), dataset: { textSel: 'bold' } }, h('b', {}, 'B'));
+  const iBtn = h('button', { class: 'chip', title: t('Курсив — выделенное'), dataset: { textSel: 'italic' } }, h('i', {}, 'I'));
+  const clr = h('button', { class: 'chip', title: t('Снять оформление выделенного'), dataset: { textSel: 'clear' } }, '⌫');
+  const hint = h('span', { class: 'muted small' });
+  bar.append(h('label', { class: 'small' }, t('Выделенное:')), colorIn, bBtn, iBtn, clr, hint);
+  const update = () => {
+    const [a, b] = range();
+    const tx = cur();
+    const none = b <= a;
+    const s = selectionStyle(tx, a, b);
+    colorIn.value = s.color;
+    bBtn.classList.toggle('on', !none && s.bold);
+    iBtn.classList.toggle('on', !none && s.italic);
+    for (const el of [colorIn, bBtn, iBtn, clr]) el.disabled = locked || none;
+    hint.textContent = none ? t('выделите слова в поле') : '';
+  };
+  const remember = () => { lastSel = { id: clip.id, a: ta.selectionStart, b: ta.selectionEnd, restore: false }; update(); };
+  for (const ev of ['select', 'keyup', 'mouseup', 'input', 'focus']) ta.addEventListener(ev, remember);
+  // Кнопки не забирают фокус у поля (иначе blur → перерисовка панели до щелчка)
+  for (const el of [bBtn, iBtn, clr]) el.addEventListener('mousedown', (e) => e.preventDefault());
+  const apply = (patch, opts) => {
+    const [a, b] = range();
+    if (b <= a || locked) return;
+    ui.liveEnd();
+    const tx = cur();
+    lastSel = { id: clip.id, a, b, restore: true };
+    store.setText([clip.id], { runs: applyRun(tx.runs, tx.content, a, b, patch, opts) });
+  };
+  bBtn.addEventListener('click', () => { const [a, b] = range(); apply({ bold: !selectionStyle(cur(), a, b).bold }); });
+  iBtn.addEventListener('click', () => { const [a, b] = range(); apply({ italic: !selectionStyle(cur(), a, b).italic }); });
+  clr.addEventListener('click', () => apply({}, { clear: true }));
+  colorIn.addEventListener('change', () => apply({ color: colorIn.value }));
+  // Палитру закрыли без выбора — закрыть и сеанс ввода
+  colorIn.addEventListener('blur', () => ui.liveEnd());
+  if (lastSel.id === clip.id && lastSel.restore) {
+    lastSel.restore = false;
+    const { a, b } = lastSel;
+    requestAnimationFrame(() => { if (!ta.isConnected) return; ta.focus(); ta.setSelectionRange(a, b); update(); });
+  }
+  update();
+}
+
 // ---------------- Текстовый клип ----------------
 export function renderTextClip(ui, sel) {
   const { root } = ui;
@@ -79,9 +145,20 @@ export function renderTextClip(ui, sel) {
 
   // --- Содержимое и шрифт ---
   const sec = h('div', { class: 'insp-section', dataset: { section: 'text' } }, h('h3', {}, t('Текст')));
-  const ta = textArea(ui, tx.content, (v) => liveT({ content: v }), { rows: Math.min(8, Math.max(2, tx.content.split('\n').length + 1)), id: 'text-content' });
+  // Ввод текста сдвигает оформленные фрагменты вместе со словами
+  const selBar = h('div', { class: 'row gap text-sel', dataset: { textSel: '' } });
+  const runsView = h('div', { class: 'text-runs', title: t('Так выглядят цвет, жирный и курсив фрагментов') });
+  const ta = textArea(ui, tx.content, (v) => {
+    const f = store.findClip(clip.id);
+    const cur = cleanText(f ? f.clip.text : tx);
+    liveT({ content: v, runs: remapRuns(cur.runs, cur.content, v) });
+    paintRuns();
+  }, { rows: Math.min(8, Math.max(2, tx.content.split('\n').length + 1)), id: 'text-content', keepLive: (e) => !!(e.relatedTarget && selBar.contains(e.relatedTarget)) });
   ta.disabled = locked;
-  sec.append(ta);
+  sec.append(ta, selBar, runsView);
+  textSelection(ui, clip, ta, selBar, locked);
+  const paintRuns = () => paintRunsView(runsView, cleanText((store.findClip(clip.id) || { clip }).clip.text));
+  paintRuns();
   const weights = [[300, t('Тонкий')], [400, t('Обычный')], [500, t('Средний')], [600, t('Полужирный')], [700, t('Жирный')], [800, t('Очень жирный')], [900, t('Чёрный')]];
   sec.append(
     h('div', { class: 'row gap' }, fontSelect(tx.font, (v) => setT({ font: v })),

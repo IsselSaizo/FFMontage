@@ -17,6 +17,7 @@ import {
 } from '../keymap.js';
 import { getSetting, setSettings } from '../settings.js';
 import { permissionSet, need, checkNetUrl, describePermissions } from './permissions.js';
+import { invoke } from '../tauri.js';
 
 export { describePermissions };
 
@@ -116,6 +117,7 @@ function newRec(p) {
     manifest,
     error: p.error ? String(p.error) : (manifest ? '' : t('Нет манифеста plugin.json')),
     builtin: !!p.builtin,
+    bundled: !!p.bundled,      // поставляется с программой (plugins-bundled, Rust bundled.rs); удаляется как обычный
     perms: permissionSet(manifest),
     owner: { id: p.id, filters: new Set(filters) },
     active: false,
@@ -202,7 +204,7 @@ export function pluginList() {
   const all = [...S.recs.values()];
   all.sort((a, b) => (a.builtin ? -1 : b.builtin ? 1 : pluginName(a).localeCompare(pluginName(b))));
   return all.map((r) => ({
-    id: r.id, dir: r.dir, manifest: r.manifest, error: r.error, builtin: r.builtin, active: r.active,
+    id: r.id, dir: r.dir, manifest: r.manifest, error: r.error, builtin: r.builtin, bundled: r.bundled, active: r.active,
     enabled: r.builtin || isEnabled(r.id), problems: r.problems.slice(), name: pluginName(r),
     description: localized(r.manifest && r.manifest.description, ''),
     permissions: describePermissions(r.manifest || {}),
@@ -210,6 +212,15 @@ export function pluginList() {
 }
 export const pluginsDir = () => (S.info && S.info.dir) || '';
 export const listError = () => S.listError;
+/** Встроенные плагины, которых нет в папке (удалены пользователем или вручную) */
+export const bundledMissing = () => (S.info && Array.isArray(S.info.bundledMissing) ? S.info.bundledMissing.slice() : []);
+
+/** «Вернуть встроенные»: Rust снова ставит недостающие и забывает plugins.removedBundled → { restored: [id] } */
+export async function restoreBundled() {
+  const r = await invoke('plugins_restore_bundled');
+  await refreshList();
+  return r || { restored: [] };
+}
 
 // ---------------------------------------------------------------------------
 // Включение / выключение

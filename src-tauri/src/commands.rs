@@ -31,7 +31,12 @@ pub async fn app_info(app: AppHandle) -> Value {
     let p = paths::get();
     let bin = ff::find();
     let ver = ff::version_info(&bin).await;
+    let hw = ff::hwaccels(&bin).await;
+    let vidstab = ff::has_vidstab(&bin).await;
     json!({
+        "hwaccels": hw,
+        // стабилизация «Баланс» / «Максимум» (stab.rs) — только если в сборке FFmpeg есть libvidstab
+        "vidstab": vidstab,
         "version": app.package_info().version.to_string(),
         "shell": "Tauri",
         "tauri": tauri::VERSION,
@@ -217,6 +222,8 @@ pub async fn settings_set(patch: Value) -> R<Value> {
         if let Some(l) = all["lang"].as_str() {
             i18n::set(l);
         }
+        // Настройки → Производительность: сколько фоновых задач FFmpeg одновременно
+        crate::queue::set_cpu_jobs(crate::settings::bg_jobs(&all));
         Ok(all)
     })
     .await?

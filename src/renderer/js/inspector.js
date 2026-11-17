@@ -7,7 +7,9 @@ import { transitionById, isKnownTransition, MIN_DURATION } from './transitions.j
 import { maxTransition } from './store.js';
 import { changeDuration } from './actions.js';
 import { isReversed, isFreeze } from './fx.js';
-import { clipEffects, unknownEffects, effectById, effectValues } from './effects.js';
+import { clipEffects, unknownEffects, effectById, effectValues, needsFramePreview, sourceEffect } from './effects.js';
+import { stabStatus, retryStab } from './stab.js';
+import { openCompare, closeCompare, compareState } from './compare.js';
 import { onRegistryChange } from './registry.js';
 import { speedOf, tlLen, fmtSpeed, SPEED_PRESETS, MIN_SPEED, MAX_SPEED } from './clipTime.js';
 import { tfOf, cleanTransform, TF_DEFAULT } from './transform.js';
@@ -109,6 +111,50 @@ export function initInspector() {
     // Двойной щелчок — значение по умолчанию
     slider.addEventListener('dblclick', () => store.mutate(() => { const f = store.findClip(clipId); if (f) put(f.clip, pd.def); }));
     return [h('div', { class: 'row between' }, h('label', {}, pd.name), val), slider];
+  }
+
+  // Стабилизация: строка статуса (обновляется на месте по событию 'stab') и чекбокс «Показывать превью»
+  // (clip.fxp[id].showPreview; выключен — пометка «Видно только в экспорте»)
+  function stabStatusEl(clip) {
+    const st = stabStatus(clip);
+    const box = h('div', { class: 'stab-status small', dataset: { clip: clip.id } });
+    if (!st) return box;
+    const pct = (j) => Math.round((j.progress || 0) * 100);
+    const line = (label, j, kind) => {
+      if (!j) return null;
+      let text; let cls = 'muted';
+      if (j.state === 'unavailable') { text = t('В этой сборке FFmpeg нет vidstab — доступна только быстрая стабилизация'); cls = 'warn'; }
+      else if (j.state === 'ready') text = t('{what}: готово', { what: label });
+      else if (j.state === 'error') { text = t('{what}: ошибка — {e}', { what: label, e: j.error || '?' }); cls = 'error'; }
+      else text = t('{what}… {p}%', { what: label, p: pct(j) });
+      return h('div', { class: `stab-line ${cls}`, dataset: { stab: kind, state: j.state } }, h('span', {}, text),
+        j.state === 'error' ? h('button', { class: 'btn ghost small', onclick: () => retryStab(clip.id) }, t('Повторить')) : null);
+    };
+    const a = line(t('Анализ движения'), st.analysis, 'analysis');
+    if (a) box.append(a);
+    const unavailable = st.analysis && st.analysis.state === 'unavailable';
+    if (st.preview && !unavailable && !(st.analysis && st.analysis.state === 'error')) {
+      const waiting = st.analysis && st.analysis.state !== 'ready';
+      box.append(waiting ? h('div', { class: 'stab-line muted', dataset: { stab: 'proxy', state: 'waiting' } }, t('Превью: после анализа движения'))
+        : line(t('Превью'), st.proxy, 'proxy'));
+    }
+    return box;
+  }
+  function stabSection(clip, se) {
+    const wrap = h('div', { class: 'fx-stab', dataset: { effect: se.id } });
+    const cb = h('input', { type: 'checkbox', id: 'stab-preview', checked: se.preview });
+    cb.addEventListener('change', () => store.mutate(() => {
+      const f = store.findClip(clip.id);
+      if (!f) return;
+      const c = f.clip; const cur = (c.fxp && c.fxp[se.id]) || {};
+      const next = { ...cur };
+      if (cb.checked) next.showPreview = true; else delete next.showPreview;
+      c.fxp = { ...(c.fxp || {}), [se.id]: next };
+    }));
+    wrap.append(h('label', { class: 'check', title: t('Плеер покажет стабилизацию: программа сделает копию клипа в низком разрешении (~720p)') }, cb, h('span', {}, t('Показывать превью'))));
+    if (!se.preview) wrap.append(h('div', { class: 'fx-frame-note' }, h('span', { class: 'muted small', id: 'stab-export-only' }, t('Видно только в экспорте'))));
+    wrap.append(stabStatusEl(clip));
+    return wrap;
   }
 
   const render = () => {
@@ -237,6 +283,19 @@ export function initInspector() {
         fxSec.append(h('div', { class: 'fx-params', dataset: { effect: id } }, h('div', { class: 'small' }, h('b', {}, e.name)),
           ...e.params.flatMap((pd) => effectParamRow(clip.id, id, pd, vals[pd.k]))));
       }
+      // Стабилизация (эффект stage 'source', stab.js): анализ движения, чекбокс «Показывать превью», статус прокси
+      const se = sourceEffect(clip);
+      if (se) fxSec.append(stabSection(clip, se));
+      // Эффект, который плеер не показывает (preview: 'frame'): шторка «ДО / ПОСЛЕ» из кадров FFmpeg (compare.js)
+      if (needsFramePreview(clip)) {
+        const open = compareState();
+        fxSec.append(h('div', { class: 'fx-frame-note' },
+          h('span', { class: 'muted small' }, t('Видно только в экспорте — нажмите «Сравнить»')),
+          h('button', { class: `btn small${open && open.clipId === clip.id ? ' on' : ''}`, id: 'fx-compare',
+            title: t('Кадр ДО и ПОСЛЕ эффектов в плеере (считает FFmpeg)'),
+            onclick: () => { if (compareState()?.clipId === clip.id) closeCompare(); else openCompare(clip.id); } },
+          h('span', { html: icon('split', 15) }), t('Сравнить'))));
+      }
       root.append(fxSec);
     }
     // --- Исходный файл ---
@@ -360,6 +419,15 @@ export function initInspector() {
   store.on('selection', render);
   store.on('project', render);
   store.on('busy', render);
+  // Статус стабилизации — только строка статуса на месте (не вся панель: иначе мешало бы тянуть ползунки)
+  store.on('stab', (id) => {
+    const el = root.querySelector('.stab-status');
+    if (!el || (id && el.dataset.clip !== id)) return;
+    const f = store.findClip(el.dataset.clip);
+    if (f) el.replaceWith(stabStatusEl(f.clip));
+  });
+  // Кнопка «Сравнить» подсвечена, пока шторка открыта (compare.js)
+  store.on('compare', (what) => { if (what !== 'ready') { const b = root.querySelector('#fx-compare'); if (b) b.classList.toggle('on', !!compareState()); } });
   // Плагин включили/выключили — названия и параметры эффектов могли измениться
   onRegistryChange(() => render());
   store.on('media', () => { if (!store.selection) render(); });

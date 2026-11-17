@@ -10,7 +10,7 @@ import { TRANSITIONS, MIN_DURATION as TR_MIN, MAX_DURATION as TR_MAX } from './t
 import { h, icon, toast, uid, errText } from './util.js';
 import { speedOf, tlLen, clipEnd, srcAt, tlAt, MIN_SPEED, MAX_SPEED } from './clipTime.js';
 import { t } from './i18n.js';
-import { isText, textDiff, cleanText, TEXT_KEYS, TEXT_MAX } from './textModel.js';
+import { isText, textDiff, cleanText, TEXT_KEYS, TEXT_MAX, applyRun, remapRuns } from './textModel.js';
 import { isGraphic, graphicOf, graphicData } from './graphicKinds.js';
 import { listTextStyles, textStyleById, listLoudnessTargets, loudnessTargetById } from './registry.js';
 import './core/textStyles.js';
@@ -22,6 +22,7 @@ import { findPauses } from './edit.js';
 import { removeRanges } from './editOps.js';
 import { BROADCAST, broadcastById, cleanTimecode } from './exportPlan.js';
 import { layoutOf, channelLabels, channelCount, routeOf, streamChannels, MAX_CHANNELS } from './audioLayout.js';
+import { stabStatus } from './stab.js';
 
 const api = window.api;
 
@@ -195,6 +196,14 @@ function describeClip(c, kind, track = null) {
   if (kind === 'audio' && Number.isInteger(c.channel)) o.source_channel = c.channel + 1;   // 0.5.1: один канал файла (моно)
   if (kind === 'audio' && m && streamChannels(m, c.stream || 0) > 2 && c.channel === undefined) o.source_channels = streamChannels(m, c.stream || 0);
   if (kind === 'video' && Array.isArray(c.effects) && c.effects.length) o.effects = c.effects;
+  // Стабилизация (stab.js): уровень, анализ движения (ready | running 43% | error | unavailable), превью
+  if (kind === 'video') {
+    const st = stabStatus(c);
+    if (st) {
+      const s = (j) => (!j ? undefined : j.state === 'running' ? `running ${Math.round(j.progress * 100)}%` : j.state);
+      o.stabilization = { effect: st.effect, analysis: s(st.analysis), preview: st.preview ? s(st.proxy) : 'off' };
+    }
+  }
   if (kind === 'video' && (c.fit === 'cover' || c.fit === 'stretch')) o.fit = c.fit;
   if (kind === 'video' && c.crop) o.crop = { left: c.crop.l, top: c.crop.t, right: c.crop.r, bottom: c.crop.b };
   if (kind === 'video') {
@@ -223,6 +232,41 @@ function textPatch(s) {
     out[k] = v;
   }
   return out;
+}
+
+// Оформление слов (spans): [{ text, nth? | start, end, color?, bold?, italic?, clear? }] → runs поверх tx.runs
+function spansRuns(tx, spans) {
+  if (spans === undefined || spans === null) return tx.runs;
+  if (!Array.isArray(spans)) fail('"spans" must be an array of { text | start+end, color?, bold?, italic?, clear? }.');
+  let runs = tx.runs;
+  const s0 = tx.content;
+  spans.forEach((s, i) => {
+    if (!s || typeof s !== 'object') fail(`spans[${i}] must be an object.`);
+    const patch = {};
+    if (s.color !== undefined) {
+      if (typeof s.color !== 'string' || !/^#[0-9a-f]{6}$/i.test(s.color)) fail(`spans[${i}].color must be "#rrggbb".`);
+      patch.color = s.color.toLowerCase();
+    }
+    if (s.bold !== undefined) patch.bold = !!s.bold;
+    if (s.italic !== undefined) patch.italic = !!s.italic;
+    const clear = s.clear === true;
+    if (!clear && !Object.keys(patch).length) fail(`spans[${i}]: pass color, bold, italic or clear: true.`);
+    const ranges = [];
+    if (typeof s.text === 'string' && s.text) {
+      for (let at = s0.indexOf(s.text); at >= 0; at = s0.indexOf(s.text, at + s.text.length)) ranges.push([at, at + s.text.length]);
+      if (!ranges.length) fail(`spans[${i}]: "${s.text.slice(0, 40)}" is not in the text.`);
+      if (s.nth !== undefined) {
+        const n = Number(s.nth);
+        if (!Number.isInteger(n) || n < 1 || n > ranges.length) fail(`spans[${i}].nth: the text occurs ${ranges.length} time(s).`);
+        ranges.splice(0, ranges.length, ranges[n - 1]);
+      }
+    } else if (Number.isInteger(s.start) && Number.isInteger(s.end)) {
+      if (s.start < 0 || s.end <= s.start || s.end > s0.length) fail(`spans[${i}]: need 0 <= start < end <= ${s0.length}.`);
+      ranges.push([s.start, s.end]);
+    } else fail(`spans[${i}]: pass "text" or integer "start" and "end".`);
+    for (const [a, b] of ranges) runs = applyRun(runs, s0, a, b, patch, { clear });
+  });
+  return runs;
 }
 
 function projectSummary() {
@@ -797,6 +841,7 @@ const TOOLS = {
     let lane = strArg(args, 'video_track_id');
     if (lane !== undefined && lane !== 'new') lane = videoTrackArg(lane);
     const look = textPatch(args.styling);
+    if (args.spans !== undefined) look.runs = spansRuns(cleanText({ ...look, content }, style ? style.text : null), args.spans);
     const c = store.addTextClip({ style, text: { ...look, content }, at, duration: duration ?? null, lane: lane ?? null, select: false });
     if (!c) fail('Could not place the text (the video track is locked?).');
     ai(t('текст «{text}»', { text: content.split('\n')[0].slice(0, 30) }));
@@ -816,11 +861,15 @@ const TOOLS = {
       if (!st) fail(`Text style "${sid}" not found. Styles: ${listTextStyles().map((s) => s.id).join(', ')}.`);
       Object.assign(patch, { ...st.text, content: patch.content ?? f.clip.text.content, style: st.id }, textPatch(args.styling));
     }
+    // Новый текст: оформленные слова едут вместе с текстом; spans — поверх
+    const old = cleanText(f.clip.text);
+    if (patch.content !== undefined && patch.runs === undefined) patch.runs = remapRuns(old.runs, old.content, cleanText({ content: patch.content }).content);
+    if (args.spans !== undefined) patch.runs = spansRuns(cleanText(patch, old), args.spans);
     const start = numArg(args, 'start', { min: 0 });
     const dur = numArg(args, 'duration', { min: MIN_CLIP, max: TEXT_MAX });
     const fadeIn = numArg(args, 'fade_in', { min: 0, max: 10 });
     const fadeOut = numArg(args, 'fade_out', { min: 0, max: 10 });
-    if (!Object.keys(patch).length && start === undefined && dur === undefined && fadeIn === undefined && fadeOut === undefined) fail('Nothing to change: pass text, style, styling, start, duration, fade_in or fade_out.');
+    if (!Object.keys(patch).length && start === undefined && dur === undefined && fadeIn === undefined && fadeOut === undefined) fail('Nothing to change: pass text, style, styling, spans, start, duration, fade_in or fade_out.');
     store.mutate(() => {
       const c = store.findClip(f.clip.id).clip;
       if (Object.keys(patch).length) c.text = cleanText(patch, c.text);

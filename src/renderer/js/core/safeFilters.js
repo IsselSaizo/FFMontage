@@ -21,6 +21,11 @@ export const SAFE_FILTERS = [
   'deband', 'deflicker', 'hqdn3d', 'nlmeans', 'atadenoise', 'gradfun', 'pixelize', 'tmix', 'lagfun', 'swaprect',
   'fillborders', 'drawbox', 'drawgrid', 'lenscorrection', 'perspective', 'zoompan', 'vaguedenoiser', 'grayworld',
   'huesaturation', 'tblend', 'blend', 'alphamerge', 'premultiply', 'unpremultiply', 'setparams',
+  // встроенный плагин «Восстановление записи» (plugins-bundled/restore): квадраты сжатия
+  'deblock',
+  // встроенный плагин «Стабилизация» (plugins-bundled/stabilize): быстрая стабилизация за один проход
+  // (опции filename / opencl не пропускаются — FORBIDDEN_OPTION и plancheck.rs)
+  'deshake',
   // аудиоэффекты
   'bass', 'treble', 'equalizer', 'acompressor', 'afftdn', 'highpass', 'lowpass', 'bandpass', 'bandreject',
   'allpass', 'lowshelf', 'highshelf', 'aecho', 'chorus', 'flanger', 'aphaser', 'tremolo', 'vibrato', 'compand',
@@ -31,6 +36,17 @@ export const SAFE_FILTERS = [
   'silenceremove', 'areverse', 'reverse',
 ];
 // END-FILTERS
+
+// Фильтры хоста: читают файл, который готовит сама программа (шаг подготовки клипа, поле prepare эффекта).
+// Плагин может объявить их в ffmpeg.filters и поставить в цепочку эффекта с prepare, но файл задать не может —
+// только плейсхолдер (vidstabtransform: input = "{trf}" → путь .trf анализа движения в <кэш>/app/media/<ключ>/stab/).
+// Rust (plugins.rs) читает список между маркерами BEGIN-HOST-FILTERS / END-HOST-FILTERS, plancheck.rs проверяет
+// vidstabtransform своим правилом (input — только .trf из stab-кэша). vidstabdetect плагинам не даётся никогда.
+// BEGIN-HOST-FILTERS
+export const HOST_FILTERS = ['vidstabtransform'];
+// END-HOST-FILTERS
+/** Какая подготовка нужна фильтру хоста и какая его опция получает файл */
+export const HOST_FILTER_FILE = { vidstabtransform: { prepare: 'vidstab', option: 'input', placeholder: '{trf}' } };
 
 /** Имена параметров фильтров, которые никогда не пропускаются (файлы, модели, команды) */
 export const FORBIDDEN_OPTION = /file|^filename$|^model$|^sofa$|^url$|^commands?$/i;

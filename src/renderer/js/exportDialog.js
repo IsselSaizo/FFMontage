@@ -369,8 +369,17 @@ export async function openExport() {
       stats.textContent = t('Обработка звука аудиоплагинами… {p}%', { p: Math.round(p.fraction * 100) });
     }) : () => {};
     const offFf = api.onExportProgress((p) => { if (!p || p.phase !== 'loudness') ffStarted = true; });
+    // Стабилизация: анализ движения не готов — экспорт сначала доделывает его (stabPlan.js prepareStabAssets)
+    const offStab = typeof api.onStabPrepare === 'function' ? api.onStabPrepare((p) => {
+      if (ffStarted || !p || p.done || !Number.isFinite(p.fraction)) return;
+      const v = Math.round(p.fraction * 1000) / 10;
+      bar.style.width = `${v}%`;
+      pct.textContent = `${Math.floor(v)}%`;
+      stats.textContent = t('Подготовка: анализ движения «{name}»… {p}%', { name: p.name, p: Math.round(p.progress * 100) })
+        + (p.total > 1 ? ` (${p.index + 1}/${p.total})` : '');
+    }) : () => {};
     const r = await api.startExport(JSON.parse(JSON.stringify(store.project)), settings);
-    offExp(); offVst(); offFf();
+    offExp(); offVst(); offFf(); offStab();
 
     modal.innerHTML = '';
     modal.classList.remove('busy');

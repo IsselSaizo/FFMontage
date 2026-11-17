@@ -8,9 +8,11 @@
 #![allow(clippy::type_complexity)]
 
 mod assets;
+mod bundled;
 mod cache;
 mod cli;
 mod commands;
+mod compare;
 mod control;
 mod crashlog;
 mod export;
@@ -26,6 +28,7 @@ mod protocol;
 mod queue;
 mod selftest;
 mod settings;
+mod stab;
 mod update;
 mod vst;
 mod windows;
@@ -76,6 +79,10 @@ fn run() {
     if !p.first_run && control::focus_existing() {
         return;
     }
+    // Встроенные плагины (bundled.rs) — в папку плагинов до открытия окна: окно читает список сразу при запуске
+    if !p.first_run {
+        bundled::sync();
+    }
     // Linux: <video>/<audio> WebKitGTK (GStreamer) не открывают media:// — медиа идут по HTTP на 127.0.0.1 (protocol.rs)
     #[cfg(target_os = "linux")]
     {
@@ -124,6 +131,11 @@ fn run() {
             commands::fx_freeze,
             commands::fx_frame,
             commands::fx_silence,
+            compare::compare_frames,
+            compare::compare_cancel,
+            stab::stab_analyze,
+            stab::stab_proxy,
+            stab::stab_cancel,
             commands::export_pick,
             commands::export_default_path,
             commands::export_start,
@@ -157,6 +169,7 @@ fn run() {
             plugins::plugin_storage_get,
             plugins::plugin_storage_set,
             plugins::plugin_net_fetch,
+            bundled::plugins_restore_bundled,
             fonts::fonts_list,
             fonts::fonts_add,
             fonts::fonts_remove,
@@ -192,6 +205,8 @@ fn run() {
                 control::start(h);
                 // Кэш: сироты, .part и автоочистка до лимита — уже после проверки «одна копия на папку кэша»
                 std::thread::spawn(cache::startup);
+                // Настройки → Производительность: лимит фоновых задач FFmpeg
+                queue::set_cpu_jobs(settings::bg_jobs(&settings::load()));
             }
             Ok(())
         })

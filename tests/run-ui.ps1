@@ -12,7 +12,7 @@ $App = Split-Path -Parent $PSScriptRoot
 $src = Join-Path $App '.test-cache\tmp\engine-test'
 $T = Join-Path $App '.test-cache\tmp\uitest'
 New-Item -ItemType Directory -Force "$T\cache\tmp\engine-test", "$T\out", "$T\proj" | Out-Null
-foreach ($f in 'a_av1_1440p60.mp4', 'b_h264_1080p30.mp4', 'c_music.mp3', 'd_old.avi', 'e_2audio.mp4', 'f_photo.png', 'g_anim.gif', 's_sprite.png') {
+foreach ($f in 'a_av1_1440p60.mp4', 'b_h264_1080p30.mp4', 'c_music.mp3', 'd_old.avi', 'e_2audio.mp4', 'f_photo.png', 'g_anim.gif', 's_sprite.png', 'stab_shaky.mp4') {
   $p = Join-Path $src $f
   if (Test-Path $p) { Copy-Item $p "$T\cache\tmp\engine-test\" -Force }
 }

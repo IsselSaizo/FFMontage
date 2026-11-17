@@ -7,7 +7,7 @@ import { h, $, icon, toast, t } from './util.js';
 import { getLang } from './i18n.js';
 import { TRANSITIONS, applyTransition, DEFAULT_DURATION } from './transitions.js';
 import { maxTransition } from './store.js';
-import { EFFECTS, clipEffects } from './effects.js';
+import { EFFECTS, clipEffects, effectAvailable } from './effects.js';
 import { keyHint } from './keymap.js';
 import * as registry from './registry.js';
 import { renderTextPanel } from './textPanel.js';
@@ -155,12 +155,15 @@ export function initBrowser() {
       h('p', { class: 'muted small' }, c
         ? t('Клип «{name}». Наведите — фильтр покажется в плеере, щелчок — включить или выключить. Чтобы фильтр был только на части клипа, сначала разрежьте его ({split} или лезвие {blade}).', { name: store.clipName(c), split: keyHint('clip.split'), blade: keyHint('tool.blade') })
         : t('Выделите видеоклип (или поставьте курсор на него). Фильтр действует на весь клип — для фрагмента разрежьте клип ({split} или лезвие {blade}).', { split: keyHint('clip.split'), blade: keyHint('tool.blade') })));
+    // Стабилизация «Баланс» / «Максимум» без vidstab в сборке FFmpeg недоступна (включённую можно выключить)
+    if (EFFECTS.some((e) => !effectAvailable(e))) fxRoot.append(h('p', { class: 'muted small', id: 'fx-no-vidstab' }, t('В этой сборке FFmpeg нет vidstab — доступна только быстрая стабилизация')));
     const grid = h('div', { class: 'fx-grid' });
     for (const e of EFFECTS) {
       const name = label(e.name, e.id);
       const sw = h('div', { class: 'fx-sample', style: { filter: cssOf(e, 120) } });
+      const na = !effectAvailable(e) && !on.includes(e.id);
       const tile = h('button', {
-        class: `fx-tile${on.includes(e.id) ? ' on' : ''}`, dataset: { fx: e.id }, title: name, disabled: !c,
+        class: `fx-tile${on.includes(e.id) ? ' on' : ''}${na ? ' na' : ''}`, dataset: { fx: e.id }, title: na ? t('В этой сборке FFmpeg нет vidstab — доступна только быстрая стабилизация') : name, disabled: !c || na,
         onclick: () => {
           const cid = targetClip();
           if (!cid) return;
@@ -190,6 +193,8 @@ export function initBrowser() {
   if (typeof registry.onRegistryChange === 'function') registry.onRegistryChange((ev) => { if (!ev || ev.kind === 'textStyle') refreshText(); });
   store.on('project', refresh);
   store.on('selection', refresh);
+  // stab.js узнал возможности FFmpeg (есть ли vidstab) — плитки стабилизации могли стать недоступны
+  store.on('stab', (id) => { if (id === null) refresh(); });
   // Курсор двигается (в т. ч. при воспроизведении) — перерисовываем, только если сменился клип/стык под ним
   let lastKey = '';
   store.on('time', () => {

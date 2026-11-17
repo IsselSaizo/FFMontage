@@ -20,6 +20,8 @@ import './textRender.js';   // рисунок текста (graphics.js)
 import { fontsVersion, onFontsChange } from './fonts.js';
 import { getPref, setPref } from './prefs.js';
 import * as vst from './vst.js';
+import { initCompare } from './compare.js';
+import { stabPreview, initStab } from './stab.js';
 
 const monitorVol = () => { const v = Number(getPref('ui.monitorVol', 1)); return isFinite(v) ? Math.max(0, Math.min(1, v)) : 1; };
 
@@ -52,6 +54,8 @@ export class Preview {
     this.stage.append(this.msg);
     store.on('preview-transition', (info) => this.hoverTransition(info));
     store.on('preview-effect', (info) => this.hoverEffect(info));
+    // Прокси стабилизации готов / выключен — показать новый источник (во время игры present подхватит сам)
+    store.on('stab-src', () => { if (!this.playing) this.seek(store.time); });
     this.frame = h('div', { class: 'stage-frame' }, this.stage);
     root.append(this.frame);
 
@@ -94,6 +98,10 @@ export class Preview {
     new ResizeObserver(() => requestAnimationFrame(() => this.layoutStage())).observe(this.frame);
     this.layoutStage();
     this.seek(0);
+    // Шторка «ДО / ПОСЛЕ» (compare.js): свой слой поверх дорожек и гизмо
+    this.compare = initCompare(this);
+    // Стабилизация (stab.js): анализ движения и прокси превью в фоне
+    initStab();
   }
 
   // Подгоняем «экран» под пропорции проекта
@@ -472,8 +480,9 @@ export class Preview {
       for (const role of ['A', 'B']) {
         const x = L[role];
         if (!x) continue;
-        const url = isGraphic(x.clip) ? 'text:' : playUrl(x.clip.mediaId);
-        if (url) layers.push({ ...x, role, url });
+        const src = this.srcOf(x.clip);
+        // Прокси стабилизации (stab.js): своё время — время файла минус начало отрезка (off), своя длина (len)
+        if (src) layers.push({ ...x, role, url: src.url, mt: x.mt - src.off, off: src.off, len: src.len });
       }
     }
     // Тексты и фигуры — на холсте, картинки — в <img>, видео — в <video>
@@ -498,13 +507,14 @@ export class Preview {
 
     vLayers.forEach((x, i) => {
       const el = els[i];
-      const mt = this.clampMt(x.clip, x.mt);
+      const dur = x.len ? x.len : this.mediaDur(x.clip);
+      const mt = x.len ? Math.max(0, Math.min(x.len - 0.001, x.mt)) : this.clampMt(x.clip, x.mt);
       // Скорость клипа: playbackRate (тон звука сохраняется). После смены файла WebView сбрасывает её к default.
       const sp = isStill(x.clip) ? 1 : Math.min(16, speedOf(x.clip) * this.rate);
       if (el.defaultPlaybackRate !== sp) el.defaultPlaybackRate = sp;
       if (el.playbackRate !== sp) el.playbackRate = sp;
       const before = x.mt < -0.001;                       // клип ещё не начался в файле (переход без «запаса» кадров)
-      const after = x.mt > this.mediaDur(x.clip) - 0.01;  // кадры в файле кончились — стоп на последнем
+      const after = x.mt > dur - 0.01;  // кадры в файле кончились — стоп на последнем
       if (!this.playing || force) {
         this.load(el, x.url, mt);
         if (this.playing && !before && !after) el.play().catch(() => {});
@@ -524,7 +534,7 @@ export class Preview {
           el.currentTime = mt;
         }
       }
-      if (x.role === L.master) v.master = { el, clip: x.clip };
+      if (x.role === L.master) v.master = { el, clip: x.clip, off: x.off || 0 };
       const fade = fadeFactor(x.clip, t);
       const mix = L.trans ? (x.role === 'A' ? 1 - L.trans.p : L.trans.p) : 1;
       // Звук клипа с аудиоплагином: играет рендер (syncVideoWav) или окно плагина — сам <video> молчит
@@ -692,13 +702,24 @@ export class Preview {
     this.present(t, true);
   }
 
+  // Что играть для клипа: { url, off, len } — исходник (или его прокси, media.js playUrl; off 0) либо прокси
+  // стабилизации (stab.js stabPreview: время прокси = время файла − off, длина len). Графика — 'text:'
+  srcOf(clip) {
+    if (isGraphic(clip)) return { url: 'text:', off: 0, len: 0 };
+    const st = stabPreview(clip);
+    if (st) return st;
+    const url = playUrl(clip.mediaId);
+    return url ? { url, off: 0, len: 0 } : null;
+  }
+
   // Заранее грузим следующий клип дорожки в свободный элемент её вида
   preload(v, lane, t) {
     const n = this.nextLayerAfter(t, lane);
     if (!n || n.at - t > 5) return;
-    const url = playUrl(n.clip.mediaId);
-    if (!url) return;
-    const mt = this.clampMt(n.clip, n.mt);
+    const src = isGraphic(n.clip) ? null : this.srcOf(n.clip);
+    if (!src) return;
+    const url = src.url;
+    const mt = src.len ? Math.max(0, Math.min(src.len - 0.001, n.mt - src.off)) : this.clampMt(n.clip, n.mt);
     // Продолжение того же файла в играющем элементе (после разреза) — грузить нечего
     if (v.slots.some((s) => v.visible.has(s) && s.dataset.url === url && Math.abs(s.currentTime + (n.at - t) * speedOf(n.clip) - mt) < 0.35)) return;
     // Уже загружено в свободный элемент
@@ -794,7 +815,7 @@ export class Preview {
     const ms = this.master;
     // Вне переходов время берём с играющего видео (основная дорожка, иначе нижняя из верхних): картинка и звук не расходятся
     if (ms && !this.masterTrans && store.findClip(ms.clip.id) && !ms.el.failed && !ms.el.ended && playUrl(ms.clip.mediaId)) {
-      const mt = ms.el.currentTime;
+      const mt = ms.el.currentTime + (ms.off || 0);   // прокси стабилизации начинается с off файла
       if (ms.el.readyState >= 2 && !ms.el.seeking && !ms.el.paused) {
         t = tlAt(ms.clip, mt);
       } else if (ms.el.seeking || ms.el.readyState < 2) {

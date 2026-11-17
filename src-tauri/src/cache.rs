@@ -4,6 +4,7 @@
 //   peaks   — волны звука (media/<ключ>/peaks2*.json)
 //   proxy   — прокси и отдельные звуковые дорожки (media/<ключ>/proxy.*, audio-aN.m4a)
 //   fx      — реверс и стоп-кадры (media/<ключ>/fx/)
+//   stab    — стабилизация: анализ движения .trf и прокси превью (media/<ключ>/stab/, stab.rs)
 //   anim    — сохранённые анимации (<кэш>/anim) — материалы проектов, очищаются только по запросу
 //   assets  — картинки текстов и субтитры для экспорта (<кэш>/app/export-assets)
 //   fonts   — копии шрифтов для libass (<кэш>/app/fonts)
@@ -124,6 +125,7 @@ pub fn media_cat(name: &str, is_dir: bool) -> &'static str {
         return match name {
             "thumbs" => "thumbs",
             "fx" => "fx",
+            "stab" => "stab",
             _ => "temp",
         };
     }
@@ -311,6 +313,7 @@ pub fn stats() -> Value {
         "peaks": get(&by, "peaks"),
         "proxy": get(&by, "proxy"),
         "fx": get(&by, "fx"),
+        "stab": get(&by, "stab"),
         "anim": anim,
         "audiofx": audiofx,
         "assets": assets,
@@ -341,8 +344,8 @@ pub fn clear(cats: &[String], keep: &[String]) -> Value {
     let mut want: HashSet<&str> = HashSet::new();
     for c in cats {
         match c.as_str() {
-            "media" => want.extend(["thumbs", "peaks", "proxy", "fx", "media-other"]),
-            "thumbs" | "peaks" | "proxy" | "fx" | "anim" | "audiofx" | "assets" | "fonts" | "logs" => {
+            "media" => want.extend(["thumbs", "peaks", "proxy", "fx", "stab", "media-other"]),
+            "thumbs" | "peaks" | "proxy" | "fx" | "stab" | "anim" | "audiofx" | "assets" | "fonts" | "logs" => {
                 want.insert(c.as_str());
             }
             "temp" => want.extend(["temp", "media-other"]),
@@ -354,7 +357,7 @@ pub fn clear(cats: &[String], keep: &[String]) -> Value {
         Ok(n) => *freed += n,
         Err(_) => *failed += 1,
     };
-    let media_wanted = ["thumbs", "peaks", "proxy", "fx", "media-other"].iter().any(|c| want.contains(c));
+    let media_wanted = ["thumbs", "peaks", "proxy", "fx", "stab", "media-other"].iter().any(|c| want.contains(c));
     let mut gone = vec![];
     if media_wanted {
         for (key, dir) in media_dirs(&p.media_cache) {
@@ -650,6 +653,7 @@ mod tests {
     fn categories() {
         assert_eq!(media_cat("thumbs", true), "thumbs");
         assert_eq!(media_cat("fx", true), "fx");
+        assert_eq!(media_cat("stab", true), "stab");
         assert_eq!(media_cat("peaks2.json", false), "peaks");
         assert_eq!(media_cat("peaks2-a1.json", false), "peaks");
         assert_eq!(media_cat("proxy.mp4", false), "proxy");

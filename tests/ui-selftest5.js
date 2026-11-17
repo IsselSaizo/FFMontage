@@ -111,7 +111,8 @@
     store.setTime(pc.start + 1); await sleep(150);
     ok(preview.imgSlots[0].classList.contains('on') && /media\.localhost/.test(preview.imgSlots[0].src), 'картинка в плеере');
     cmd = plan.buildExport(store.project, { width: 1080, height: 1920, fps: 30 });
-    ok(cmd.inputs.includes('-loop'), 'экспорт: картинка с -loop 1');
+    // 0.6.0: картинка — один кадр на входе (-framerate, без -loop), повтор — фильтр loop в графе
+    ok(!cmd.inputs.includes('-loop') && cmd.inputs.includes('-framerate') && /loop=loop=\d+:size=1:start=0/.test(cmd.filter), 'экспорт: картинка одним кадром + фильтр loop');
     timeline.addMedia(g); await sleep(100);
     for (let i = 0; i < 100 && !(store.runtime[g] && store.runtime[g].proxyUrl); i++) await sleep(100);
     const gc = vids().find((c) => c.mediaId === g);

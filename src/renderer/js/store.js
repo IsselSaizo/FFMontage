@@ -3,6 +3,7 @@ import { uid, clamp, snapFps } from './util.js';
 import { t } from './i18n.js';
 import { speedOf, tlLen, clipEnd, srcAt, tlAt, MIN_SPEED, MAX_SPEED } from './clipTime.js';
 import { newAudioFx } from './audioFx.js';
+import { effectById } from './effects.js';
 import { MIN_DURATION as TR_MIN, MAX_DURATION as TR_MAX, DEFAULT_DURATION as TR_DEFAULT } from './transitions.js';
 import { cleanTransform } from './transform.js';
 import { cleanText, TEXT_MAX } from './textModel.js';
@@ -684,8 +685,18 @@ class Store {
     const has = cur.includes(effectId);
     const want = on === null ? !has : on;
     if (want === has) return true;
-    const next = want ? [...cur, effectId] : cur.filter((x) => x !== effectId);
-    this.mutate(() => { const c = this.findClip(clipId).clip; if (next.length) c.effects = next; else delete c.effects; });
+    // Эффект на кадрах файла (stage 'source' — стабилизация): у клипа один — новый заменяет прежний (смена уровня)
+    const src = (id) => { const e = effectById(id); return !!(e && e.stage === 'source'); };
+    const next = want ? [...cur.filter((x) => !(src(effectId) && src(x))), effectId] : cur.filter((x) => x !== effectId);
+    const replaced = want && src(effectId) ? cur.find((x) => src(x)) : null;
+    this.mutate(() => {
+      const c = this.findClip(clipId).clip;
+      if (next.length) c.effects = next; else delete c.effects;
+      // смена уровня стабилизации — чекбокс «Показывать превью» остаётся как был
+      if (replaced && c.fxp && c.fxp[replaced] && c.fxp[replaced].showPreview === true) {
+        c.fxp = { ...c.fxp, [effectId]: { ...(c.fxp[effectId] || {}), showPreview: true } };
+      }
+    });
     return true;
   }
 

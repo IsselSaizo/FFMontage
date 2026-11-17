@@ -633,7 +633,7 @@
   {
    "name": "add_text",
    "title": "Add text / title",
-   "description": "Put a text clip (title, lower third, caption, rolling credits…) on an upper video track (a free one, or a new one) at start (default: playhead). It is drawn over the video below, in preview and in export. Use style for a ready look (ids in get_project.text_styles, built in: title, lower-third, caption, credits, plain; plugins add plugin.id ones) and styling to tweak it. Position/scale/rotation: set_transform with the returned clip id. Split/delete/move like any video clip.",
+   "description": "Put a text clip (title, lower third, caption, rolling credits…) on an upper video track (a free one, or a new one) at start (default: playhead). It is drawn over the video below, in preview and in export. Use style for a ready look (ids in get_project.text_styles, built in: title, lower-third, caption, credits, plain; plugins add plugin.id ones) and styling to tweak it; spans colour / bold / italic single words. Position/scale/rotation: set_transform with the returned clip id. Split/delete/move like any video clip.",
    "inputSchema": {
     "type": "object",
     "properties": {
@@ -661,6 +661,48 @@
      "styling": {
       "type": "object",
       "description": "Text look (all optional): font (family name from get_project.fonts), size (font height as a fraction of frame height, 0.01-0.5), weight (100-900), italic, color \"#rrggbb\", align left|center|right, lineHeight (0.6-3), letterSpacing (em), wrap (max line width as a fraction of frame width, 0 = no wrapping), strokeWidth/strokeColor (outline, fraction of font size), shadowOpacity/shadowColor/shadowBlur/shadowX/shadowY, box/boxColor/boxOpacity/boxPad/boxRadius (background box), motion none|roll (roll = credits move bottom to top over the clip)."
+     },
+     "spans": {
+      "type": "array",
+      "description": "Look of single words/fragments over the whole-text styling, applied in order: pick a fragment by text (every occurrence, or only the nth) or by start/end character offsets and set color, bold, italic — or clear: true. Example: [{\"text\":\"FREE\",\"color\":\"#ffcc00\",\"bold\":true}]",
+      "items": {
+       "type": "object",
+       "properties": {
+        "text": {
+         "type": "string",
+         "description": "Fragment text to find (every occurrence unless nth)"
+        },
+        "nth": {
+         "type": "integer",
+         "minimum": 1,
+         "description": "Only this occurrence of text (1-based)"
+        },
+        "start": {
+         "type": "integer",
+         "minimum": 0,
+         "description": "Or: first character (0-based offset in the text)"
+        },
+        "end": {
+         "type": "integer",
+         "minimum": 1,
+         "description": "Or: end character (exclusive)"
+        },
+        "color": {
+         "type": "string",
+         "description": "\"#rrggbb\""
+        },
+        "bold": {
+         "type": "boolean"
+        },
+        "italic": {
+         "type": "boolean"
+        },
+        "clear": {
+         "type": "boolean",
+         "description": "Drop the fragment look (back to the whole-text styling)"
+        }
+       }
+      }
      }
     },
     "required": [
@@ -677,7 +719,7 @@
   {
    "name": "update_text",
    "title": "Change text clip",
-   "description": "Change the text, its look (style / styling), start, duration or fades of a text clip. Position: set_transform.",
+   "description": "Change the text, its look (style / styling, single words — spans), start, duration or fades of a text clip. Position: set_transform.",
    "inputSchema": {
     "type": "object",
     "properties": {
@@ -712,6 +754,48 @@
       "type": "number",
       "minimum": 0,
       "maximum": 10
+     },
+     "spans": {
+      "type": "array",
+      "description": "Look of single words/fragments (as in add_text.spans), applied over the current ones after the text change. When the text changes, fragment looks stay on the same words.",
+      "items": {
+       "type": "object",
+       "properties": {
+        "text": {
+         "type": "string",
+         "description": "Fragment text to find (every occurrence unless nth)"
+        },
+        "nth": {
+         "type": "integer",
+         "minimum": 1,
+         "description": "Only this occurrence of text (1-based)"
+        },
+        "start": {
+         "type": "integer",
+         "minimum": 0,
+         "description": "Or: first character (0-based offset in the text)"
+        },
+        "end": {
+         "type": "integer",
+         "minimum": 1,
+         "description": "Or: end character (exclusive)"
+        },
+        "color": {
+         "type": "string",
+         "description": "\"#rrggbb\""
+        },
+        "bold": {
+         "type": "boolean"
+        },
+        "italic": {
+         "type": "boolean"
+        },
+        "clear": {
+         "type": "boolean",
+         "description": "Drop the fragment look (back to the whole-text styling)"
+        }
+       }
+      }
      }
     },
     "required": [

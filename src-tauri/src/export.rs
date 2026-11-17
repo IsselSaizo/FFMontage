@@ -16,6 +16,9 @@ pub struct Plan {
     pub filter: String,
     pub duration: f64,
     pub output: String,
+    /// 0.5.x: приоритет процесса — "low" | "normal" | "high" (настройки → Производительность)
+    #[serde(default)]
+    pub priority: Option<String>,
 }
 
 static RUNNING: Mutex<Option<tokio::sync::oneshot::Sender<()>>> = Mutex::new(None);
@@ -60,7 +63,7 @@ pub async fn measure_loudness(
     inputs: crate::plancheck::Inputs,
     on_progress: impl Fn(Value) + Send + Sync,
 ) -> Result<Value, Value> {
-    let plan = Plan { args, filter, duration, output: String::new() };
+    let plan = Plan { args, filter, duration, output: String::new(), priority: None };
     run_inner(plan, true, inputs, on_progress).await
 }
 
@@ -159,6 +162,7 @@ async fn run_inner(
         .spawn()
         .map_err(|e| err(tr!("Не удалось запустить FFmpeg: {}", "Cannot start FFmpeg: {}", e), false))?;
     let _tracked = crate::procs::track(&child);
+    crate::procs::set_priority(&child, crate::procs::priority_level(plan.priority.as_deref()));
     let (Some(mut so), Some(mut se)) = (child.stdout.take(), child.stderr.take()) else {
         let _ = child.kill().await;
         return Err(err(tr!("Не удалось запустить FFmpeg: нет вывода", "Cannot start FFmpeg: no output pipes").into(), false));

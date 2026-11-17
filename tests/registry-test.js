@@ -353,6 +353,27 @@ function sameStyle(a, b, tol = 0) {
     console.log(`  (store.js в Node не загрузился — пропуск: ${e.message.split('\n')[0]})`);
   }
 
+  // ---- preview: 'frame' (шторка «ДО / ПОСЛЕ», compare.js) — блок агента B ----
+  {
+    const ownerP = { id: 'pvtest', filters: new Set(['hqdn3d']) };
+    const pid1 = reg.registerEffect({ id: 'dn', name: 'DN', preview: 'frame', ffmpeg: [{ filter: 'hqdn3d', args: ['4', '3', '6', '4'] }] }, ownerP);
+    const pid2 = reg.registerEffect({ id: 'plain', name: 'P', ffmpeg: [{ filter: 'hqdn3d' }] }, ownerP);
+    ok(fxm.effectById(pid1).preview === 'frame' && !('preview' in fxm.effectById(pid2)), 'preview: frame хранится, без поля — нет');
+    throws(() => reg.registerEffect({ id: 'bad', name: 'B', preview: 'css', ffmpeg: [{ filter: 'hqdn3d' }] }, ownerP), /preview/, 'отказ: preview кроме frame');
+    throws(() => reg.registerEffect({ id: 'bad2', name: 'B', preview: { a: 1 }, ffmpeg: [{ filter: 'hqdn3d' }] }, ownerP), /preview/, 'отказ: preview-объект у эффекта');
+    ok(reg.registerEffect({ id: 'nul', name: 'N', preview: null, ffmpeg: [{ filter: 'hqdn3d' }] }, ownerP) === 'pvtest.nul', 'preview: null — как без поля');
+    const clip = { mediaId: 'm', in: 2, out: 8, start: 10, speed: 2, effects: ['bw', pid1], crop: { l: 0.1 } };
+    ok(fxm.needsFramePreview(clip) && !fxm.needsFramePreview({ effects: ['bw', pid2] }), 'needsFramePreview: только с preview: frame');
+    const m = { path: 'C:/x.mp4', hasVideo: true, width: 1920, height: 1080, fps: 25, duration: 20 };
+    const rq = fxm.compareRequest(clip, m, 11, 960);
+    ok(rq && rq.file === m.path && Math.abs(rq.t - 4) < 1e-9 && rq.start === 2 && rq.fx === 'hue=s=0,hqdn3d=4:3:6:4' && rq.crop.l === 0.1 && rq.width === 960 && rq.fps === 25 && !rq.image,
+      `compareRequest: момент файла с учётом скорости, цепочка как в экспорте (${JSON.stringify(rq)})`);
+    ok(fxm.compareRequest(clip, m, 9, 960) === null && fxm.compareRequest(clip, m, 13.01, 960) === null, 'compareRequest: вне клипа — null');
+    const img = fxm.compareRequest({ ...clip, speed: 1, in: 0, out: 5 }, { ...m, isImage: true }, 12, 640);
+    ok(img && img.image && img.t === 0 && img.start === 0, 'compareRequest: картинка — без перемотки');
+    reg.unregisterPlugin('pvtest');
+  }
+
   console.log(`\nпроверок: ${passed + failed}, провалов: ${failed}`);
   if (failed) process.exit(1);
   console.log('ВСЁ ОК');

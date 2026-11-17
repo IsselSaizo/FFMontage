@@ -253,6 +253,92 @@ fn check_ass(f: &Filter, inputs: Inputs) -> Result<(), String> {
     Ok(())
 }
 
+/// vidstabtransform (стабилизация, stab.rs) — фильтр хоста, не в SAFE_FILTERS: читает .trf анализа движения.
+/// input= — обязательно, абсолютный .trf внутри <кэш>/app/media/<ключ>/stab/ (без «..»), существующий (кроме юнит-тестов);
+/// остальные опции — только числовые/словарные из списка; позиционные значения запрещены (первое позиционное — input),
+/// debug (пишет global_motions.trf) запрещён.
+fn check_vidstab(f: &Filter, inputs: Inputs) -> Result<(), String> {
+    let bad =
+        |k: &str| tr!("опция «{}» фильтра vidstabtransform не разрешена", "option \"{}\" of filter vidstabtransform is not allowed", k);
+    let mut file: Option<&str> = None;
+    let mut seen: Vec<&str> = vec![];
+    for (k, v) in &f.opts {
+        let Some(key) = k.as_deref() else { return Err(bad("?")) };
+        if seen.contains(&key) {
+            return Err(tr!(
+                "опция «{}» фильтра vidstabtransform указана дважды",
+                "option \"{}\" of filter vidstabtransform is given twice",
+                key
+            ));
+        }
+        seen.push(key);
+        let num = |lo: f64, hi: f64| v.parse::<f64>().is_ok_and(|x| x.is_finite() && x >= lo && x <= hi);
+        let ok = match key {
+            "input" => {
+                file = Some(v.as_str());
+                true
+            }
+            "smoothing" => num(0.0, 1000.0),
+            "maxshift" => num(-1.0, 500.0),
+            "maxangle" => num(-1.0, 3.15),
+            "zoom" => num(-100.0, 100.0),
+            "zoomspeed" => num(0.0, 5.0),
+            "optzoom" => matches!(v.as_str(), "0" | "1" | "2"),
+            "optalgo" => matches!(v.as_str(), "0" | "1" | "2" | "opt" | "gauss" | "avg"),
+            "crop" => matches!(v.as_str(), "0" | "1" | "keep" | "black"),
+            "interpol" => matches!(v.as_str(), "0" | "1" | "2" | "3" | "no" | "linear" | "bilinear" | "bicubic"),
+            "invert" | "relative" | "tripod" => matches!(v.as_str(), "0" | "1"),
+            _ => return Err(bad(key)),
+        };
+        if !ok {
+            return Err(tr!(
+                "недопустимое значение опции {} фильтра vidstabtransform: {}",
+                "invalid value of option {} of filter vidstabtransform: {}",
+                key,
+                v
+            ));
+        }
+    }
+    let file =
+        file.ok_or(tr!("у фильтра vidstabtransform нет файла анализа (input)", "filter vidstabtransform has no analysis file (input)"))?;
+    if stab_file_ok(file, inputs) {
+        Ok(())
+    } else {
+        Err(tr!("файл анализа движения не разрешён: {}", "motion analysis file is not allowed: {}", file))
+    }
+}
+
+/// Файл .trf анализа движения: абсолютный путь <кэш медиа>/<ключ>/stab/<имя>.trf, без «..», существует
+pub fn stab_file_ok(file: &str, inputs: Inputs) -> bool {
+    let fp = PathBuf::from(file);
+    if file.contains(['\0', '\n', '\r'])
+        || !fp.is_absolute()
+        || looks_like_url(file)
+        || device_path(file)
+        || crate::ff::ext_of(&fp) != "trf"
+    {
+        return false;
+    }
+    if fp.components().any(|c| matches!(c, std::path::Component::ParentDir | std::path::Component::CurDir)) {
+        return false;
+    }
+    // …/media/<ключ>/stab/<файл>: папка файла — stab, над ней — папка ключа прямо в кэше медиа
+    let Some(dir) = fp.parent() else { return false };
+    let in_stab = dir.file_name().is_some_and(|n| n == "stab")
+        && dir.parent().is_some_and(|k| {
+            let sep: &[char] = &['\\', '/'];
+            k.parent().is_some_and(|m| norm(m).trim_end_matches(sep) == norm(&paths::get().media_cache).trim_end_matches(sep))
+        });
+    if !in_stab {
+        return false;
+    }
+    match inputs {
+        #[cfg(test)]
+        Inputs::Any => true,
+        _ => fp.is_file(),
+    }
+}
+
 /// Фильтры, которые читают/пишут файлы, исполняют команды, ходят в сеть или грузят библиотеки/модели.
 /// Их нет и в SAFE_FILTERS (js/core/safeFilters.js) — этот список страхует, если их туда добавят по ошибке.
 const DENY_FILTERS: &[&str] = &[
@@ -282,8 +368,8 @@ const DENY_FILTERS: &[&str] = &[
     "whisper",
     "ocr",
     "signature",
+    // vidstabdetect пишет файл — его запускает только программа (stab.rs); vidstabtransform — check_vidstab
     "vidstabdetect",
-    "vidstabtransform",
     "libplacebo",
     "lensfun",
     "metadata",
@@ -343,6 +429,10 @@ pub fn check_graph(s: &str, inputs: Inputs) -> Result<(), String> {
         }
         if f.name == "ass" {
             check_ass(f, inputs)?;
+            continue;
+        }
+        if f.name == "vidstabtransform" {
+            check_vidstab(f, inputs)?;
             continue;
         }
         // VAAPI (exportPlan.js exportCommand): кадры в память видеокарты — без опций; плагинам недоступен
@@ -481,6 +571,8 @@ fn spec(opt: &str) -> Option<V> {
         "-quality" => V::Enum(&["speed", "balanced", "quality", "high_quality"]),
         "-rc_mode" => V::Enum(&["CQP", "ICQ", "VBR", "CBR", "QVBR", "AVBR", "auto"]),
         "-vaapi_device" => V::VaapiDevice,
+        // 0.5.x: аппаратное декодирование входов (exportPlan.js hwDecode; не вышло — FFmpeg сам декодирует процессором)
+        "-hwaccel" => V::Enum(&["cuda", "d3d11va", "dxva2", "vaapi", "videotoolbox"]),
         // 0.5.2: ProRes (-vendor), XDCAM HD422 (MPEG-2: GOP, B-кадры, чересстрочное кодирование), таймкод
         "-vendor" => V::Enum(&["apl0"]),
         "-bf" | "-dc" | "-intra_vlc" | "-non_linear_quant" | "-qmin" | "-qmax" => V::Num,
@@ -646,6 +738,19 @@ pub fn check_pcm(args: &[String], filter: &str, duration: f64, inputs: Inputs) -
 /// Цепочка фильтров одной стадии рендера (встроенные эффекты между плагинами): те же правила, что у графа экспорта
 pub fn check_chain(af: &str, inputs: Inputs) -> Result<(), String> {
     check_graph(af, inputs).map_err(|e| tr!("План экспорта отклонён: {}", "Export plan rejected: {}", e))
+}
+
+/// Цепочка эффектов клипа для кадров шторки «ДО / ПОСЛЕ» (compare.rs): одна линейная цепочка без меток и «;»
+/// (её вставляет в свой граф программа), фильтры — по тем же правилам, что граф экспорта; ass и hwupload здесь не нужны
+pub fn check_preview_chain(fx: &str, inputs: Inputs) -> Result<(), String> {
+    let rejected = |e: String| tr!("Цепочка эффектов отклонена: {}", "Effect chain rejected: {}", e);
+    if fx.contains([';', '[', ']', '\n', '\r']) {
+        return Err(rejected(tr!("цепочка должна быть без меток и «;»", "the chain must have no labels and no \";\"").into()));
+    }
+    if let Some(f) = parse_graph(fx).map_err(rejected)?.iter().find(|f| f.name == "ass" || f.name == "hwupload") {
+        return Err(rejected(tr!("фильтр «{}» не разрешён", "filter \"{}\" is not allowed", f.name)));
+    }
+    check_graph(fx, inputs).map_err(rejected)
 }
 
 /// Входной файл, разрешённый окну (или любой — у движка без окна)
@@ -889,6 +994,52 @@ mod tests {
         assert!(!plugins::is_safe_filter("ass"));
         // окно: файл только из <кэш>/export-assets, а такого файла нет
         assert!(check_graph(&g, Inputs::Window).is_err());
+    }
+
+    /// Стабилизация (stab.rs): vidstabtransform только с .trf из <кэш медиа>/<ключ>/stab/, vidstabdetect — никогда
+    #[test]
+    fn vidstab_rules() {
+        let media = paths::get().media_cache.clone();
+        let trf = media.join("abc123").join("stab").join("0123abcd.trf");
+        let p = |x: &Path| ff_path(&x.to_string_lossy());
+        let good = format!(
+            "[0:v]vidstabtransform=input={}:smoothing=30:optzoom=1:interpol=bicubic:zoom=2.5:tripod=0,unsharp=5:5:0.5:5:5:0.5[v]",
+            p(&trf)
+        );
+        check_graph(&good, Inputs::Any).unwrap();
+        check_preview_chain(&format!("vidstabtransform=input={}:smoothing=10", p(&trf)), Inputs::Any).unwrap();
+        let other = paths::get().cache_dir.join("x.trf");
+        let up = media.join("abc123").join("stab").join("..").join("..").join("k").join("stab").join("y.trf");
+        let deep = media.join("abc123").join("x").join("stab").join("y.trf");
+        let outside = std::env::temp_dir().join("stab").join("y.trf");
+        let txt = media.join("abc123").join("stab").join("y.txt");
+        for g in [
+            format!("[0:v]vidstabtransform=input={}[v]", p(&other)),
+            format!("[0:v]vidstabtransform=input={}[v]", p(&up)),
+            format!("[0:v]vidstabtransform=input={}[v]", p(&deep)),
+            format!("[0:v]vidstabtransform=input={}[v]", p(&outside)),
+            format!("[0:v]vidstabtransform=input={}[v]", p(&txt)),
+            "[0:v]vidstabtransform=input=stab/x.trf[v]".to_string(),
+            "[0:v]vidstabtransform=smoothing=10[v]".to_string(),
+            format!("[0:v]vidstabtransform={}[v]", p(&trf)),
+            format!("[0:v]vidstabtransform=input={}:debug=1[v]", p(&trf)),
+            format!("[0:v]vidstabtransform=input={}:input={}[v]", p(&trf), p(&trf)),
+            format!("[0:v]vidstabtransform=input={}:smoothing=x[v]", p(&trf)),
+            format!("[0:v]vidstabtransform=input={}:result={}[v]", p(&trf), p(&trf)),
+            format!("[0:v]vidstabdetect=result={}[v]", p(&trf)),
+            "[0:v]vidstabdetect[v]".to_string(),
+            format!("[0:v]hue=s=0,vidstabdetect=shakiness=10:result={}[v]", p(&trf)),
+            format!("[0:v]deshake=filename={}[v]", p(&trf)),
+        ] {
+            assert!(check_graph(&g, Inputs::Any).is_err(), "должен быть отклонён: {g}");
+            // i18n-ignore — тест
+        }
+        // окно и движок: файла нет — отказ
+        assert!(check_graph(&good, Inputs::Window).is_err());
+        assert!(check_graph(&good, Inputs::Engine).is_err());
+        assert!(stab_file_ok(&trf.to_string_lossy(), Inputs::Any));
+        assert!(!stab_file_ok(&other.to_string_lossy(), Inputs::Any));
+        check_graph("[0:v]deshake=rx=32:ry=32:edge=mirror[v]", Inputs::Any).unwrap();
     }
 
     #[test]
@@ -1257,6 +1408,15 @@ mod tests {
         .map(|x| x.to_string())
         .collect();
         check(&rain, &rain_graph(), 2.0, &abs("rain-1.webm"), Inputs::Any).unwrap();
+        // 0.5.x: аппаратное декодирование входа и картинка одним кадром (-framerate без -loop)
+        let mut hw = export_args(&abs("a.mp4"));
+        hw.splice(0..0, ["-hwaccel", "cuda", "-framerate", "60", "-i"].iter().map(|x| x.to_string()).chain([abs("t.png")]));
+        check(&hw, &real_graph(), 6.0, &abs("out.mp4"), Inputs::Any).unwrap();
+        for bad in ["auto", "cuda:0", "opencl", "-x"] {
+            let mut a = export_args(&abs("a.mp4"));
+            a.splice(0..0, ["-hwaccel".to_string(), bad.to_string()]);
+            assert!(check(&a, &real_graph(), 6.0, &abs("out.mp4"), Inputs::Any).is_err(), "-hwaccel {bad}");
+        }
     }
 
     #[test]

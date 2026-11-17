@@ -10,5 +10,7 @@ import text from './en/text.js';
 import vst from './en/vst.js';
 import edit from './en/edit.js';
 import audio from './en/audio.js';
+import compare from './en/compare.js';
+import stab from './en/stab.js';
 
-export const EN = Object.assign({}, core, timeline, clip, panels, mcp, plugins, fxcore, text, vst, edit, audio);
+export const EN = Object.assign({}, core, timeline, clip, panels, mcp, plugins, fxcore, text, vst, edit, audio, compare, stab);

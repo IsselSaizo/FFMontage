@@ -11,7 +11,7 @@
 // Настройки экспорта:
 //   { width, height, fps, codec, quality, output }
 
-import { ffEffects, unknownEffects } from './effects.js';
+import { ffEffects, unknownEffects, sourceEffect, sourceChain, effectAvailable } from './effects.js';
 import { speedOf, atempoChain } from './clipTime.js';
 import { ffAudioFx, unknownFx, hasVst, missingVst } from './audioFx.js';
 import { TRANSITIONS } from './transitions.js';
@@ -49,6 +49,24 @@ export const gpuFamily = (enc) => GPU_FAMILIES.find((f) => String(enc || '').end
 // VAAPI кодирует кадры из памяти видеокарты: граф заканчивается format=nv12,hwupload, устройство — -vaapi_device
 export const VAAPI_DEVICE = '/dev/dri/renderD128';
 const isVaapi = (codec) => gpuFamily(codec) === 'vaapi';
+// Аппаратное декодирование (0.5.x): значения -hwaccel, которые пропускает plancheck.rs
+export const HW_DECODE = ['cuda', 'd3d11va', 'dxva2', 'vaapi', 'videotoolbox'];
+/**
+ * Чем декодировать видео при экспорте: mode 'auto' | 'off'; info — app_info (platform, hwaccels);
+ * encoders — enc_detect (рабочие кодировщики). NVIDIA (NVENC работает) → cuda; Windows → d3d11va (любая видеокарта);
+ * macOS → videotoolbox. Linux (VAAPI) пока не включается сам. null — процессор.
+ */
+export function hwDecodeFor(mode, info, encoders) {
+  if (mode === 'off' || !info) return null;
+  const have = new Set(Array.isArray(info.hwaccels) ? info.hwaccels : []);
+  const nv = encoders && Object.keys(encoders).some((e) => e.endsWith('_nvenc') && encoders[e]);
+  if (nv && have.has('cuda')) return 'cuda';
+  if (info.platform === 'windows' && have.has('d3d11va')) return 'd3d11va';
+  if (info.platform === 'macos' && have.has('videotoolbox')) return 'videotoolbox';
+  return null;
+}
+// overlay=format=… для кадра без альфы (8 бит: yuv420/422/444 есть во всех версиях FFmpeg; 10 бит — auto)
+const OVERLAY_FMT = { yuv420p: 'yuv420', yuv422p: 'yuv422', yuv444p: 'yuv444' };
 
 const n6 = (x) => Number(x).toFixed(6);
 const even = (x) => Math.max(2, Math.round(x / 2) * 2);
@@ -268,14 +286,66 @@ export function buildExport(project, settings) {
     return a && a.path ? { path: a.path, isImage: true, isAnimation: !!a.anim, hasVideo: true, hasAudio: false, width: a.w, height: a.h, _text: a } : null;
   };
   const still = (m) => m.isImage && !m.isAnimation;
+  // Картинки одним кадром (0.5.x): вход читается и переводится в нужный формат один раз, повторяет его фильтр loop
+  // (раньше -loop 1 декодировал PNG на каждый кадр — на проекте с 11 надписями 4K это была половина памяти).
+  // -framerate F оставлен: шкала времени входа 1/F, иначе setpts=N/F округлялся бы до 1/25 с.
+  const stills = new Map(); // номер входа → число кадров
+  // Аппаратное декодирование видеофайлов (settings.hwDecode: cuda | d3d11va | videotoolbox | vaapi; не вышло — процессор)
+  const hw = HW_DECODE.includes(settings.hwDecode) ? settings.hwDecode : null;
   // alpha — видео с прозрачностью (WebM VP9 alpha читает только libvpx-vp9 — он ставится перед -i)
   const addInput = (m, ss, dur, alpha = false) => {
-    if (alpha && /\.webm$/i.test(m.path || '')) inputs.push('-c:v', 'libvpx-vp9');
+    const webmAlpha = alpha && /\.webm$/i.test(m.path || '');
+    if (webmAlpha) inputs.push('-c:v', 'libvpx-vp9');
     // Картинка: один кадр, повторяется нужное время
-    if (still(m)) inputs.push('-loop', '1', '-framerate', String(F), '-t', n6(dur + 0.5), '-i', m.path);
-    else inputs.push('-ss', n6(Math.max(0, ss)), '-t', n6(dur + 0.5), '-i', m.path);
-    return inputs.filter((x) => x === '-i').length - 1;
+    if (still(m)) {
+      inputs.push('-framerate', String(F), '-i', m.path);
+      const k = nInputs(inputs) - 1;
+      stills.set(k, Math.max(1, Math.ceil((dur + 0.5) * F)));
+      return k;
+    }
+    // Декодер видеокарты теряет альфу — видео с прозрачностью и анимированные картинки декодирует процессор
+    if (hw && !alpha && !m.isImage && m.hasVideo !== false) inputs.push('-hwaccel', hw);
+    inputs.push('-ss', n6(Math.max(0, ss)), '-t', n6(dur + 0.5), '-i', m.path);
+    return nInputs(inputs) - 1;
   };
+  // Стабилизация (эффект stage 'source', plugins-bundled/stabilize). Анализ vidstab готовит окно (js/stab.js
+  // prepareStabAssets → assets.stab { [clipId]: { trf, start, end } }: отрезок файла, на котором делался анализ).
+  // → null (эффекта нет / пропущен) | { k: -1, chain } (без подготовки — deshake: в цепочке перед скоростью)
+  //   | { k, chain, start, ss } (vidstab: свой вход -ss start -t end−start — ровно отрезок анализа; ss — с какого
+  //   момента файла нужны кадры клипа, trim=start=ss−start срезает запас после vidstabtransform)
+  const stabA = (assets && assets.stab) || {};
+  const clipLabel = (c) => String(c.name || (media[c.mediaId] && media[c.mediaId].name) || c.id).slice(0, 40);
+  const stabPart = (c, m, ss, pre, alpha) => {
+    if (still(m) || m.isImage) return null;
+    const se = sourceEffect(c);
+    if (!se) return null;
+    if (!effectAvailable(se.effect)) {
+      warnings.add(t('В этой сборке FFmpeg нет vidstab — стабилизация «{name}» пропущена', { name: clipLabel(c) }));
+      return null;
+    }
+    try {
+      if (!se.prepare) { const chain = sourceChain(c, m.width); return chain ? { k: -1, chain } : null; }
+      const a = stabA[c.id];
+      const ok = a && a.trf && Number.isFinite(a.start) && Number.isFinite(a.end) && a.start <= c.in + 0.0005 && a.end >= c.out - 0.0005;
+      if (!ok) {
+        if (assets) warnings.add(t('Анализ движения клипа «{name}» не готов — стабилизация пропущена', { name: clipLabel(c) }));
+        return null;
+      }
+      const chain = sourceChain(c, m.width, ffPath(a.trf));
+      if (!chain) return null;
+      const webm = alpha && /\.webm$/i.test(m.path || '');
+      if (webm) inputs.push('-c:v', 'libvpx-vp9');
+      inputs.push('-ss', n6(a.start), '-t', n6(a.end - a.start), '-i', m.path);
+      // кадры «до» клипа (половина перехода) — сколько есть в отрезке анализа
+      return { k: nInputs(inputs) - 1, chain, start: a.start, ss: Math.min(c.in, Math.max(a.start, ss, c.in - pre)) };
+    } catch (e) {
+      warnings.add(t('Стабилизация клипа «{name}» пропущена: {e}', { name: clipLabel(c), e: e.message }));
+      return null;
+    }
+  };
+  // Наложение на кадр без альфы — в формате кадра: format=auto переводил весь кадр в yuva и обратно на каждом
+  // наложении (даже вне его времени) — на 11 надписях это было ~30 % времени экспорта
+  const ovFmt = OVERLAY_FMT[PF] || 'auto';
 
   // Цвет фона: поля вокруг вписанного видео, пустоты, затухания
   const bg = /^#[0-9a-f]{6}$/i.test(project.background || '') ? project.background.slice(1).toLowerCase() : '000000';
@@ -406,10 +476,14 @@ export function buildExport(project, settings) {
       const showVideo = m.hasVideo && !L.hidden;
       // Звук клипа с VST3/CLAP — из WAV рендера (в нём только сам клип: in…out, без «запаса» для перехода)
       const wav = hasSound ? vstWav('clips', c.id, c.afx) : null;
-      const k = (showVideo || (hasSound && !wav)) ? addInput(m, ss, (head + len + t) * sp, alpha && showVideo) : -1;
+      // Стабилизация (эффект stage 'source', js/stab.js): первой, до скорости. vidstab — свой вход видео ровно на отрезке
+      // анализа (.trf привязан к его кадрам: тот же -ss/-t, что в stab.rs), после vidstabtransform запас срезается trim
+      const st = showVideo && !m._text ? stabPart(c, m, ss, h * sp, alpha) : null;
+      const k = ((showVideo && !(st && st.k >= 0)) || (hasSound && !wav)) ? addInput(m, ss, (head + len + t) * sp, alpha && showVideo && !(st && st.k >= 0)) : -1;
       // Одиночный клип верхней дорожки (без переходов) накладывается сам, со своим x/y — без холста во весь кадр
       const direct = alpha && !tin[i] && !tout[i];
-      const tail = (freezeHead > 0.0005 ? `,tpad=start_mode=clone:start_duration=${n6(freezeHead)}` : '') +
+      const fHead = st && st.k >= 0 ? h - (c.in - st.ss) / sp : freezeHead;
+      const tail = (fHead > 0.0005 ? `,tpad=start_mode=clone:start_duration=${n6(fHead)}` : '') +
         `,tpad=stop_mode=clone:stop_duration=${n6(t + 2)},trim=duration=${n6(S)},setpts=PTS-STARTPTS` +
         `${vFades(c, h, len, alpha)}[${P}s${i}]`;
       // Текст: картинка уже нужного размера и на своём месте; титры «roll» — полоса, которая едет снизу вверх
@@ -420,7 +494,9 @@ export function buildExport(project, settings) {
       const posOf = (cc, local) => (tx ? (tx.roll ? `x=0:${rollY(local ? h : cc.start)}` : `x=${Math.round(tx.x || 0)}:y=${Math.round(tx.y || 0)}`) : layerPos(cc));
       if (showVideo) {
         warnFx(c);
-        const src = `[${k}:v]${vSpeed(sp)},${tx ? '' : ffEffects(c, m.width)}`;
+        const src = st && st.k >= 0
+          ? `[${st.k}:v]${st.chain},trim=start=${n6(st.ss - st.start)},${vSpeed(sp)},${ffEffects(c, m.width)}`
+          : `[${k}:v]${st && st.chain ? `${st.chain},` : ''}${vSpeed(sp)},${tx ? '' : ffEffects(c, m.width)}`;
         if (!alpha && !tx && isIdentity(tfOf(c)) && !borderAsset(c)) {
           filters.push(`${src}${scaleChain(c)}${tail}`);
         } else if (direct) {
@@ -554,7 +630,7 @@ export function buildExport(project, settings) {
     const out = i === runs.length - 1 ? VOUT : `[vo${i}]`;
     const a = r.start; const b = Math.min(total, r.start + r.len);
     filters.push(`${r.label}setpts=PTS-STARTPTS+${n6(a)}/TB[ov${i}]`);
-    filters.push(`${cur}[ov${i}]overlay=${r.pos || '0:0'}:format=auto:eof_action=pass:enable='between(t,${n6(a)},${n6(b)})',format=${PF}${out}`);
+    filters.push(`${cur}[ov${i}]overlay=${r.pos || '0:0'}:format=${ovFmt}:eof_action=pass:enable='between(t,${n6(a)},${n6(b)})',format=${PF}${out}`);
     cur = out;
   });
   if (burn) {
@@ -623,7 +699,9 @@ export function buildExport(project, settings) {
     }
   }
 
-  const filter = filters.join(';\n');
+  let filter = filters.join(';\n');
+  // Картинки одним кадром: [k:v] встречается в графе ровно раз (в начале цепочки) — перед ней повтор кадра
+  for (const [k, n] of stills) filter = filter.replace(`[${k}:v]`, `[${k}:v]loop=loop=${n - 1}:size=1:start=0,setpts=N/(${FX})/TB,`);
   return { inputs, filter, duration: total, W, H, F, warnings: [...warnings], subtitles: subInputs, stems, audioMaps };
 }
 

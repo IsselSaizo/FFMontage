@@ -54,7 +54,7 @@
   await sleep(200);
   check(!!document.querySelector('#settings'), 'settings window opens');
   const sections = [...document.querySelectorAll('.set-tab')].map((b) => b.dataset.section);
-  check(sections.join() === 'general,hotkeys,folders,cache,mcp,plugins,vst,about', `sections: ${sections.join()}`);
+  check(sections.join() === 'general,hotkeys,folders,perf,cache,mcp,plugins,vst,about', `sections: ${sections.join()}`);
   for (const s of sections) {
     // Изредка (≈1 из 3 запусков, и до 0.4.3) окно настроек закрывается само после снимка/раздела «Папки» — вероятно,
     // окно теста получает настоящий щелчок по фону. Тогда открываем заново и отмечаем в журнале, а не роняем тест.
@@ -63,9 +63,18 @@
     await sleep(s === 'cache' || s === 'folders' ? 1500 : 300);
     check(document.querySelector('.set-body').dataset.section === s && document.querySelector('.set-body').childElementCount > 1, `section ${s} renders`);
     if (s === 'cache' || s === 'general') await window.api.testShot(`settings-${s}-${lang}`).catch(() => {});
-    if (s === 'cache') check(document.querySelectorAll('.cache-row').length === 11 && !!document.querySelector('#cache-limit'), `cache rows: ${document.querySelectorAll('.cache-row').length}`);
+    if (s === 'cache') check(document.querySelectorAll('.cache-row').length === 12 && !!document.querySelector('#cache-limit'), `cache rows: ${document.querySelectorAll('.cache-row').length}`);
     scan(document.querySelector('#settings'));
   }
+
+  // --- Производительность (0.5.x): три ряда кнопок, выбор сохраняется в settings.json perf ---
+  if (!document.querySelector('#settings')) { openSettings('perf'); await sleep(200); }
+  document.querySelector('.set-tab[data-section="perf"]').click(); await sleep(600);
+  check(['priority', 'hwDecode', 'bgJobs'].every((k) => document.querySelectorAll(`[data-perf="${k}"] .chip`).length >= 2), 'perf: rows priority / hwDecode / bgJobs');
+  document.querySelector('[data-perf="priority"] .chip[data-value="low"]').click(); await sleep(400);
+  const { getPref } = await import('./js/prefs.js');
+  check(getPref('perf', {}).priority === 'low' && document.querySelector('[data-perf="priority"] .chip.on').dataset.value === 'low', `perf: priority low saved (${JSON.stringify(getPref('perf', {}))})`);
+  document.querySelector('[data-perf="priority"] .chip[data-value="normal"]').click(); await sleep(300);
 
   // --- Горячие клавиши ---
   if (!document.querySelector('#settings')) { log.push('info: окно настроек закрылось — открыто заново'); openSettings('hotkeys'); await sleep(200); }

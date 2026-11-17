@@ -6,13 +6,15 @@
 // Порядок блокировок в ff.rs: сначала блокировка ключа кэша (key_lock), потом слот — иначе задачи с одним ключом
 // могли бы занять все слоты и ждать друг друга.
 use serde_json::{json, Value};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 use tokio::sync::Notify;
 
 pub const GPU_LIMIT: usize = 3;
 
 pub struct Limiter {
-    limit: usize,
+    /// Меняется на лету (настройки → Производительность); уже идущие задачи не прерываются
+    limit: AtomicUsize,
     /// (занято, ждут)
     state: Mutex<(usize, usize)>,
     notify: Notify,
@@ -33,7 +35,17 @@ impl Drop for Slot {
 
 impl Limiter {
     const fn new(limit: usize) -> Self {
-        Limiter { limit, state: Mutex::new((0, 0)), notify: Notify::const_new() }
+        Limiter { limit: AtomicUsize::new(limit), state: Mutex::new((0, 0)), notify: Notify::const_new() }
+    }
+
+    fn limit(&self) -> usize {
+        self.limit.load(Ordering::Relaxed).max(1)
+    }
+
+    /// Новый лимит; если он вырос — ждущие задачи проверят слоты заново
+    pub fn set_limit(&self, n: usize) {
+        self.limit.store(n.max(1), Ordering::Relaxed);
+        self.notify.notify_waiters();
     }
 
     /// Отравленный Mutex (паника в другом потоке) не должен ронять очередь
@@ -51,7 +63,7 @@ impl Limiter {
             n.as_mut().enable();
             {
                 let mut s = self.lock();
-                if s.0 < self.limit {
+                if s.0 < self.limit() {
                     s.0 += 1;
                     if waiting {
                         s.1 = s.1.saturating_sub(1);
@@ -78,7 +90,7 @@ impl Limiter {
 
     pub fn stats(&self) -> Value {
         let s = self.lock();
-        json!({ "running": s.0, "waiting": s.1, "limit": self.limit })
+        json!({ "running": s.0, "waiting": s.1, "limit": self.limit() })
     }
 }
 
@@ -101,6 +113,11 @@ pub fn cpu_limit() -> usize {
 pub fn cpu() -> &'static Limiter {
     static L: OnceLock<Limiter> = OnceLock::new();
     L.get_or_init(|| Limiter::new(cpu_limit()))
+}
+
+/// Настройка «Фоновые задачи одновременно»: 0 — авто (cpu_limit), иначе n
+pub fn set_cpu_jobs(n: usize) {
+    cpu().set_limit(if n == 0 { cpu_limit() } else { n });
 }
 
 pub fn gpu() -> &'static Limiter {
@@ -168,5 +185,26 @@ mod tests {
         let s = tokio::time::timeout(std::time::Duration::from_millis(500), L.acquire()).await;
         assert!(s.is_ok());
         assert!(cpu_limit() >= 2);
+    }
+
+    #[tokio::test]
+    async fn limit_changes_live() {
+        static L: Limiter = Limiter::new(1);
+        let a = L.acquire().await;
+        // лимит 1 занят — ждём; лимит подняли до 2 — ожидающий получает слот без освобождения первого
+        let waiter = tokio::spawn(async { L.acquire().await });
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        assert!(!waiter.is_finished());
+        L.set_limit(2);
+        let b = tokio::time::timeout(std::time::Duration::from_millis(500), waiter).await;
+        assert!(b.is_ok());
+        assert_eq!(L.stats()["limit"], 2);
+        L.set_limit(0);
+        assert_eq!(L.stats()["limit"], 1, "0 → не меньше 1"); // i18n-ignore — тест
+        drop(a);
+        assert_eq!(crate::settings::bg_jobs(&json!({ "perf": { "bgJobs": 3 } })), 3);
+        assert_eq!(crate::settings::bg_jobs(&json!({ "perf": { "bgJobs": 0 } })), 0);
+        assert_eq!(crate::settings::bg_jobs(&json!({})), 0);
+        assert_eq!(crate::settings::bg_jobs(&json!({ "perf": { "bgJobs": 999 } })), 64);
     }
 }
