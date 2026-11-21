@@ -3,7 +3,7 @@
 // на переходе играют оба, а картинку смешивает CSS (см. transitions.js).
 // Музыка — отдельные <audio>, громкость (можно > 100%) и затухания — через Web Audio.
 import { store, MAIN_LANE } from './store.js';
-import { cssTransform, contentAspect, tfOf } from './transform.js';
+import { cssTransform, contentAspect, tfOf, fitsInside, blurFillOf, blurFillSigma } from './transform.js';
 import { borderOf, borderPx } from './border.js';
 import { playUrl, audioUrl, channelUrl, channelState, playbackFailed } from './media.js';
 import { layoutOf, routeOf, routeMatrix, downmixMatrix, channelLabels, clipChannel } from './audioLayout.js';
@@ -570,6 +570,8 @@ export class Preview {
       // Кадрирование: object-view-box вырезает часть кадра, а object-fit подгоняет уже её (как crop→scale в экспорте)
       const vb = editing ? '' : cropViewBox(x.clip.crop);
       if (x.el.style.objectViewBox !== vb) x.el.style.objectViewBox = vb;
+      // Стили перехода до трансформа клипа — для размытой подложки (она во весь кадр, трансформ клипа её не двигает)
+      const trStyle = { transform: x.el.style.transform, opacity: x.el.style.opacity };
       // Трансформ клипа — внутри стиля перехода (как в экспорте: сначала слой собирается, потом переход)
       const ct = editing ? null : cssTransform(x.clip);
       if (ct && ct.transform) x.el.style.transform = `${x.el.style.transform || ''} ${ct.transform}`.trim();
@@ -578,10 +580,11 @@ export class Preview {
       const tf = x.el.style.filter;
       x.el.style.filter = cssEffects(ov, shownW, tf ? [tf] : []);
       this.applyBorder(x.el, editing ? null : x.clip, true);
+      this.applyBlurFill(x.el, editing ? null : x.clip, trStyle);
     }
-    // Рамки обводки у элементов, которые сейчас ничего не показывают
+    // Рамки обводки и размытые подложки у элементов, которые сейчас ничего не показывают
     const shown = new Set(layers.map((x) => x.el));
-    for (const el of [...v.slots, ...v.imgSlots]) if (!shown.has(el)) this.applyBorder(el, null, false);
+    for (const el of [...v.slots, ...v.imgSlots]) if (!shown.has(el)) { this.applyBorder(el, null, false); this.applyBlurFill(el, null); }
     if (!this.override) this.preload(v, lane, t);
   }
 
@@ -626,7 +629,7 @@ export class Preview {
     const s = tfOf(clip).scale || 1;
     // Картинка в «экране» до трансформа: «вписать» — по пропорциям файла (с кадрированием), иначе — весь экран
     let w = Sw; let hh = Sh;
-    if (!clip.fit || clip.fit === 'contain') {
+    if (fitsInside(clip)) {
       const ar = contentAspect(clip, store.media(clip.mediaId));
       if (Sw / Sh > ar) { hh = Sh; w = Sh * ar; } else { w = Sw; hh = Sw / ar; }
     }
@@ -648,6 +651,70 @@ export class Preview {
       left: `${(Sw - w) / 2}px`, top: `${(Sh - hh) / 2}px`, width: `${w}px`, height: `${hh}px`,
       borderWidth: `${bw.toFixed(2)}px`, borderColor: b.color, borderRadius: `${r.toFixed(2)}px`,
     });
+  }
+
+  // 0.6.1: размытое заполнение (подгонка 'blur', transform.js) — под слоем клипа холст во весь «экран»: кадр того же
+  // элемента «заполнить» в крошечном холсте (48 пикс. по ширине), размытие и затемнение — CSS filter. Как в экспорте:
+  // кадрирование и эффекты клипа есть (filter слоя), трансформа клипа нет; стили перехода (прозрачность, шторки,
+  // сдвиг) — общие со слоем. Кадр перерисовывается циклом requestAnimationFrame, пока подложки видны.
+  applyBlurFill(el, clip, trStyle = null) {
+    const bf = clip ? blurFillOf(clip) : null;
+    let cv = el.blurCv;
+    if (!bf) {
+      if (cv && cv.style.display !== 'none') cv.style.display = 'none';
+      if (this.blurEls) this.blurEls.delete(el);
+      return;
+    }
+    if (!cv) {
+      cv = h('canvas', { class: 'slot-blur', width: '48', height: '27' });
+      el.blurCv = cv;
+      el.before(cv);
+    }
+    const Sh = this.stage.clientHeight || 1;
+    const own = !el.style.clipPath || el.dataset.bclip === el.style.clipPath;
+    const fx = el.style.filter && el.style.filter !== 'none' ? `${el.style.filter} ` : '';
+    // Размытие в CSS-пикселях «экрана» — та же доля высоты кадра, что в экспорте; холст на 16 % больше экрана (края)
+    const px = blurFillSigma(bf, Sh);
+    Object.assign(cv.style, {
+      display: 'block',
+      transform: (trStyle && trStyle.transform) || '',
+      opacity: (trStyle && trStyle.opacity) || '',
+      zIndex: el.style.zIndex,
+      clipPath: own ? '' : el.style.clipPath, maskImage: el.style.maskImage,
+      filter: `${fx}blur(${px.toFixed(1)}px) brightness(${(1 - bf.dim * 0.85).toFixed(3)})`,
+    });
+    cv.clip = clip;
+    if (!this.blurEls) this.blurEls = new Set();
+    this.blurEls.add(el);
+    this.drawBlur(el);
+    if (!this.blurRaf) {
+      const loop = () => {
+        this.blurRaf = 0;
+        if (!this.blurEls || !this.blurEls.size) return;
+        for (const e of this.blurEls) this.drawBlur(e);
+        this.blurRaf = requestAnimationFrame(loop);
+      };
+      this.blurRaf = requestAnimationFrame(loop);
+    }
+  }
+
+  drawBlur(el) {
+    const cv = el.blurCv;
+    if (!cv || !cv.clip || cv.style.display === 'none') return;
+    const vw = el.videoWidth || el.naturalWidth || 0;
+    const vh = el.videoHeight || el.naturalHeight || 0;
+    if (!vw || !vh || (el.readyState !== undefined && el.readyState < 2)) return;
+    const Sw = this.stage.clientWidth || 16; const Sh = this.stage.clientHeight || 9;
+    const cw = 48; const ch = Math.max(8, Math.round(cw * Sh / Sw));
+    if (cv.width !== cw) cv.width = cw;
+    if (cv.height !== ch) cv.height = ch;
+    // Кадрирование клипа → «заполнить» холст (лишнее по краям срезается)
+    const cr = cv.clip.crop || {};
+    const f = (k) => Math.max(0, Math.min(0.95, Number(cr[k]) || 0));
+    let sx = vw * f('l'); let sy = vh * f('t');
+    let sw = Math.max(1, vw * (1 - f('l') - f('r'))); let sh = Math.max(1, vh * (1 - f('t') - f('b')));
+    if (sw / sh > cw / ch) { const w2 = sh * cw / ch; sx += (sw - w2) / 2; sw = w2; } else { const h2 = sw * ch / cw; sy += (sh - h2) / 2; sh = h2; }
+    try { cv.getContext('2d').drawImage(el, sx, sy, sw, sh, 0, 0, cw, ch); } catch { /* кадр ещё не готов */ }
   }
 
   // --- показ перехода/эффекта при наведении (проект не меняется) ---

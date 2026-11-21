@@ -16,7 +16,7 @@ import { speedOf, atempoChain } from './clipTime.js';
 import { ffAudioFx, unknownFx, hasVst, missingVst } from './audioFx.js';
 import { TRANSITIONS } from './transitions.js';
 import { t } from './i18n.js';
-import { tfOf, isIdentity, contentAspect } from './transform.js';
+import { tfOf, isIdentity, contentAspect, blurFillOf, blurFillSigma } from './transform.js';
 import { isGraphic, graphicOf } from './graphicKinds.js';
 import { ffPath } from './core/ffEscape.js';
 import { borderOf } from './border.js';
@@ -103,6 +103,11 @@ const aFades = (c, head, len) => {
 };
 const nInputs = (inputs) => inputs.filter((x) => x === '-i').length;
 
+// Сдвиг звука клипа на его место таймлайна. 0.6.1: после adelay время кадров пересчитывается по числу сэмплов —
+// FFmpeg (adelay, проверено на 9.0) у входа с -ss (opus в webm и др.) отдаёт тишину задержки с pts = NOPTS, дальше
+// время «улетает», и amix обрывал звук всего ролика на начале этого клипа (звук пропадал на смене нарезок).
+const aDelay = (ms) => `,adelay=delays=${Math.max(0, Math.round(ms))}:all=1,asetpts=N/SR/TB`;
+
 // Звук клипов одной аудиодорожки (общий код экспорта и графа дорожки для vst_render):
 //   громкость клипа × gain, эффекты клипа (или WAV рендера VST3/CLAP — эффекты и скорость в нём уже есть),
 //   затухания, adelay на своё место. o = { media, gain, addInput(m, ss, dur) → k, addWav(path) → k,
@@ -120,7 +125,7 @@ function trackClips(tr, o) {
     const delayMs = Math.max(0, Math.round(c.start * 1000));
     const label = o.label();
     const wav = o.clipWav(c);
-    const tail = `,asetpts=PTS-STARTPTS,apad,atrim=duration=${n6(dur)}${aFades(c, 0, dur)},adelay=delays=${delayMs}:all=1${label}`;
+    const tail = `,asetpts=PTS-STARTPTS,apad,atrim=duration=${n6(dur)}${aFades(c, 0, dur)}${aDelay(delayMs)}${label}`;
     if (wav) {
       const k = o.addWav(wav);
       list.push({ label, filter: `[${k}:a]${AUDIO_FMT},volume=${n6(c.volume * o.gain)}${tail}` });
@@ -351,12 +356,35 @@ export function buildExport(project, settings) {
   const bg = /^#[0-9a-f]{6}$/i.test(project.background || '') ? project.background.slice(1).toLowerCase() : '000000';
   // fit 'cover' — заполнить кадр (лишнее обрезается), 'stretch' — растянуть без сохранения пропорций,
   // иначе вписать целиком с полями цвета фона
-  const scaleChain = (c) => cropChain(c) + (c.fit === 'cover'
-    ? `fps=${FX},scale=${W}:${H}:force_original_aspect_ratio=increase:flags=lanczos,crop=${W}:${H},setsar=1,format=${PF}`
-    : c.fit === 'stretch'
-      ? `fps=${FX},scale=${W}:${H}:flags=lanczos,setsar=1,format=${PF}`
-      : `fps=${FX},scale=${W}:${H}:force_original_aspect_ratio=decrease:flags=lanczos,` +
-        `pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2:color=0x${bg},setsar=1,format=${PF}`);
+  // 'blur' (0.6.1) — вписать, а поля — та же картинка «заполнить», размытая и затемнённая (blurBg)
+  let bfN = 0;
+  const scaleChain = (c) => {
+    if (blurFillOf(c)) {
+      const n = bfN++;
+      return cropChain(c) + `fps=${FX},split=2[bfa${n}][bfb${n}];[bfa${n}]${blurBg(c, PF)}[bfg${n}];` +
+        `[bfb${n}]scale=${W}:${H}:force_original_aspect_ratio=decrease:flags=lanczos,setsar=1[bff${n}];` +
+        `[bfg${n}][bff${n}]overlay=x=(W-w)/2:y=(H-h)/2:format=${ovFmt},setsar=1,format=${PF}`;
+    }
+    return cropChain(c) + (c.fit === 'cover'
+      ? `fps=${FX},scale=${W}:${H}:force_original_aspect_ratio=increase:flags=lanczos,crop=${W}:${H},setsar=1,format=${PF}`
+      : c.fit === 'stretch'
+        ? `fps=${FX},scale=${W}:${H}:flags=lanczos,setsar=1,format=${PF}`
+        : `fps=${FX},scale=${W}:${H}:force_original_aspect_ratio=decrease:flags=lanczos,` +
+          `pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2:color=0x${bg},setsar=1,format=${PF}`);
+  };
+  // Размытый фон клипа во весь кадр W×H (кадрирование уже сделано): «заполнить» в уменьшенном вчетверо кадре →
+  // гаусс → обратно до W×H (быстро и без ступенек) → затемнение яркости. fmt — формат кадра или yuva420p (холст
+  // верхней дорожки: фон непрозрачный, но слой должен совпасть по формату с прозрачным холстом)
+  function blurBg(c, fmt) {
+    const bf = blurFillOf(c);
+    const sw = even(W / 4); const sh = even(H / 4);
+    const sigma = Math.max(0.5, blurFillSigma(bf, H) / 4);
+    // Затемнение как brightness() в плеере: RGB × k ⇔ (Y−16)·k+16, (U−128)·k+128, (V−128)·k+128
+    const k = (1 - bf.dim * 0.85).toFixed(4);
+    const dim = bf.dim > 0.001 ? `,lutyuv=y=16+(val-16)*${k}:u=128+(val-128)*${k}:v=128+(val-128)*${k}` : '';
+    return `fps=${FX},scale=${sw}:${sh}:force_original_aspect_ratio=increase:flags=bilinear,crop=${sw}:${sh},setsar=1,` +
+      `gblur=sigma=${sigma.toFixed(3)}:steps=2,scale=${W}:${H}:flags=bicubic${dim},setsar=1,format=${fmt}`;
+  }
   // Слой клипа с трансформом (transform.js): кадрирование → подгонка в рамку W·scale × H·scale → прозрачность → поворот.
   // На выходе — картинка с альфой своего размера; где она стоит в кадре — решает overlay (центр + сдвиг).
   // Обводка и скругление (0.5.0, border.js): PNG обводки и маски размера слоя (exportAssets.js) →
@@ -481,7 +509,9 @@ export function buildExport(project, settings) {
       const st = showVideo && !m._text ? stabPart(c, m, ss, h * sp, alpha) : null;
       const k = ((showVideo && !(st && st.k >= 0)) || (hasSound && !wav)) ? addInput(m, ss, (head + len + t) * sp, alpha && showVideo && !(st && st.k >= 0)) : -1;
       // Одиночный клип верхней дорожки (без переходов) накладывается сам, со своим x/y — без холста во весь кадр
-      const direct = alpha && !tin[i] && !tout[i];
+      // (с размытым заполнением — нет: фон занимает весь кадр)
+      const blurFill = !m._text && !!blurFillOf(c);
+      const direct = alpha && !tin[i] && !tout[i] && !blurFill;
       const fHead = st && st.k >= 0 ? h - (c.in - st.ss) / sp : freezeHead;
       const tail = (fHead > 0.0005 ? `,tpad=start_mode=clone:start_duration=${n6(fHead)}` : '') +
         `,tpad=stop_mode=clone:stop_duration=${n6(t + 2)},trim=duration=${n6(S)},setpts=PTS-STARTPTS` +
@@ -503,9 +533,16 @@ export function buildExport(project, settings) {
           filters.push(`${src}${chainOf(c)}${tail}`);
         } else {
           // Слой на холсте во весь кадр: цвет фона (основная дорожка) или прозрачный (верхние, для переходов)
+          // Размытое заполнение: холст — размытая копия самого клипа (до трансформа, после кадрирования и эффектов)
           const cv = alpha ? `color=c=black@0:s=${W}x${H}:r=${FX},format=yuva420p` : `color=c=0x${bg}:s=${W}x${H}:r=${FX},format=${PF}`;
-          filters.push(`${src}${chainOf(c)}[${P}ly${i}]`);
-          filters.push(`${cv}[${P}cv${i}]`);
+          if (blurFill) {
+            filters.push(`${src}split=2[${P}bfa${i}][${P}bfb${i}]`);
+            filters.push(`[${P}bfa${i}]${chainOf(c)}[${P}ly${i}]`);
+            filters.push(`[${P}bfb${i}]${cropChain(c)}${blurBg(c, alpha ? 'yuva420p' : PF)}[${P}cv${i}]`);
+          } else {
+            filters.push(`${src}${chainOf(c)}[${P}ly${i}]`);
+            filters.push(`${cv}[${P}cv${i}]`);
+          }
           filters.push(`[${P}cv${i}][${P}ly${i}]overlay=${posOf(c, true)}:shortest=1:format=auto,format=${alpha ? 'yuva420p' : PF},setsar=1${tail}`);
         }
       } else if (L.main) {
@@ -544,7 +581,7 @@ export function buildExport(project, settings) {
         if (tin[i]) af += `,afade=t=in:st=0:d=${n6(h)}`;
         af += aFades(c, 0, len);
         if (t > 0) af += `,afade=t=out:st=${n6(len - t)}:d=${n6(t)}`;
-        af += `,adelay=delays=${Math.max(0, Math.round(c.start * 1000))}:all=1[${P}va${i}]`;
+        af += `${aDelay(c.start * 1000)}[${P}va${i}]`;
         filters.push(af);
         pushA(`[${P}va${i}]`, 'video');
       } else if (hasSound) {
@@ -555,7 +592,7 @@ export function buildExport(project, settings) {
         af += aFades(c, head, len);
         if (t > 0) af += `,afade=t=out:st=${n6(head + len - t)}:d=${n6(2 * t)}`;
         const delay = Math.max(0, Math.round((c.start - head) * 1000));
-        af += `,adelay=delays=${delay}:all=1[${P}va${i}]`;
+        af += `${aDelay(delay)}[${P}va${i}]`;
         filters.push(af);
         pushA(`[${P}va${i}]`, 'video');
       }
@@ -578,7 +615,7 @@ export function buildExport(project, settings) {
       audioEnd = Math.max(audioEnd, r.end);
       if (r.list.length) {
         const tk = `[tk${audio.length}_${j}]`;
-        filters.push(`[${addWav(trWav)}:a]${audioFmt},volume=${n6(tv)},asetpts=PTS-STARTPTS,adelay=delays=0:all=1${tk}`);
+        filters.push(`[${addWav(trWav)}:a]${audioFmt},volume=${n6(tv)},asetpts=PTS-STARTPTS${aDelay(0)}${tk}`);
         pushA(tk, tr.id);
       }
       return;

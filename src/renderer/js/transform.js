@@ -34,6 +34,52 @@ export function cleanTransform(patch, base = null) {
   return Object.keys(out).length ? out : null;
 }
 
+// Подгонка кадра (clip.fit): 'contain' (вписать, по умолчанию) | 'cover' (заполнить) | 'stretch' (растянуть)
+//   | 'blur' (0.6.1: вписать, а поля — размытая и затемнённая копия того же клипа во весь кадр).
+// Геометрия 'blur' — как у 'contain'; параметры фона — clip.blurFill { blur, dim } (доли 0…1, только отличные от умолчания).
+export const FIT_MODES = Object.freeze(['contain', 'cover', 'stretch', 'blur']);
+export const BLUR_FILL_DEFAULT = Object.freeze({ blur: 0.5, dim: 0.25 });
+/** Картинка клипа вписана целиком (поля — цвет фона или размытая копия) */
+export const fitsInside = (c) => !c || !c.fit || c.fit === 'contain' || c.fit === 'blur';
+export const isBlurFill = (c) => !!c && c.fit === 'blur';
+/** Параметры размытого фона клипа (полные, с умолчаниями) или null — у клипа другая подгонка */
+export function blurFillOf(c) {
+  if (!isBlurFill(c)) return null;
+  const b = c.blurFill && typeof c.blurFill === 'object' ? c.blurFill : {};
+  const v = (k) => { const n = Number(b[k]); return Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : BLUR_FILL_DEFAULT[k]; };
+  return { blur: v('blur'), dim: v('dim') };
+}
+/** blurFill после правки: patch поверх base, округление; null — всё по умолчанию */
+export function cleanBlurFill(patch, base = null) {
+  const src = { ...BLUR_FILL_DEFAULT, ...(base && typeof base === 'object' ? base : {}), ...(patch && typeof patch === 'object' ? patch : {}) };
+  const out = {};
+  for (const k of Object.keys(BLUR_FILL_DEFAULT)) {
+    let n = Number(src[k]);
+    if (!Number.isFinite(n)) n = BLUR_FILL_DEFAULT[k];
+    n = round(Math.min(1, Math.max(0, n)), 3);
+    if (Math.abs(n - BLUR_FILL_DEFAULT[k]) > 1e-9) out[k] = n;
+  }
+  return Object.keys(out).length ? out : null;
+}
+/** Радиус размытия фона (сигма гаусса) в пикселях кадра высотой H */
+export const blurFillSigma = (bf, H) => H * (0.004 + 0.036 * bf.blur);
+
+// 0.6.1: наклейка (картинка из «Библиотеки» плагина): ширина size × меньшая сторона кадра, в углу corner
+// ('bottom-right' | 'bottom-left' | 'top-right' | 'top-left' | 'center') с отступом margin (те же доли).
+// W×H — кадр проекта, ar — пропорции картинки (подгонка «вписать»). → трансформ клипа { x, y, scale } | null
+export function stickerTransform(sticker, W, H, ar) {
+  if (!sticker || !(W > 0) || !(H > 0) || !(ar > 0)) return null;
+  const s = Math.min(W, H);
+  const w = Math.min(W, sticker.size * s, H * ar);
+  const hh = w / ar;
+  const w0 = W / H > ar ? H * ar : W;      // ширина картинки, вписанной в кадр (scale 1)
+  const m = sticker.margin * s;
+  const c = sticker.corner || 'bottom-right';
+  const cx = c.endsWith('right') ? W - m - w / 2 : c.endsWith('left') ? m + w / 2 : W / 2;
+  const cy = c.startsWith('bottom') ? H - m - hh / 2 : c.startsWith('top') ? m + hh / 2 : H / 2;
+  return { x: (cx - W / 2) / W, y: (cy - H / 2) / H, scale: w / w0 };
+}
+
 // Пропорции картинки клипа после кадрирования (ширина / высота); media — сведения ffprobe
 export function contentAspect(clip, media) {
   const w = media && media.width > 0 ? media.width : 16;
@@ -50,7 +96,7 @@ export function contentRect(clip, media, W, H) {
   const tf = tfOf(clip);
   const bw = W * tf.scale; const bh = H * tf.scale;
   let w = bw; let hh = bh;
-  if (!clip || !clip.fit || clip.fit === 'contain') {
+  if (fitsInside(clip)) {
     const ar = contentAspect(clip, media);
     if (bw / bh > ar) { hh = bh; w = bh * ar; } else { w = bw; hh = bw / ar; }
   }

@@ -18,6 +18,7 @@ import {
 import { getSetting, setSettings } from '../settings.js';
 import { permissionSet, need, checkNetUrl, describePermissions } from './permissions.js';
 import { invoke } from '../tauri.js';
+import { cleanBorder } from '../border.js';
 
 export { describePermissions };
 
@@ -223,6 +224,59 @@ export async function restoreBundled() {
 }
 
 // ---------------------------------------------------------------------------
+// «Библиотека» плагинов (0.6.1): contributes.library — звуки и картинки из папки плагина.
+//   { id, kind: 'audio'|'image', file, name?, group?,
+//     image: duration? (с, 0.5…600, по умолчанию 3), sticker? { corner, size, margin } — наклейкой в угол кадра
+//            (size — ширина в долях меньшей стороны кадра, margin — отступ в тех же долях), border? — как clip.border
+//     audio: volume? (0…2) }
+// Файл ставится на таймлайн как обычный медиафайл (путь внутри папки плагина; plancheck пускает его как вход).
+// Rust (plugins.rs check_manifest) проверяет id, kind, тип и наличие файла ещё при установке.
+// ---------------------------------------------------------------------------
+export const LIBRARY_EXT = Object.freeze({ audio: ['wav', 'mp3', 'ogg', 'oga', 'opus', 'm4a', 'flac'], image: ['png', 'jpg', 'jpeg', 'webp', 'gif'] });
+export const STICKER_CORNERS = Object.freeze(['bottom-right', 'bottom-left', 'top-right', 'top-left', 'center']);
+
+function libraryItemOf(rec, d) {
+  if (!d || typeof d !== 'object') throw new Error('item must be an object');
+  const id = String(d.id || '');
+  if (!SUB_ID.test(id)) throw new Error('bad id');
+  const kind = String(d.kind || '');
+  if (!LIBRARY_EXT[kind]) throw new Error('kind must be audio or image');
+  const file = String(d.file || '').replace(/\\/g, '/');
+  const ext = (file.split('.').pop() || '').toLowerCase();
+  if (!LIBRARY_EXT[kind].includes(ext)) throw new Error(`unsupported file type .${ext}`);
+  const url = pluginUrl(rec.id, file);          // проверяет, что путь внутри папки плагина
+  if (!rec.dir) throw new Error('plugin folder is unknown');
+  const sep = rec.dir.includes('\\') ? '\\' : '/';
+  const path = rec.dir.replace(/[\\/]+$/, '') + sep + file.replace(/^\.\//, '').split('/').join(sep);
+  const num = (v, lo, hi, def) => { const n = Number(v); return v !== undefined && v !== null && Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : def; };
+  const item = {
+    key: `${rec.id}.${id}`, pluginId: rec.id, id, kind, file, url, path,
+    name: localized(d.name, id), group: localized(d.group, ''),
+  };
+  if (kind === 'image') {
+    item.duration = num(d.duration, 0.5, 600, 3);
+    const s = d.sticker && typeof d.sticker === 'object' ? d.sticker : null;
+    item.sticker = s ? {
+      corner: STICKER_CORNERS.includes(s.corner) ? s.corner : 'bottom-right',
+      size: num(s.size, 0.05, 1, 0.45), margin: num(s.margin, 0, 0.3, 0.04),
+    } : null;
+    item.border = d.border && typeof d.border === 'object' ? cleanBorder(d.border) : null;
+  } else {
+    item.volume = num(d.volume, 0, 2, 1);
+  }
+  return item;
+}
+
+/** Элементы «Библиотеки» включённых плагинов (по порядку плагинов и манифеста) */
+export function pluginLibrary() {
+  const out = [];
+  const recs = [...S.recs.values()].filter((r) => r.active && !r.builtin && r.library && r.library.length);
+  recs.sort((a, b) => pluginName(a).localeCompare(pluginName(b)));
+  for (const r of recs) for (const it of r.library) out.push({ ...it, plugin: pluginName(r) });
+  return out;
+}
+
+// ---------------------------------------------------------------------------
 // Включение / выключение
 // ---------------------------------------------------------------------------
 function activate(rec) {
@@ -248,6 +302,15 @@ function activate(rec) {
   reg('registerExportPreset', c.exportPresets, 'exportPreset');
   reg('registerTextStyle', c.textStyles, 'textStyle');
   reg('registerLoudnessTarget', c.loudnessTargets, 'loudnessTarget');
+  // 0.6.1: «Библиотека» — звуки и картинки из папки плагина (js/library.js)
+  rec.library = [];
+  for (const d of list(c.library)) {
+    try {
+      const it = libraryItemOf(rec, d);
+      if (rec.library.some((x) => x.id === it.id)) throw new Error('duplicate id');
+      rec.library.push(it);
+    } catch (e) { problem(`library ${d && d.id}`, e); }
+  }
   for (const a of list(c.actions)) {
     try { addAction(rec, a, null); } catch (e) { problem(`action ${a && a.id}`, e); }
   }
@@ -272,6 +335,7 @@ function deactivate(id, { silent = false } = {}) {
   const rec = S.recs.get(id);
   if (!rec || rec.builtin || !rec.active) return;
   rec.active = false;
+  rec.library = [];
   try { if (typeof registry.unregisterPlugin === 'function') registry.unregisterPlugin(id); } catch (e) { warn(rec, 'unregister', e); }
   try { unregisterActions(id); } catch (e) { warn(rec, 'actions', e); }
   try { unregisterPresets(id); } catch (e) { warn(rec, 'presets', e); }

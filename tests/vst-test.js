@@ -123,12 +123,12 @@ const vstFx = (uid, name, extra = {}) => ({ type: /^clap:/.test(uid) ? 'clap' : 
   ok(ins.includes('C:/m/v.mp4'), 'видео клипа открывается для картинки');
   const fl = b.filter.split(';\n');
   const vca = fl.find((x) => x.startsWith(`[${idx('C:/cache/vst/vc1.wav')}:a]`));
-  ok(vca && /volume=0\.800000,asetpts=PTS-STARTPTS,apad,atrim=duration=4\.000000,adelay=delays=0:all=1\[va0\]$/.test(vca), `звук видеоклипа из WAV: ${vca}`);
+  ok(vca && /volume=0\.800000,asetpts=PTS-STARTPTS,apad,atrim=duration=4\.000000,adelay=delays=0:all=1,asetpts=N\/SR\/TB\[va0\]$/.test(vca), `звук видеоклипа из WAV: ${vca}`);
   const a1 = fl.find((x) => x.startsWith(`[${idx('C:/cache/vst/ac1.wav')}:a]`));
-  ok(a1 && !/atempo|bass=/.test(a1) && /volume=0\.500000/.test(a1) && /afade=t=in:st=0\.000000:d=0\.300000/.test(a1) && /adelay=delays=2000:all=1\[m0\]$/.test(a1),
+  ok(a1 && !/atempo|bass=/.test(a1) && /volume=0\.500000/.test(a1) && /afade=t=in:st=0\.000000:d=0\.300000/.test(a1) && /adelay=delays=2000:all=1,asetpts=N\/SR\/TB\[m0\]$/.test(a1),
     `аудиоклип из WAV: без atempo и эффектов, громкость, затухание, место: ${a1}`);
   const t2 = fl.find((x) => x.startsWith(`[${idx('C:/cache/vst/tk2.wav')}:a]`));
-  ok(t2 && /volume=0\.700000,asetpts=PTS-STARTPTS,adelay=delays=0:all=1\[tk\d+_\d+\]$/.test(t2), `дорожка из WAV: громкость дорожки, adelay 0: ${t2}`);
+  ok(t2 && /volume=0\.700000,asetpts=PTS-STARTPTS,adelay=delays=0:all=1,asetpts=N\/SR\/TB\[tk\d+_\d+\]$/.test(t2), `дорожка из WAV: громкость дорожки, adelay 0: ${t2}`);
   ok(!/acompressor|afftdn/.test(b.filter), 'эффекты цепочек с рендером в граф экспорта не попадают');
   ok(b.duration === 6 && b.warnings.length === 0, `длина ролика и предупреждения: ${b.duration}, ${JSON.stringify(b.warnings)}`);
 
@@ -150,7 +150,7 @@ const vstFx = (uid, name, extra = {}) => ({ type: /^clap:/.test(uid) ? 'clap' : 
     { id: 'x1', mediaId: 'v', in: 0, out: 3, start: 0, volume: 1 },
     { id: 'x2', mediaId: 'v', in: 5, out: 8, start: 3, volume: 1, transition: { type: 'fade', duration: 1 }, afx: [vstFx(UID_A, 'Alpha')] }] };
   const tb = plan.buildExport(tp, { ...S, assets: { vst: { clips: { x2: { path: 'C:/cache/vst/x2.wav' } }, tracks: {} } } });
-  ok(/atrim=duration=3\.000000,afade=t=in:st=0:d=0\.500000,adelay=delays=3000:all=1\[va1\]/.test(tb.filter), 'переход: WAV ставится на начало клипа, появление за половину перехода');
+  ok(/atrim=duration=3\.000000,afade=t=in:st=0:d=0\.500000,adelay=delays=3000:all=1,asetpts=N\/SR\/TB\[va1\]/.test(tb.filter), 'переход: WAV ставится на начало клипа, появление за половину перехода');
 
   section('Движок (если программа собрана)');
   let ff = null;

@@ -5,7 +5,7 @@ import { speedOf, tlLen, clipEnd, srcAt, tlAt, MIN_SPEED, MAX_SPEED } from './cl
 import { newAudioFx } from './audioFx.js';
 import { effectById } from './effects.js';
 import { MIN_DURATION as TR_MIN, MAX_DURATION as TR_MAX, DEFAULT_DURATION as TR_DEFAULT } from './transitions.js';
-import { cleanTransform } from './transform.js';
+import { cleanTransform, cleanBlurFill, FIT_MODES } from './transform.js';
 import { cleanText, TEXT_MAX } from './textModel.js';
 import { isGraphic, graphicOf, graphicKind, graphicFields, graphicData, graphicLength } from './graphicKinds.js';
 import { cleanBorder } from './border.js';
@@ -140,9 +140,12 @@ export function normalizeProject(p) {
       c[g.field] = graphicData(c);
       const d = Math.min(TEXT_MAX, Math.max(MIN_CLIP, (Number(c.out) || 0) - (Number(c.in) || 0)) || g.defaultDur);
       c.in = 0; c.out = d; c.muted = true;
-      delete c.mediaId; delete c.speed; delete c.link; delete c.noAudio; delete c.crop; delete c.fit; delete c.effects; delete c.afx; delete c.border;
+      delete c.mediaId; delete c.speed; delete c.link; delete c.noAudio; delete c.crop; delete c.fit; delete c.blurFill; delete c.effects; delete c.afx; delete c.border;
     } else {
       if (c.kind !== undefined) delete c.kind;
+      // 0.6.1: подгонка — только известные режимы; параметры размытого фона — только у 'blur'
+      if (c.fit !== undefined && (!FIT_MODES.includes(c.fit) || c.fit === 'contain')) delete c.fit;
+      if (c.fit === 'blur') { const bf = cleanBlurFill(c.blurFill); if (bf) c.blurFill = bf; else delete c.blurFill; } else delete c.blurFill;
       // 0.5.0: обводка и скругление углов (border.js)
       if (c.border !== undefined) { const b = cleanBorder(c.border); if (b) c.border = b; else delete c.border; }
     }
@@ -1260,16 +1263,33 @@ class Store {
     return true;
   }
 
-  // Подгонка кадра видеоклипов: 'contain' (вписать, по умолчанию) | 'cover' (заполнить) | 'stretch' (растянуть).
-  // ids — список клипов (один шаг отмены на всех)
-  setFit(ids, fit) {
+  // Подгонка кадра видеоклипов: 'contain' (вписать, по умолчанию) | 'cover' (заполнить) | 'stretch' (растянуть)
+  // | 'blur' (вписать на размытой копии — transform.js). ids — список клипов (один шаг отмены на всех).
+  // blurFill — параметры размытого фона ({ blur, dim }) для всех ids; без него у клипов остаются свои.
+  setFit(ids, fit, blurFill = undefined) {
     const set = new Set(ids);
+    if (!FIT_MODES.includes(fit)) fit = 'contain';
     this.mutate((p) => {
       for (const c of allVideo(p)) {
-        if (!set.has(c.id)) continue;
-        if (!fit || fit === 'contain') delete c.fit; else c.fit = fit;
+        if (!set.has(c.id) || isGraphic(c)) continue;
+        if (fit === 'contain') delete c.fit; else c.fit = fit;
+        const bf = fit === 'blur' ? cleanBlurFill(blurFill === undefined ? c.blurFill : blurFill) : null;
+        if (bf) c.blurFill = bf; else delete c.blurFill;
       }
     });
+  }
+
+  // Параметры размытого фона (подгонка 'blur'): patch поверх текущих. live — без записи в историю (ползунки).
+  setBlurFill(ids, patch, { live = false } = {}) {
+    const set = new Set(Array.isArray(ids) ? ids : [ids]);
+    const fn = (p) => {
+      for (const c of allVideo(p)) {
+        if (!set.has(c.id) || c.fit !== 'blur') continue;
+        const bf = cleanBlurFill(patch, c.blurFill);
+        if (bf) c.blurFill = bf; else delete c.blurFill;
+      }
+    };
+    if (live) this.live(fn); else this.mutate(fn);
   }
 
   // Трансформ видеоклипов (transform.js): patch накладывается на текущий трансформ каждого клипа;
@@ -1508,6 +1528,38 @@ class Store {
     };
     const tf = cleanTransform(transform || null);
     if (tf) clip.transform = tf;
+    let ok = true;
+    this.mutate((p) => {
+      const tracks = p.videoTracks || [];
+      if (lane && lane !== 'new') {
+        const L = vlane(p, lane);
+        if (!L || L.locked) { ok = false; return; }
+        L.clips.push(clip);
+        overwriteVideo(p, clip, clip.start);
+        return;
+      }
+      let tr = lane === 'new' ? null : [...tracks].reverse().find((x) => !x.locked && x.clips.every((c) => end(c) <= clip.start + ADJ || c.start >= clip.start + d - ADJ));
+      if (!tr) { tr = newVideoTrack(); p.videoTracks = [...tracks, tr]; }
+      tr.clips.push(clip);
+    });
+    if (!ok) return null;
+    if (select) this.select({ kind: 'video', id: clip.id });
+    return clip;
+  }
+
+  // 0.6.1: картинка (или видео) из «Библиотеки» плагина — на верхнюю видеодорожку, как графический клип:
+  //   lane — дорожка ('new' — новая верхняя; по умолчанию — верхняя, где свободно; под клипом затирается),
+  //   duration — длина (картинка), transform / border — положение наклейки и рамка.
+  addOverlayMedia(mediaId, { at = this.time, duration = null, lane = null, transform = null, border = null, select = true } = {}) {
+    const m = this.media(mediaId);
+    if (!m || !m.hasVideo) return null;
+    const still = m.isImage && !m.isAnimation;
+    const d = clamp(Number(duration) || (still ? 5 : m.duration), MIN_CLIP, m.duration);
+    const clip = this.newClip(mediaId, { in: 0, out: d, start: Math.max(0, Number(at) || 0) });
+    const tf = cleanTransform(transform || null);
+    if (tf) clip.transform = tf;
+    const bd = border ? cleanBorder(border) : null;
+    if (bd) clip.border = bd;
     let ok = true;
     this.mutate((p) => {
       const tracks = p.videoTracks || [];

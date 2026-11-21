@@ -13,6 +13,8 @@ export default {
   'Фильтры FFmpeg при экспорте: {list}': 'FFmpeg filters on export: {list}',
   // plugins/host.js
   'Нет манифеста plugin.json': 'No plugin.json manifest',
+  'Плагин «{name}»': 'Plugin “{name}”',
+  'Прослушать': 'Listen',
   'Недопустимый id плагина': 'Invalid plugin id',
   'Установка не вернула id плагина': 'The installer did not return a plugin id',
   'В проекте есть эффекты плагинов, которых нет или они выключены: {list}. Они не применяются, но остаются в проекте — установите или включите плагин.':

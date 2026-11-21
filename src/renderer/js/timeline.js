@@ -703,6 +703,7 @@ export class Timeline {
     if (fxl.length) label.append(h('span', { class: 'ci fxb', title: t('Эффекты: {list}', { list: fxl.map((x) => effectById(x).name).join(', ') }) }, 'fx'));
     if (c.fit === 'cover') label.append(h('span', { class: 'ci fxb', title: t('Заполняет кадр (края обрезаны)') }, '▣'));
     if (c.fit === 'stretch') label.append(h('span', { class: 'ci fxb', title: t('Растянут на весь кадр') }, '⇔'));
+    if (c.fit === 'blur') label.append(h('span', { class: 'ci fxb', title: t('Размытое заполнение: поля — размытая копия') }, '◫'));
     if (activeFx(c.afx).length) label.append(h('span', { class: 'ci fxb', title: t('Аудиоэффекты: {fx}', { fx: fxSummary(c.afx) }) }, 'ƒx'));
     if (speedOf(c) !== 1) label.append(h('span', { class: 'ci speed', title: t('Скорость клипа') }, fmtSpeed(speedOf(c))));
     if (c.transform && !isIdentity(tfOf(c))) label.append(h('span', { class: 'ci tf', title: t('Положение, масштаб или поворот изменены (инспектор → «Трансформ»)'), html: icon('transform', 13) }));
@@ -1257,6 +1258,24 @@ export class Timeline {
     const L = lane !== 'new' ? store.vlane(lane) : null;
     if (L && L.locked) { toast(t('Дорожка «{name}» закрыта замком', { name: store.trackName(L.id) }), 'info', 1600); return null; }
     return store.addGraphicClip(kind, data, { at: this.dropTime(x), lane });
+  }
+
+  // 0.6.1: куда отпустили плитку плагина из «Библиотеки». Картинка-наклейка → { kind: 'video', lane, at }: верхняя
+  // дорожка под курсором, иначе (основная, аудио, пусто) lane null — свободная верхняя. Звук → { kind: 'audio', track, at }:
+  // аудиодорожка под курсором («новая» — новая), иначе track null — свободная. null — дорожка под замком, false — мимо.
+  dropLibraryTarget(x, y, wantsVideo) {
+    [x, y] = this.local(x, y);
+    const tg = this.dropTargetAt(x, y);
+    this.dragLeave();
+    if (!tg) return false;
+    if (wantsVideo) {
+      const lane = tg.kind === 'video' && tg.vlane && tg.vlane !== MAIN_LANE ? tg.vlane : null;
+      const L = lane ? store.vlane(lane) : null;
+      if (L && L.locked) { toast(t('Дорожка «{name}» закрыта замком', { name: store.trackName(L.id) }), 'info', 1600); return null; }
+      return { kind: 'video', lane, at: this.dropTime(x) };
+    }
+    const track = tg.kind === 'audio' ? tg.track : tg.kind === 'newtrack' ? 'new' : null;
+    return { kind: 'audio', track, at: tg.kind === 'audio' || tg.kind === 'newtrack' ? this.xToTime(x) : store.time };
   }
 
   initDrop() {}

@@ -1,0 +1,20 @@
+{
+  "id": "library-mini",
+  "name": { "ru": "Тест библиотеки", "en": "Library test" },
+  "version": "1.0.0",
+  "apiVersion": 1,
+  "minAppVersion": "0.6.1",
+  "description": "Фикстура ui-selftest25: contributes.library (уменьшенные картинки и звук плагина «Реакции зала»)",
+  "contributes": {
+    "library": [
+      { "id": "boo", "kind": "audio", "file": "boo.ogg", "volume": 0.8,
+        "name": { "ru": "Освистывание", "en": "Booing" }, "group": { "ru": "Звуки зала", "en": "Crowd sounds" } },
+      { "id": "facepalm", "kind": "image", "file": "facepalm.jpg", "duration": 3,
+        "name": { "ru": "Фейспалм", "en": "Facepalm" }, "group": { "ru": "Мемы-реакции", "en": "Reaction memes" },
+        "sticker": { "corner": "bottom-right", "size": 0.45, "margin": 0.04 }, "border": { "width": 0.0025, "color": "#ffffff", "radius": 0.018 } },
+      { "id": "wow", "kind": "image", "file": "wow.jpg", "duration": 2,
+        "name": { "ru": "Восторг", "en": "Wow" }, "group": { "ru": "Мемы-реакции", "en": "Reaction memes" } }
+    ]
+  },
+  "permissions": []
+}

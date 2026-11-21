@@ -4,6 +4,7 @@
 import { store, ASPECTS } from './store.js';
 import { h, $, icon, toast, t } from './util.js';
 import { attachPopover } from './popover.js';
+import { blurFillOf, BLUR_FILL_DEFAULT } from './transform.js';
 
 const ASPECT_LIST = [
   ['auto', t('Как у видео')], ['16:9', t('16:9 — горизонтальное')], ['9:16', t('9:16 — вертикальное')],
@@ -13,7 +14,32 @@ const FITS = [
   ['contain', t('Вписать'), t('Весь кадр виден, по краям — поля цвета фона')],
   ['cover', t('Заполнить'), t('Без полей, лишнее по краям обрезается')],
   ['stretch', t('Растянуть'), t('На весь кадр без сохранения пропорций')],
+  ['blur', t('Размытое заполнение'), t('Весь кадр виден, поля — размытая копия клипа')],
 ];
+
+// Ползунки размытого фона (подгонка 'blur'): во время перетаскивания — без истории, отпустили — один шаг отмены
+let sliding = false;
+function blurFillControls(c) {
+  const bf = blurFillOf(c) || BLUR_FILL_DEFAULT;
+  const row = (key, name) => {
+    const val = h('span', { class: 'muted small' }, `${Math.round(bf[key] * 100)} %`);
+    const input = h('input', { type: 'range', min: '0', max: '100', step: '1', value: String(Math.round(bf[key] * 100)), dataset: { blurfill: key } });
+    let before = null;   // снимок проекта до перетаскивания — в историю один шаг (store.commitFrom)
+    input.addEventListener('input', () => {
+      if (!sliding) { sliding = true; before = store.snapshot(); }
+      val.textContent = `${input.value} %`;
+      store.setBlurFill([c.id], { [key]: Number(input.value) / 100 }, { live: true });
+    });
+    input.addEventListener('change', () => {
+      sliding = false;
+      store.setBlurFill([c.id], { [key]: Number(input.value) / 100 }, { live: true });
+      store.commitFrom(before || null);
+      before = null;
+    });
+    return h('label', { class: 'pop-range' }, h('span', { class: 'row space' }, h('span', {}, name), val), input);
+  };
+  return h('div', { class: 'pop-blurfill' }, row('blur', t('Размытие')), row('dim', t('Затемнение')));
+}
 const BG_SWATCHES = [['#000000', t('Чёрный')], ['#ffffff', t('Белый')], ['#1f1f24', t('Тёмно-серый')], ['#808080', t('Серый')], ['#00b140', t('Зелёный (хромакей)')], ['#0047bb', t('Синий (хромакей)')]];
 
 // Маленькая картинка пропорций для кнопки формата
@@ -55,11 +81,12 @@ export function initViewbar() {
         class: `pop-option${cur === id ? ' on' : ''}`, dataset: { fit: id },
         onclick: () => store.setFit([c.id], id),
       }, h('span', { class: `fit-demo fit-${id}` }, h('span')), h('span', { class: 'po-text' }, h('b', {}, name), h('span', { class: 'muted small' }, hint)))),
+      cur === 'blur' ? blurFillControls(c) : null,
       h('div', { class: 'pop-sep' }),
       h('button', {
         class: 'btn ghost small wide-left', dataset: { act: 'fit-all' },
         onclick: () => {
-          store.setFit(store.allVideo().map((x) => x.id), cur);
+          store.setFit(store.allVideo().map((x) => x.id), cur, cur === 'blur' ? (c.blurFill || {}) : undefined);
           toast(t('Подгонка «{name}» — для всех видеоклипов', { name: FITS.find((f) => f[0] === cur)[1] }), 'success', 2200);
         },
       }, t('Применить ко всем видеоклипам')));
@@ -119,7 +146,7 @@ export function initViewbar() {
     const f = store.sourceFormat();
     info.textContent = `${f.width} × ${f.height} · ${f.fps} fps`;
     aspectBtn.classList.toggle('active', !!store.project.aspect);
-    for (const p of [fitPop, aspectPop, bgPop]) if (p.isOpen) p.refresh();
+    for (const p of [fitPop, aspectPop, bgPop]) if (p.isOpen && !(sliding && p === fitPop)) p.refresh();
     if (!c && fitPop.isOpen) fitPop.close();
   };
   store.on('project', update);

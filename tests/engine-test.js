@@ -141,6 +141,70 @@ async function viewTest(enc, ib) {
 }
 const isBlue = ([r, g, b]) => b > 150 && r < 80 && g < 80;
 
+// 0.6.1: нарезки из webm (VP9 + Opus) встык — звук не должен обрываться на смене клипа. adelay у входа с -ss
+// отдавал тишину с pts = NOPTS, amix обрывал весь звук на начале второго клипа (Devhacks2Short1.mp4: звук до 7,8 с).
+async function cutsAudioTest(enc) {
+  console.log('Звук нарезок из webm:');
+  const { pathToFileURL } = require('url');
+  const plan = await import(pathToFileURL(path.join(__dirname, '..', 'src', 'renderer', 'js', 'exportPlan.js')).href);
+  const src = await make('w_opus.webm', ['-f', 'lavfi', '-i', 'testsrc2=size=640x360:rate=30', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000',
+    '-t', '12', '-c:v', 'libvpx-vp9', '-deadline', 'realtime', '-cpu-used', '8', '-b:v', '300k', '-c:a', 'libopus', '-b:a', '96k']);
+  const iw = await ff.probe(src);
+  const clip = (inn, outT, start) => ({ mediaId: 'w', in: inn, out: outT, start, volume: 1, muted: false, fadeIn: 0, fadeOut: 0 });
+  const pr = { media: { w: iw }, videoClips: [clip(0.85, 4.85, 0), clip(1.5, 5.5, 4), clip(6.2, 9.2, 8)], audioTracks: [] };
+  const b = plan.buildExport(pr, { width: 640, height: 360, fps: 30 });
+  assert(/adelay=delays=4000:all=1,asetpts=N\/SR\/TB/.test(b.filter), 'после adelay время пересчитывается по сэмплам');
+  const out = path.join(DIR, 'out_cuts_audio.mp4');
+  await startExport(pr, { width: 640, height: 360, fps: 30, codec: enc.h264_nvenc ? 'h264_nvenc' : 'libx264', quality: 'compact', output: out });
+  const io = await ff.probe(out);
+  const ad = io.audioStreams && io.audioStreams[0] ? Number(io.audioStreams[0].duration || io.duration) : 0;
+  assert(io.hasAudio && Math.abs(io.duration - 11) < 0.15, `ролик ${io.duration} с со звуком`);
+  const { stderr } = await ff.run(ff.findBinaries().ffmpeg, ['-hide_banner', '-i', out, '-vn', '-af', 'silencedetect=n=-40dB:d=0.3', '-f', 'null', '-']);
+  const gaps = (stderr.match(/silence_start: [\d.]+/g) || []);
+  assert(!gaps.length, `звук без провалов на стыках 4 и 8 с (тишина: ${gaps.join(', ') || 'нет'}, поток ${ad || '?'} с)`);
+}
+
+// 0.6.1: подгонка 'blur' (размытое заполнение): поля — размытая затемнённая копия клипа, а не цвет фона.
+// Красное видео 16:9 в кадре 9:16 на зелёном фоне: 0–2 с — основная дорожка (scaleChain), 2–4 с — с трансформом
+// и без затемнения (слой на холсте-копии), 4–6 с — верхняя дорожка над пустотой (фон во весь кадр, не «direct»).
+async function blurFillTest(enc) {
+  console.log('Размытое заполнение:');
+  const { pathToFileURL } = require('url');
+  const js = (f) => import(pathToFileURL(path.join(__dirname, '..', 'src', 'renderer', 'js', f)).href);
+  const plan = await js('exportPlan.js');
+  const tfm = await js('transform.js');
+  // Модель: clean/умолчания, наклейка в углу
+  assert(tfm.cleanBlurFill({ blur: 0.5, dim: 0.25 }) === null && JSON.stringify(tfm.cleanBlurFill({ blur: 2, dim: -1 })) === '{"blur":1,"dim":0}', 'cleanBlurFill: умолчания и пределы');
+  assert(tfm.fitsInside({ fit: 'blur' }) && !tfm.fitsInside({ fit: 'cover' }) && tfm.blurFillOf({ fit: 'cover' }) === null, 'blur — геометрия «вписать»');
+  const st = tfm.stickerTransform({ corner: 'bottom-right', size: 0.45, margin: 0.04 }, 1080, 1920, 1);
+  const w = 1080 * st.scale; const cx = 540 + st.x * 1080; const cy = 960 + st.y * 1920;
+  assert(Math.abs(w - 486) < 0.01 && Math.abs(cx + w / 2 - (1080 - 43.2)) < 0.01 && Math.abs(cy + w / 2 - (1920 - 43.2)) < 0.01,
+    `наклейка 1:1 в 9:16: ширина ${w.toFixed(1)}, правый нижний угол с отступом 43,2`);
+  const st2 = tfm.stickerTransform({ corner: 'top-left', size: 0.45, margin: 0.04 }, 1920, 1080, 1338 / 1176);
+  const w2 = 1080 * (1338 / 1176) * st2.scale;
+  assert(Math.abs(w2 - 486) < 0.01 && Math.abs(960 + st2.x * 1920 - w2 / 2 - 43.2) < 0.01, `наклейка в 16:9 слева сверху: ширина ${w2.toFixed(1)}`);
+
+  const red = await make('bf_red.mp4', ['-f', 'lavfi', '-i', 'color=c=red:s=640x360:r=30', '-t', '6', '-c:v', 'libx264', '-pix_fmt', 'yuv420p']);
+  const ir = await ff.probe(red);
+  const clip = (start, extra = {}) => ({ mediaId: 'r', in: 0, out: 2, start, volume: 1, muted: true, fadeIn: 0, fadeOut: 0, fit: 'blur', ...extra });
+  const pr = {
+    media: { r: ir }, background: '#00ff00', aspect: '9:16',
+    videoClips: [clip(0), clip(2, { transform: { scale: 0.6 }, blurFill: { dim: 0 } })],
+    videoTracks: [{ id: 'vtk_up', clips: [clip(4)] }],
+    audioTracks: [],
+  };
+  const b = plan.buildExport(pr, { width: 720, height: 1280, fps: 30 });
+  assert((b.filter.match(/gblur=sigma=/g) || []).length === 3 && (b.filter.match(/split=2/g) || []).length === 3, 'в графе три размытых фона (split + gblur)');
+  assert(/lutyuv=y=16\+\(val-16\)\*0\.7875:u=128\+\(val-128\)\*0\.7875/.test(b.filter) && b.filter.split('lutyuv').length === 3, 'затемнение 0,25 → яркость и цветность ×0,7875, у клипа с dim 0 его нет');
+  const out = path.join(DIR, 'out_blurfill.mp4');
+  await startExport(pr, { width: 720, height: 1280, fps: 30, codec: enc.h264_nvenc ? 'h264_nvenc' : 'libx264', quality: 'high', output: out });
+  const reddish = ([r, g, bb]) => r > 60 && r > g * 2 && r > bb * 2;
+  const f1 = await rgb(out, 1); const f2 = await rgb(out, 3); const f3 = await rgb(out, 5);
+  assert(isRed(f1.px(32, 18)) && reddish(f1.px(32, 2)) && f1.px(32, 2)[0] < f1.px(32, 18)[0] * 0.85, `основная дорожка: в центре ${f1.px(32, 18)}, поле — тёмно-красное ${f1.px(32, 2)} (не зелёное)`);
+  assert(isRed(f2.px(32, 18)) && reddish(f2.px(2, 2)) && f2.px(2, 2)[0] > f1.px(32, 2)[0] + 20, `с трансформом: угол ${f2.px(2, 2)} — копия без затемнения`);
+  assert(reddish(f3.px(32, 2)) && !isGreen(f3.px(2, 34)), `верхняя дорожка над пустотой: поле ${f3.px(32, 2)}, фона не видно`);
+}
+
 // Эффект плагина (декларативное описание с параметром) реально экспортируется FFmpeg'ом:
 // виньетка затемняет углы, середина кадра остаётся красной; неизвестный эффект пропускается с предупреждением
 async function pluginTest(enc) {
@@ -857,7 +921,7 @@ async function stabTest(enc) {
   // node tests/engine-test.js --only tracks — только одна группа проверок (для отладки)
   const only = process.argv.includes('--only') ? process.argv[process.argv.indexOf('--only') + 1] : null;
   if (only) {
-    await ({ tracks: tracksTest, effects: effectsTest, speed: speedTest, plugin: pluginTest, text: textTest, border: borderTest, timer: timerTest, encoders: encodersTest, compare: compareTest, stab: stabTest })[only](enc);
+    await ({ tracks: tracksTest, effects: effectsTest, speed: speedTest, plugin: pluginTest, text: textTest, border: borderTest, timer: timerTest, encoders: encodersTest, compare: compareTest, stab: stabTest, blurfill: blurFillTest, cuts: cutsAudioTest })[only](enc);
     console.log('\nВСЁ ОК');
     return;
   }
@@ -967,6 +1031,8 @@ async function stabTest(enc) {
 
   await effectsTest(enc);
   await viewTest(enc, ib);
+  await blurFillTest(enc);
+  await cutsAudioTest(enc);
   await speedTest(enc);
   await pluginTest(enc);
   await tracksTest(enc);

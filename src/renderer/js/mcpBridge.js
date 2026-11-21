@@ -3,7 +3,7 @@
 //
 // Все правки идут через store — с историей, поэтому пользователь видит их сразу и может отменить Ctrl+Z.
 import { store, placeVideo, overwriteVideo, moveToLane, MIN_CLIP, newTrack, MAIN_LANE } from './store.js';
-import { TF_LIMITS, tfOf, isIdentity } from './transform.js';
+import { TF_LIMITS, tfOf, isIdentity, blurFillOf, FIT_MODES } from './transform.js';
 import { importPaths } from './media.js';
 import { toggleReverse, freezeFrameAt, isReversed, isFreeze } from './fx.js';
 import { TRANSITIONS, MIN_DURATION as TR_MIN, MAX_DURATION as TR_MAX } from './transitions.js';
@@ -204,7 +204,8 @@ function describeClip(c, kind, track = null) {
       o.stabilization = { effect: st.effect, analysis: s(st.analysis), preview: st.preview ? s(st.proxy) : 'off' };
     }
   }
-  if (kind === 'video' && (c.fit === 'cover' || c.fit === 'stretch')) o.fit = c.fit;
+  if (kind === 'video' && (c.fit === 'cover' || c.fit === 'stretch' || c.fit === 'blur')) o.fit = c.fit;
+  if (kind === 'video' && c.fit === 'blur') o.blur_fill = blurFillOf(c);
   if (kind === 'video' && c.crop) o.crop = { left: c.crop.l, top: c.crop.t, right: c.crop.r, bottom: c.crop.b };
   if (kind === 'video') {
     const vf = store.findClip(c.id);
@@ -564,6 +565,21 @@ const TOOLS = {
       if (crop.l + crop.r > 0.95 || crop.t + crop.b > 0.95) fail('The crop leaves less than 5% of the frame.');
     }
     if (speed !== undefined && m.isImage && !m.isAnimation) fail('A still image has no speed; change its \"duration\" instead.');
+    const fit = enumArg(args, 'fit', FIT_MODES);
+    if (fit !== undefined && f.kind !== 'video') fail('"fit" applies only to video clips.');
+    let blurFill;
+    if (args.blur_fill !== undefined && args.blur_fill !== null) {
+      if (f.kind !== 'video') fail('"blur_fill" applies only to video clips.');
+      if ((fit || c.fit) !== 'blur') fail('"blur_fill" needs fit "blur".');
+      if (typeof args.blur_fill !== 'object') fail('"blur_fill" must be an object { blur, dim } with values 0..1.');
+      blurFill = {};
+      for (const k of ['blur', 'dim']) {
+        if (args.blur_fill[k] === undefined) continue;
+        const v = Number(args.blur_fill[k]);
+        if (!Number.isFinite(v) || v < 0 || v > 1) fail(`blur_fill.${k} must be 0..1.`);
+        blurFill[k] = v;
+      }
+    }
     let vtid = strArg(args, 'video_track_id');
     if (vtid !== undefined && f.kind !== 'video') fail('"video_track_id" applies only to video clips.');
     vtid = videoTrackArg(vtid);
@@ -607,6 +623,8 @@ const TOOLS = {
       }
     });
     if (crop) store.setCrop([c.id], crop);
+    if (fit !== undefined) store.setFit([c.id], fit, fit === 'blur' && blurFill ? { ...(c.blurFill || {}), ...blurFill } : undefined);
+    else if (blurFill) store.setBlurFill([c.id], blurFill);
     if (speed !== undefined && Math.abs(speed - speedOf(c)) > 1e-6) store.setSpeed(c.id, speed, { ripple: !!shiftFollowing });
     ai(t('изменён клип'));
     const d = describeById(c.id);

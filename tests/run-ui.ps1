@@ -59,6 +59,10 @@ if ($Plugins -or $Test -eq 'ui-selftest13') {
 if ($Test -eq 'ui-selftest14') {
   Copy-Item (Join-Path $App 'examples\plugins\layouts') $plg -Recurse -Force
 }
+# ui-selftest25 (0.6.1): плагин со звуками и картинками для «Библиотеки» (contributes.library)
+if ($Test -eq 'ui-selftest25') {
+  Copy-Item (Join-Path $App 'tests\fixtures\library-plugin\*') $plg -Recurse -Force
+}
 # Аудиоплагины VST3/CLAP: только тестовые (FFM_AUDIO_PLUGIN_PATH отключает системные папки), для ui-selftest17 —
 # собранные примеры (cargo build --profile fast --example vst3_test_gain --example clap_test_gain)
 $aplg = Join-Path $T 'audio-plugins'

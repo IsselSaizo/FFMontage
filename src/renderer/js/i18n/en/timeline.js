@@ -111,6 +111,7 @@ export default {
   'Эффекты: {list}': 'Effects: {list}',
   'Заполняет кадр (края обрезаны)': 'Fills the frame (edges cropped)',
   'Растянут на весь кадр': 'Stretched to fill the frame',
+  'Размытое заполнение: поля — размытая копия': 'Blur fill: the bars are a blurred copy',
   'Аудиоэффекты: {fx}': 'Audio effects: {fx}',
   'Скорость клипа': 'Clip speed',
   'Связан со звуком/видео: двигаются и режутся вместе (Alt — только этот клип)': 'Linked to audio/video: they move and split together (Alt — this clip only)',

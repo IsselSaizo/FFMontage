@@ -146,6 +146,9 @@ pub fn valid_host(h: &str) -> bool {
 }
 
 const PERMISSIONS: &[&str] = &["project:read", "project:write", "ui:panel", "storage", "notify"];
+/// Типы файлов contributes.library (как в js/plugins/host.js LIBRARY_EXT)
+const LIBRARY_AUDIO: &[&str] = &["wav", "mp3", "ogg", "oga", "opus", "m4a", "flac"];
+const LIBRARY_IMAGE: &[&str] = &["png", "jpg", "jpeg", "webp", "gif"];
 
 fn text_or_lang(v: &Value) -> bool {
     match v {
@@ -174,6 +177,22 @@ pub fn check_manifest(m: &Value, dir: Option<&Path>) -> R<String> {
     if m["apiVersion"].as_u64() != Some(API_VERSION) {
         return Err(tr!("apiVersion должен быть {}", "apiVersion must be {}", API_VERSION));
     }
+    // 0.6.1: плагину нужна программа не старее minAppVersion (сравниваются числа: хотфикс X.Y.Z-hotfix.N считается X.Y.Z)
+    if !m["minAppVersion"].is_null() {
+        let min = m["minAppVersion"].as_str().unwrap_or("");
+        let num = |v: &str| v.split(['-', '+']).next().unwrap_or("").to_string();
+        match crate::bundled::cmp_versions(&num(env!("CARGO_PKG_VERSION")), &num(min)) {
+            None => return Err(tr!("minAppVersion — версия вида 0.6.1", "minAppVersion must be a version like 0.6.1").into()),
+            Some(std::cmp::Ordering::Less) => {
+                return Err(tr!(
+                    "нужна FF Montage {} или новее — обновите программу",
+                    "requires FF Montage {} or newer — update the app",
+                    min
+                ))
+            }
+            _ => {}
+        }
+    }
     if !m["description"].is_null() && !text_or_lang(&m["description"]) {
         return Err(tr!("description — строка или объект ru/en", "description must be a string or an ru/en object").into());
     }
@@ -201,12 +220,46 @@ pub fn check_manifest(m: &Value, dir: Option<&Path>) -> R<String> {
         if !c.is_object() {
             return Err(tr!("contributes — объект", "contributes must be an object").into());
         }
-        for k in
-            ["effects", "transitions", "audioEffects", "exportPresets", "textStyles", "loudnessTargets", "keymaps", "actions", "panels"]
-        {
+        for k in [
+            "effects",
+            "transitions",
+            "audioEffects",
+            "exportPresets",
+            "textStyles",
+            "loudnessTargets",
+            "keymaps",
+            "actions",
+            "panels",
+            "library",
+        ] {
             if !c[k].is_null() && !c[k].is_array() {
                 return Err(tr!("contributes.{} — массив", "contributes.{} must be an array", k));
             }
+        }
+        // 0.6.1: «Библиотека» — звуки и картинки из папки плагина (окно ставит их на таймлайн как обычные файлы)
+        for it in c["library"].as_array().into_iter().flatten() {
+            let id = it["id"].as_str().unwrap_or("");
+            if id.is_empty() {
+                return Err(tr!("у элемента библиотеки нет id", "a library item has no id").into());
+            }
+            let kind = it["kind"].as_str().unwrap_or("");
+            let file = it["file"].as_str().ok_or(tr!("у элемента библиотеки нет file", "a library item has no file"))?;
+            let ext = file.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+            let ok = match kind {
+                "audio" => LIBRARY_AUDIO.contains(&ext.as_str()),
+                "image" => LIBRARY_IMAGE.contains(&ext.as_str()),
+                _ => {
+                    return Err(tr!(
+                        "элемент библиотеки «{}»: kind — audio или image",
+                        "library item \"{}\": kind must be audio or image",
+                        id
+                    ))
+                }
+            };
+            if !ok {
+                return Err(tr!("элемент библиотеки «{}»: файл такого типа не подходит", "library item \"{}\": unsupported file type", id));
+            }
+            file_ok(file)?;
         }
         for p in c["panels"].as_array().into_iter().flatten() {
             if !p["id"].is_string() {
@@ -889,6 +942,12 @@ fn mime(p: &str) -> &'static str {
         "jpg" | "jpeg" => "image/jpeg",
         "gif" => "image/gif",
         "webp" => "image/webp",
+        // 0.6.1: звуки contributes.library (прослушивание в «Библиотеке»)
+        "wav" => "audio/wav",
+        "mp3" => "audio/mpeg",
+        "ogg" | "oga" | "opus" => "audio/ogg",
+        "m4a" => "audio/mp4",
+        "flac" => "audio/flac",
         "woff2" => "font/woff2",
         "ttf" => "font/ttf",
         "wasm" => "application/wasm",
@@ -1073,6 +1132,18 @@ mod tests {
         assert!(bad(&|m| m["permissions"] = json!(["net:example.com:8443"])));
         assert!(bad(&|m| m["ffmpeg"]["filters"] = json!(["movie"])));
         assert!(bad(&|m| m["ffmpeg"]["filters"] = json!(["lut3d"])));
+        // 0.6.1: minAppVersion и contributes.library
+        assert!(bad(&|m| m["minAppVersion"] = json!("999.0.0")));
+        assert!(bad(&|m| m["minAppVersion"] = json!("soon")));
+        assert!(!bad(&|m| m["minAppVersion"] = json!(env!("CARGO_PKG_VERSION"))));
+        assert!(!bad(&|m| m["minAppVersion"] = json!("0.1.0")));
+        assert!(bad(&|m| m["contributes"]["library"] = json!({})));
+        assert!(bad(&|m| m["contributes"]["library"] = json!([{ "id": "a", "kind": "video", "file": "a.mp4" }])));
+        assert!(bad(&|m| m["contributes"]["library"] = json!([{ "id": "a", "kind": "audio", "file": "a.png" }])));
+        assert!(bad(&|m| m["contributes"]["library"] = json!([{ "id": "a", "kind": "image", "file": "../a.png" }])));
+        assert!(bad(&|m| m["contributes"]["library"] = json!([{ "kind": "image", "file": "a.png" }])));
+        assert!(!bad(&|m| m["contributes"]["library"] =
+            json!([{ "id": "a", "kind": "image", "file": "img/a.PNG" }, { "id": "b", "kind": "audio", "file": "b.ogg" }])));
         // entry указан, но файла нет в папке
         let dir = std::env::temp_dir().join(format!("ffm-mtest-{}", stamp()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -1080,6 +1151,12 @@ mod tests {
         m["entry"] = json!("main.js");
         assert!(check_manifest(&m, Some(&dir)).is_err());
         std::fs::write(dir.join("main.js"), "").unwrap();
+        assert!(check_manifest(&m, Some(&dir)).is_ok());
+        // файл элемента библиотеки тоже должен быть в папке
+        m["contributes"]["library"] = json!([{ "id": "boo", "kind": "audio", "file": "sounds/boo.ogg" }]);
+        assert!(check_manifest(&m, Some(&dir)).is_err());
+        std::fs::create_dir_all(dir.join("sounds")).unwrap();
+        std::fs::write(dir.join("sounds").join("boo.ogg"), "").unwrap();
         assert!(check_manifest(&m, Some(&dir)).is_ok());
         let _ = std::fs::remove_dir_all(&dir);
     }
