@@ -87,10 +87,13 @@
     ok(cmp.compareState().dir === 'v', 'обратно вертикальный');
 
     // --- перемотка внутри клипа → пересчёт; смена параметра → пересчёт ---
-    const srcBefore = imgA.src;
+    // Новый расчёт — событие 'compare' 'ready' (compare.js run). По src не сравнивать: b_h264_1080p30 — статичные
+    // полосы, и с libx264 (CI без NVENC) кадры 2 с и 4 с побайтно одинаковые — тот же data:-адрес.
+    let ready = 0;
+    store.on('compare', (s) => { if (s === 'ready') ready++; });
     store.setTime(4); await sleep(50);
     ok(cmp.compareState() && cmp.compareState().busy, 'перемотка: пересчёт (с задержкой)');
-    const fresh = await until(() => cmp.compareState() && !cmp.compareState().busy && imgA.src !== srcBefore, 40000);
+    const fresh = await until(() => cmp.compareState() && !cmp.compareState().busy && ready > 0, 40000);
     const why = fresh ? '' : ` (${JSON.stringify(cmp.compareState())}, тост: «${[...document.querySelectorAll('.toast')].map((x) => x.textContent).join(' | ')}»)`;
     ok(fresh, `новые кадры после перемотки${why}`);
     const srcB2 = imgB.src;
