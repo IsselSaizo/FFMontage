@@ -90,7 +90,9 @@
     const srcBefore = imgA.src;
     store.setTime(4); await sleep(50);
     ok(cmp.compareState() && cmp.compareState().busy, 'перемотка: пересчёт (с задержкой)');
-    ok(await until(() => cmp.compareState() && !cmp.compareState().busy && imgA.src !== srcBefore), 'новые кадры после перемотки');
+    const fresh = await until(() => cmp.compareState() && !cmp.compareState().busy && imgA.src !== srcBefore, 40000);
+    const why = fresh ? '' : ` (${JSON.stringify(cmp.compareState())}, тост: «${[...document.querySelectorAll('.toast')].map((x) => x.textContent).join(' | ')}»)`;
+    ok(fresh, `новые кадры после перемотки${why}`);
     const srcB2 = imgB.src;
     store.setClip(clip.id, { fxp: { [fxId]: { s: 8 } } }); await sleep(50);
     ok(await until(() => cmp.compareState() && !cmp.compareState().busy && imgB.src !== srcB2), 'смена параметра эффекта — пересчёт ПОСЛЕ');

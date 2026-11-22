@@ -5,7 +5,8 @@
 //     до момента (не раньше start — начала отрезка клипа), фильтры «разогреваются», берётся кадр нужного момента
 //     (trim после эффектов, -frames:v 1).
 //   • Вход — только файл, разрешённый окну (plancheck::input_allowed), цепочка — plancheck::check_preview_chain.
-//   • Очередь — queue::slot (процессор), лимит времени, новый запрос отменяет предыдущий (GEN), compare_cancel — тоже.
+//   • Вне очереди фоновых задач (queue::cpu().take_now(), как экспорт), лимит времени, новый запрос отменяет
+//     предыдущий (GEN), compare_cancel — тоже.
 //   • Кэш: <кэш>/app/media/<ключ файла>/compare/<хэш>-a.jpg / -b.jpg (хэш — время, начало, цепочка, кадрирование,
 //     ширина); категория «прочее» в cache.rs, уходит вместе с медиа файла; в папке — не больше KEEP_FILES кадров.
 // Команда окна: compare_frames {req} → { before, after: base64 JPEG } | { cancelled: true }; движок: --engine compare.
@@ -154,6 +155,10 @@ fn answer(a: &Path, b: &Path, pair: (Vec<u8>, Vec<u8>), cached: bool) -> Value {
     })
 }
 
+fn superseded_now(my: u64) -> bool {
+    GEN.load(Ordering::SeqCst) != my
+}
+
 /// Запрос стал не последним — отменён
 async fn superseded(my: u64) {
     while GEN.load(Ordering::SeqCst) == my {
@@ -180,10 +185,12 @@ pub async fn frames(req: &Value, inputs: Inputs) -> Result<Value, String> {
         return Ok(answer(&fa, &fb, pair, true));
     }
     let cancelled = || Ok(json!({ "cancelled": true }));
-    let _slot = tokio::select! {
-        s = queue::slot(false) => s,
-        _ = superseded(my) => return cancelled(),
-    };
+    if superseded_now(my) {
+        return cancelled();
+    }
+    // 0.6.1: кадр шторки — ответ на действие пользователя (один кадр, один процесс: новый запрос отменяет старый),
+    // поэтому вне очереди, как экспорт: иначе он ждал миниатюры, пики и прокси (на 2-ядерной машине CI — дольше 20 с).
+    let _slot = queue::cpu().take_now();
     let (pa, pb) = (dir.join(format!("{key}-a.part.jpg")), dir.join(format!("{key}-b.part.jpg")));
     let args = build(&r, &file, &pa, &pb);
     let bin = ff::find();

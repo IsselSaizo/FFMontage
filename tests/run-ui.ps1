@@ -39,6 +39,20 @@ if ($Test -eq 'ui-selftest19') {
       -af "volume='if(between(t,2,3.5)+between(t,5,6),0,1)':eval=frame" -c:v libx264 -pix_fmt yuv420p -c:a aac -shortest $pp
   }
 }
+# ui-selftest26 (кадрирование в плеере): зелёное видео и «красное | синее» 1280×720
+if ($Test -eq 'ui-selftest26') {
+  $ff = @((Get-Command ffmpeg -ErrorAction SilentlyContinue | ForEach-Object Source), (Join-Path $App 'ffmpeg\bin\ffmpeg.exe'), (Join-Path $App 'ffmpeg\ffmpeg.exe')) +
+    @(Get-ChildItem (Split-Path -Parent $App) -Filter ffmpeg.exe -Recurse -Depth 3 -ErrorAction SilentlyContinue | ForEach-Object FullName) |
+    Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
+  $cg = "$T\cache\tmp\engine-test\cr_green.mp4"; $ch = "$T\cache\tmp\engine-test\cr_halves.mp4"
+  if ($ff -and -not (Test-Path $cg)) {
+    & $ff -v error -y -f lavfi -i 'color=0x00ff00:s=1280x720:r=30:d=4' -c:v libx264 -pix_fmt yuv420p $cg
+  }
+  if ($ff -and -not (Test-Path $ch)) {
+    & $ff -v error -y -f lavfi -i 'color=red:s=640x720:r=30:d=4' -f lavfi -i 'color=blue:s=640x720:r=30:d=4' `
+      -filter_complex '[0][1]hstack' -c:v libx264 -pix_fmt yuv420p $ch
+  }
+}
 $cfg = @{ version = 1; cacheDir = "$T\cache"; outputDir = "$T\out"; projectsDir = "$T\proj"; ffmpegDir = '' }
 if ($Lang) { $cfg.settings = @{ lang = $Lang } }
 $json = $cfg | ConvertTo-Json

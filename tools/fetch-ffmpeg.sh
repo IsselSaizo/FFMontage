@@ -8,10 +8,12 @@ set -euo pipefail
 DIR="$(cd "$(dirname "$0")/.." && pwd)"
 DEST="${1:-$DIR/ffmpeg}"
 
-# BtbN autobuild от 04.11.2026, ветка release/9.0 (n9.0.2-47-gb204e94e90), linux64 gpl
-PIN_TAG="autobuild-2026-11-04-12-51"
-PIN_FILE="ffmpeg-n9.0.2-47-gb204e94e90-linux64-gpl-9.0.tar.xz"
-PIN_SHA256="7e4d04689554492f579c34de8ef3c849c8d9023f65805341826590f52d413304"
+# BtbN хранит ежедневные autobuild ~2 недели, а сборки последнего дня месяца — годами: закреплять только
+# месячную (иначе CI и Release падают с 404, как с autobuild-2026-11-04-12-51).
+# BtbN autobuild от 31.10.2026, ветка release/9.0 (n9.0.2-39-g7adfbe40dc), linux64 gpl
+PIN_TAG="autobuild-2026-10-31-12-59"
+PIN_FILE="ffmpeg-n9.0.2-39-g7adfbe40dc-linux64-gpl-9.0.tar.xz"
+PIN_SHA256="73e29a56974ae5a651133a04584c7483b21afe941e17dc91d79814a758b608d3"
 
 if [ -n "${FFMPEG_URL:-}" ]; then
   URL="$FFMPEG_URL"

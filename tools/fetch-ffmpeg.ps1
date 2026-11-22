@@ -10,10 +10,12 @@ param([string]$Dest = (Join-Path (Split-Path -Parent $PSScriptRoot) 'ffmpeg'),
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
-# BtbN autobuild от 04.11.2026, ветка release/9.0 (n9.0.2-47-gb204e94e90), win64 gpl
-$PinTag = 'autobuild-2026-11-04-12-51'
-$PinFile = 'ffmpeg-n9.0.2-47-gb204e94e90-win64-gpl-9.0.zip'
-$PinSha256 = 'db2867364898bf8b68f5404b998165dfd8d31c9bfabc2a35d6e0c941bf33c1ea'
+# BtbN хранит ежедневные autobuild ~2 недели, а сборки последнего дня месяца — годами: закреплять только
+# месячную (иначе CI и Release падают с 404, как с autobuild-2026-11-04-12-51).
+# BtbN autobuild от 31.10.2026, ветка release/9.0 (n9.0.2-39-g7adfbe40dc), win64 gpl
+$PinTag = 'autobuild-2026-10-31-12-59'
+$PinFile = 'ffmpeg-n9.0.2-39-g7adfbe40dc-win64-gpl-9.0.zip'
+$PinSha256 = '693f3e224bc184b40524a62ca47526cfebaf2504414021b92fe75f677ad868b9'
 
 if (-not $Url) {
   $Url = "https://github.com/BtbN/FFmpeg-Builds/releases/download/$PinTag/$PinFile"

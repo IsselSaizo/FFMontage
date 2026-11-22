@@ -612,15 +612,19 @@ export class Preview {
   // Обводка и скругление углов клипа (border.js): скругление — clip-path самого слоя, обводка — рамка-div
   // во весь «экран» рядом со слоем, с тем же трансформом (рамка внутри — по картинке после подгонки, до масштаба).
   // Во время перехода с собственной маской (clip-path шторок) скругление не рисуется — его делает экспорт.
+  // 0.6.1: Chromium (WebView2) рисует <video>/<img> с object-view-box и за пределами view box — до краёв элемента
+  // (срезанная часть кадра видна по бокам вписанной картинки, а со сдвигом трансформа «выезжает из рамки»). Поэтому у
+  // кадрированного клипа с «вписать»/«размытое заполнение» тот же clip-path по прямоугольнику картинки, что и у скругления.
   applyBorder(el, clip, on) {
     let ring = el.ring;
     const b = on && clip ? borderOf(clip) : null;
-    if (!b) {
+    const cropClip = !!(on && clip && cropViewBox(clip.crop) && fitsInside(clip));
+    if (!b && !cropClip) {
       if (ring) ring.style.display = 'none';
       if (el.dataset.bclip) { el.style.clipPath = ''; delete el.dataset.bclip; }
       return;
     }
-    if (!ring) {
+    if (!ring && b) {
       ring = h('div', { class: 'slot-ring' }, h('div', { class: 'slot-ring-box' }));
       el.ring = ring;
       el.after(ring);
@@ -634,14 +638,16 @@ export class Preview {
       if (Sw / Sh > ar) { hh = Sh; w = Sh * ar; } else { w = Sw; hh = Sw / ar; }
     }
     // Толщина и радиус — в пикселях кадра (не зависят от масштаба клипа): делим на масштаб слоя
-    const px = borderPx(b, w * s, hh * s, Sh);
+    const px = b ? borderPx(b, w * s, hh * s, Sh) : { bw: 0, r: 0 };
     const bw = px.bw / s; const r = px.r / s;
     const own = !el.style.clipPath || el.dataset.bclip === el.style.clipPath;
     if (own) {
-      const cp = r > 0.01 ? `inset(${((Sh - hh) / 2).toFixed(2)}px ${((Sw - w) / 2).toFixed(2)}px round ${r.toFixed(2)}px)` : '';
+      const round = r > 0.01 ? ` round ${r.toFixed(2)}px` : '';
+      const cp = round || cropClip ? `inset(${((Sh - hh) / 2).toFixed(2)}px ${((Sw - w) / 2).toFixed(2)}px${round})` : '';
       el.style.clipPath = cp;
       if (cp) el.dataset.bclip = el.style.clipPath; else delete el.dataset.bclip;
     }
+    if (!b) { if (ring) ring.style.display = 'none'; return; }
     Object.assign(ring.style, {
       display: bw > 0 ? 'block' : 'none',
       transform: el.style.transform, opacity: el.style.opacity, zIndex: el.style.zIndex,
